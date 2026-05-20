@@ -463,8 +463,7 @@ mod tests {
 
     #[test]
     fn llvm_backend_runs_new_math_nodes() {
-        let root =
-            std::env::temp_dir().join(format!("flowarrow-new-math-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("flowarrow-new-math-{}", std::process::id()));
         fs::create_dir_all(&root).expect("temp dir");
         let path = root.join("main.flow");
         fs::write(

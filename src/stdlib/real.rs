@@ -1,0 +1,6 @@
+use super::*;
+
+const MODULE: &str = "std.real";
+
+pub const PARSE_REAL: StdSymbol = node(MODULE, "parse_real", "Bytes", "Faultable[Real]");
+pub const FORMAT_REAL: StdSymbol = node(MODULE, "format_real", "Real", "Bytes");

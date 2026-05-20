@@ -653,9 +653,7 @@ fn primitive_types() -> HashMap<String, Type> {
 fn stdlib_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, String> {
     if symbol.module == "std.math" {
         match symbol.name {
-            "add" | "sub" | "mul" | "div" | "rem" | "max" => {
-                return Ok(numeric_binary_signatures())
-            }
+            "add" | "sub" | "mul" | "div" | "rem" | "max" => return Ok(numeric_binary_signatures()),
             "eq" | "lt" | "gt" | "le" | "ge" => return Ok(numeric_comparison_signatures()),
             _ => {}
         }

@@ -1,3 +1,13 @@
+mod bytes;
+mod cli;
+mod fault;
+mod int;
+mod intrinsic;
+mod io;
+mod math;
+mod predicates;
+mod real;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     Type,
@@ -33,59 +43,75 @@ pub struct StdSymbol {
 pub const INTRINSIC_MODULE: &str = "__intrinsic";
 
 pub const SYMBOLS: &[StdSymbol] = &[
-    ty("std.cli", "Args"),
-    ty("std.fault", "Fault"),
-    node("std.bytes", "split_lines", "Bytes", "Seq[Bytes]"),
-    reducible_node(
-        "std.bytes",
-        "concat_bytes",
-        "Seq[Bytes]",
-        "Bytes",
-        "(Bytes,Bytes)",
-        "Bytes",
-    ),
-    node("std.bytes", "join_bytes", "(Seq[Bytes],Bytes)", "Bytes"),
-    unsupported_node("std.cli", "argv", "Args", "Seq[Bytes]"),
-    unsupported_node("std.cli", "flag_present", "(Args,Bytes)", "Bool"),
-    unsupported_node("std.cli", "flag_value", "(Args,Bytes)", "Bytes"),
-    io_node("std.io", "read_stdin", "()", "Bytes"),
-    io_node("std.io", "write_stdout", "Bytes", "Int"),
-    io_node("std.io", "write_stderr", "Bytes", "Int"),
-    node("std.real", "parse_real", "Bytes", "Faultable[Real]"),
-    node("std.real", "format_real", "Real", "Bytes"),
-    node("std.int", "parse_int", "Bytes", "Faultable[Int]"),
-    node("std.int", "format_int", "Int", "Bytes"),
-    reducible_node(
-        "std.math",
-        "add",
-        "(Number,Number)",
-        "Number",
-        "(Number,Number)",
-        "Number",
-    ),
-    node("std.math", "sub", "(Number,Number)", "Number"),
-    node("std.math", "mul", "(Number,Number)", "Number"),
-    node("std.math", "div", "(Number,Number)", "Number"),
-    node("std.math", "rem", "(Number,Number)", "Number"),
-    node("std.math", "eq", "(Number,Number)", "Bool"),
-    node("std.math", "lt", "(Number,Number)", "Bool"),
-    node("std.math", "gt", "(Number,Number)", "Bool"),
-    node("std.math", "le", "(Number,Number)", "Bool"),
-    node("std.math", "ge", "(Number,Number)", "Bool"),
-    node("std.math", "max", "(Number,Number)", "Number"),
-    node("std.predicates", "not_empty", "Bytes", "Bool"),
-    node("std.predicates", "is_empty", "Bytes", "Bool"),
-    node("std.predicates", "and", "(Bool,Bool)", "Bool"),
-    node("std.predicates", "or", "(Bool,Bool)", "Bool"),
-    node("std.predicates", "xor", "(Bool,Bool)", "Bool"),
-    node("std.predicates", "not", "Bool", "Bool"),
-    node("std.predicates", "all", "Seq[Bool]", "Bool"),
-    node("std.predicates", "any", "Seq[Bool]", "Bool"),
-    node("std.fault", "has_faults", "Seq[Fault]", "Bool"),
-    node("std.fault", "format_faults", "Seq[Fault]", "Bytes"),
-    node(INTRINSIC_MODULE, "range_step", "(Int,Int,Int)", "Seq[Int]"),
-    generic_node(INTRINSIC_MODULE, "select", "(Bool,T,T)", "T"),
+    cli::ARGS,
+    fault::FAULT,
+    bytes::SPLIT_LINES,
+    bytes::CONCAT_BYTES,
+    bytes::JOIN_BYTES,
+    cli::ARGV,
+    cli::FLAG_PRESENT,
+    cli::FLAG_VALUE,
+    io::READ_STDIN,
+    io::WRITE_STDOUT,
+    io::WRITE_STDERR,
+    real::PARSE_REAL,
+    real::FORMAT_REAL,
+    int::PARSE_INT,
+    int::FORMAT_INT,
+    math::ADD,
+    math::SUB,
+    math::MUL,
+    math::DIV,
+    math::REM,
+    math::EQ,
+    math::LT,
+    math::GT,
+    math::LE,
+    math::GE,
+    math::MAX,
+    predicates::NOT_EMPTY,
+    predicates::IS_EMPTY,
+    predicates::AND,
+    predicates::OR,
+    predicates::XOR,
+    predicates::NOT,
+    predicates::ALL,
+    predicates::ANY,
+    fault::HAS_FAULTS,
+    fault::FORMAT_FAULTS,
+    intrinsic::RANGE_STEP,
+    intrinsic::SELECT,
 ];
+
+pub fn module_symbols(module: &str) -> impl Iterator<Item = &'static StdSymbol> + '_ {
+    SYMBOLS.iter().filter(move |symbol| symbol.module == module)
+}
+
+pub fn find_export(module: &str, name: &str) -> Option<&'static StdSymbol> {
+    SYMBOLS
+        .iter()
+        .find(|symbol| symbol.module == module && symbol.name == name)
+}
+
+pub fn direct_builtin(name: &str) -> Option<&'static StdSymbol> {
+    SYMBOLS.iter().find(|symbol| {
+        symbol.name == name
+            && symbol.kind == SymbolKind::Node
+            && symbol.runtime == RuntimeSupport::DirectBuiltin
+    })
+}
+
+pub fn function_pointer(name: &str) -> Option<&'static str> {
+    match name {
+        "parse_real" => Some("@fa_parse_real"),
+        "parse_int" => Some("@fa_parse_int"),
+        "not_empty" => Some("@fa_not_empty"),
+        "format_int" => Some("@fa_format_int"),
+        "format_real" => Some("@fa_format_real"),
+        "not" => Some("@fa_not"),
+        _ => None,
+    }
+}
 
 const fn ty(module: &'static str, name: &'static str) -> StdSymbol {
     StdSymbol {
@@ -164,36 +190,6 @@ const fn unsupported_node(
         reduce_output: None,
         effect: Effect::Pure,
         runtime: RuntimeSupport::Unsupported,
-    }
-}
-
-pub fn module_symbols(module: &str) -> impl Iterator<Item = &'static StdSymbol> + '_ {
-    SYMBOLS.iter().filter(move |symbol| symbol.module == module)
-}
-
-pub fn find_export(module: &str, name: &str) -> Option<&'static StdSymbol> {
-    SYMBOLS
-        .iter()
-        .find(|symbol| symbol.module == module && symbol.name == name)
-}
-
-pub fn direct_builtin(name: &str) -> Option<&'static StdSymbol> {
-    SYMBOLS.iter().find(|symbol| {
-        symbol.name == name
-            && symbol.kind == SymbolKind::Node
-            && symbol.runtime == RuntimeSupport::DirectBuiltin
-    })
-}
-
-pub fn function_pointer(name: &str) -> Option<&'static str> {
-    match name {
-        "parse_real" => Some("@fa_parse_real"),
-        "parse_int" => Some("@fa_parse_int"),
-        "not_empty" => Some("@fa_not_empty"),
-        "format_int" => Some("@fa_format_int"),
-        "format_real" => Some("@fa_format_real"),
-        "not" => Some("@fa_not"),
-        _ => None,
     }
 }
 
