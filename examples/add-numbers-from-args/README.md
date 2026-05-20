@@ -2,7 +2,7 @@
 
 ```text
 $ flowarrow build main.flow
-$ .flowarrow/build/<hash>/app 1.5 2.5 3
+$ build/<target>/main 1.5 2.5 3
 7
 ```
 

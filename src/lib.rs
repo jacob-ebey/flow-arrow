@@ -43,23 +43,32 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
             .map_err(|error| format!("failed to write `{}`: {error}", out.display()))?;
     }
 
-    let build_dir = cached_build_dir(path, &source);
-    fs::create_dir_all(&build_dir)
-        .map_err(|error| format!("failed to create `{}`: {error}", build_dir.display()))?;
-    let llvm_path = build_dir.join("main.ll");
-    let runtime_path = build_dir.join("runtime.c");
-    let executable = build_dir.join("app");
-    fs::write(&llvm_path, llvm)
-        .map_err(|error| format!("failed to write `{}`: {error}", llvm_path.display()))?;
-    fs::write(&runtime_path, runtime::C_SOURCE)
-        .map_err(|error| format!("failed to write `{}`: {error}", runtime_path.display()))?;
+    let build_dir = build_dir(path);
+    let cache_dir = build_dir.join(".cache");
+    fs::create_dir_all(&cache_dir)
+        .map_err(|error| format!("failed to create `{}`: {error}", cache_dir.display()))?;
+    let executable_name = executable_name(path)?;
+    let llvm_path = cache_dir.join("main.ll");
+    let runtime_path = cache_dir.join("runtime.c");
+    let hash_path = cache_dir.join("build.hash");
+    let executable = build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX));
+    let build_hash = format!("{:016x}", build_hash(&source));
 
-    if executable.exists() {
+    if executable.exists()
+        && fs::read_to_string(&hash_path)
+            .map(|cached_hash| cached_hash == build_hash)
+            .unwrap_or(false)
+    {
         return Ok(BuildOutput {
             build_dir,
             executable,
         });
     }
+
+    fs::write(&llvm_path, llvm)
+        .map_err(|error| format!("failed to write `{}`: {error}", llvm_path.display()))?;
+    fs::write(&runtime_path, runtime::C_SOURCE)
+        .map_err(|error| format!("failed to write `{}`: {error}", runtime_path.display()))?;
 
     let output = Command::new("clang")
         .arg("-O0")
@@ -78,6 +87,8 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
             String::from_utf8_lossy(&output.stderr)
         ));
     }
+    fs::write(&hash_path, build_hash)
+        .map_err(|error| format!("failed to write `{}`: {error}", hash_path.display()))?;
 
     Ok(BuildOutput {
         build_dir,
@@ -106,11 +117,31 @@ pub struct BuildOutput {
     pub executable: PathBuf,
 }
 
-fn cached_build_dir(path: &Path, source: &str) -> PathBuf {
+fn build_dir(path: &Path) -> PathBuf {
     let root = path.parent().unwrap_or_else(|| Path::new("."));
-    root.join(".flowarrow")
-        .join("build")
-        .join(format!("{:016x}", build_hash(source)))
+    root.join("build").join(host_target())
+}
+
+fn executable_name(path: &Path) -> Result<String, String> {
+    let name = path
+        .file_stem()
+        .ok_or_else(|| format!("`{}` has no file basename", path.display()))?
+        .to_string_lossy();
+    if name.is_empty() {
+        return Err(format!("`{}` has no file basename", path.display()));
+    }
+    Ok(name.into_owned())
+}
+
+fn host_target() -> String {
+    let arch = std::env::consts::ARCH;
+    let os = match std::env::consts::OS {
+        "macos" => "apple-darwin",
+        "windows" => "pc-windows-msvc",
+        "linux" => "unknown-linux-gnu",
+        other => return format!("{arch}-unknown-{other}"),
+    };
+    format!("{arch}-{os}")
 }
 
 fn build_hash(source: &str) -> u64 {
@@ -135,6 +166,7 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::process::{Command, Stdio};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parses_99_bottles_declarations() {
@@ -312,6 +344,78 @@ mod tests {
             "program failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn build_uses_stable_target_dir_and_entrypoint_name() {
+        let root = unique_temp_root("build-layout");
+        let path = root.join("tool.flow");
+        fs::write(
+            &path,
+            r#"
+                import std.cli { Args }
+
+                program main(args: Args) -> exit_code: Int {
+                    0 -> exit_code
+                }
+            "#,
+        )
+        .expect("write source");
+
+        let build = build_file(&path, None).expect("build");
+
+        assert_eq!(build.build_dir, root.join("build").join(host_target()));
+        assert_eq!(
+            build.executable,
+            build
+                .build_dir
+                .join(format!("tool{}", std::env::consts::EXE_SUFFIX))
+        );
+        assert!(build.executable.exists());
+        assert!(build.build_dir.join(".cache").is_dir());
+        assert!(build.build_dir.join(".cache/main.ll").exists());
+        assert!(build.build_dir.join(".cache/runtime.c").exists());
+        assert!(build.build_dir.join(".cache/build.hash").exists());
+        assert!(!build.build_dir.join("app").exists());
+    }
+
+    #[test]
+    fn build_recompiles_stable_executable_when_source_changes() {
+        let root = unique_temp_root("build-recompile");
+        let path = root.join("main.flow");
+        fs::write(
+            &path,
+            r#"
+                import std.cli { Args }
+
+                program main(args: Args) -> exit_code: Int {
+                    1 -> exit_code
+                }
+            "#,
+        )
+        .expect("write source");
+        let first = build_file(&path, None).expect("first build");
+        let first_output = Command::new(&first.executable).output().expect("first run");
+        assert_eq!(first_output.status.code(), Some(1));
+
+        fs::write(
+            &path,
+            r#"
+                import std.cli { Args }
+
+                program main(args: Args) -> exit_code: Int {
+                    2 -> exit_code
+                }
+            "#,
+        )
+        .expect("rewrite source");
+        let second = build_file(&path, None).expect("second build");
+        let second_output = Command::new(&second.executable)
+            .output()
+            .expect("second run");
+
+        assert_eq!(second.executable, first.executable);
+        assert_eq!(second_output.status.code(), Some(2));
     }
 
     #[test]
@@ -668,5 +772,16 @@ mod tests {
             String::from_utf8(output.stdout).expect("utf8"),
             "hello world\n"
         );
+    }
+
+    fn unique_temp_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("flowarrow-{name}-{}-{unique}", std::process::id()));
+        fs::create_dir_all(&root).expect("temp dir");
+        root
     }
 }
