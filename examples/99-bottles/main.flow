@@ -1,0 +1,58 @@
+# 99-bottles
+#
+# Prints the canonical "99 bottles of beer on the wall" song.
+#
+# Demonstrates:
+#   - generating a verse sequence with range_step
+#   - producing one verse per index via map
+#   - concatenating verses in order via reduce on an associative,
+#     non-commutative operator (byte concatenation)
+#   - emitting the final "no more bottles" verse as a join, not a branch
+#
+# Dataflow shape:
+#
+#   ()  ─> range_step(99, 0, -1) ─> indices
+#       indices ─> map verse_for ─> verses
+#       verses ─> reduce concat_bytes(identity: "") ─> body
+#       (body, final_verse) ─> concat2 ─> output
+
+program main(input: Bytes) -> output: Bytes {
+    (99, 0, -1) -> range_step                        -> indices
+    indices     -> map verse_for                     -> verses
+    verses      -> reduce concat_bytes(identity: "") -> body
+    () -> final_verse_node                           -> tail
+    [body, tail] -> concat_bytes                     -> output
+}
+
+# A single verse, parameterised by the current bottle count `n`.
+#
+#   "n bottles of beer on the wall, n bottles of beer.\n"
+#   "Take one down and pass it around, (n-1) bottles of beer on the wall.\n\n"
+#
+node verse_for(n: Int) -> v: Bytes {
+    n              -> format_int        -> n_str
+    (n, 1)         -> sub_int           -> m
+    m              -> format_int        -> m_str
+
+    # Line 1: "{n} bottles of beer on the wall, {n} bottles of beer.\n"
+    [n_str, " bottles of beer on the wall, ",
+     n_str, " bottles of beer.\n"]
+                   -> concat_bytes      -> line1
+
+    # Line 2: "Take one down and pass it around, {m} bottles of beer on the wall.\n\n"
+    ["Take one down and pass it around, ",
+     m_str, " bottles of beer on the wall.\n\n"]
+                   -> concat_bytes      -> line2
+
+    [line1, line2] -> concat_bytes      -> v
+}
+
+# Final verse: "No more bottles of beer on the wall, no more bottles of beer.
+#               Go to the store and buy some more, 99 bottles of beer on the wall.\n"
+#
+# Pure: depends on no inputs other than the literal constants.
+node final_verse_node() -> v: Bytes {
+    ["No more bottles of beer on the wall, no more bottles of beer.\n",
+     "Go to the store and buy some more, 99 bottles of beer on the wall.\n"]
+        -> concat_bytes -> v
+}

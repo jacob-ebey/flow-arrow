@@ -1,0 +1,31 @@
+# add-numbers-from-stdin
+#
+# Reads bytes from stdin, treats each non-empty line as a real number,
+# sums them, and writes the result (followed by a newline) to stdout.
+#
+# Demonstrates:
+#   - boundary-only effects (program inputs and outputs are Bytes)
+#   - dynamic-size sequences (the number of input lines is a runtime value)
+#   - parallel reduce over an associative operator
+#
+# Dataflow shape:
+#
+#   input ─> split_lines ─> filter not_empty ─> map parse_real
+#                                                    │
+#                                                    ▼
+#                                          reduce add(identity: 0.0)
+#                                                    │
+#                                                    ▼
+#                                              format_real
+#                                                    │
+#                                                    ▼
+#                                          append_newline ─> output
+
+program main(input: Bytes) -> output: Bytes {
+    input -> split_lines             -> raw_lines
+    raw_lines -> filter not_empty    -> lines
+    lines -> map parse_real          -> numbers
+    numbers -> reduce add(identity: 0.0) -> total
+    total -> format_real             -> total_bytes
+    [total_bytes, "\n"] -> concat_bytes -> output
+}
