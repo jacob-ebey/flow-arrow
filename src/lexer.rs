@@ -16,6 +16,7 @@ pub enum Token {
     Greater,
     Comma,
     Colon,
+    Pipe,
     Dot,
     Eof,
 }
@@ -61,6 +62,7 @@ impl Lexer {
                 '>' => self.push_one(Token::Greater),
                 ',' => self.push_one(Token::Comma),
                 ':' => self.push_one(Token::Colon),
+                '|' => self.push_one(Token::Pipe),
                 '.' => self.push_one(Token::Dot),
                 ch if ch.is_ascii_alphabetic() || ch == '_' => self.lex_ident(),
                 other => return Err(format!("unexpected character `{other}`")),

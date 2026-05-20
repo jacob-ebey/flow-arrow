@@ -127,6 +127,21 @@ static double fa_expect_real(FaValue *value, const char *op) {
     return value->real;
 }
 
+static double fa_expect_number(FaValue *value, const char *op) {
+    if (!value) {
+        fprintf(stderr, "flowarrow runtime: %s expected numeric input\n", op);
+        exit(65);
+    }
+    if (value->kind == FA_INT) {
+        return (double)value->i;
+    }
+    if (value->kind == FA_REAL) {
+        return value->real;
+    }
+    fprintf(stderr, "flowarrow runtime: %s expected numeric input\n", op);
+    exit(65);
+}
+
 static FaValue *fa_expect_bytes(FaValue *value, const char *op) {
     if (!value || value->kind != FA_BYTES) {
         fprintf(stderr, "flowarrow runtime: %s expected Bytes input\n", op);
@@ -307,9 +322,18 @@ FaValue *fa_not_empty(FaValue *input) {
     return fa_bool(bytes->len > 0);
 }
 
-static int64_t fa_checked_add_int(int64_t left, int64_t right, const char *op) {
+static int64_t fa_checked_integer_add(int64_t left, int64_t right, const char *op) {
     int64_t result = 0;
     if (__builtin_add_overflow(left, right, &result)) {
+        fprintf(stderr, "flowarrow runtime: %s overflow\n", op);
+        exit(65);
+    }
+    return result;
+}
+
+static int64_t fa_checked_integer_sub(int64_t left, int64_t right, const char *op) {
+    int64_t result = 0;
+    if (__builtin_sub_overflow(left, right, &result)) {
         fprintf(stderr, "flowarrow runtime: %s overflow\n", op);
         exit(65);
     }
@@ -339,44 +363,67 @@ static FaValue *fa_concat_bytes(FaValue *input) {
     return out;
 }
 
-static FaValue *fa_add_int(FaValue *input) {
-    FaValue *seq = fa_expect_seq(input, "add_int");
+static FaValue *fa_add(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "add");
     if (seq->count != 2) {
-        fputs("flowarrow runtime: add_int expected two inputs\n", stderr);
+        fputs("flowarrow runtime: add expected two inputs\n", stderr);
         exit(65);
     }
-    int64_t left = fa_expect_int(seq->items[0], "add_int");
-    int64_t right = fa_expect_int(seq->items[1], "add_int");
-    return fa_int(fa_checked_add_int(left, right, "add_int"));
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        int64_t left = fa_expect_int(seq->items[0], "add");
+        int64_t right = fa_expect_int(seq->items[1], "add");
+        return fa_int(fa_checked_integer_add(left, right, "add"));
+    }
+    return fa_real(
+        fa_expect_number(seq->items[0], "add") + fa_expect_number(seq->items[1], "add"));
 }
 
-static FaValue *fa_sub_int(FaValue *input) {
-    FaValue *seq = fa_expect_seq(input, "sub_int");
+static FaValue *fa_sub(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "sub");
     if (seq->count != 2) {
-        fputs("flowarrow runtime: sub_int expected two inputs\n", stderr);
+        fputs("flowarrow runtime: sub expected two inputs\n", stderr);
         exit(65);
     }
-    return fa_int(fa_expect_int(seq->items[0], "sub_int") - fa_expect_int(seq->items[1], "sub_int"));
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        int64_t left = fa_expect_int(seq->items[0], "sub");
+        int64_t right = fa_expect_int(seq->items[1], "sub");
+        return fa_int(fa_checked_integer_sub(left, right, "sub"));
+    }
+    return fa_real(
+        fa_expect_number(seq->items[0], "sub") - fa_expect_number(seq->items[1], "sub"));
 }
 
-static FaValue *fa_eq_int(FaValue *input) {
-    FaValue *seq = fa_expect_seq(input, "eq_int");
+static FaValue *fa_eq(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "eq");
     if (seq->count != 2) {
-        fputs("flowarrow runtime: eq_int expected two inputs\n", stderr);
+        fputs("flowarrow runtime: eq expected two inputs\n", stderr);
         exit(65);
     }
-    return fa_bool(fa_expect_int(seq->items[0], "eq_int") == fa_expect_int(seq->items[1], "eq_int"));
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        return fa_bool(fa_expect_int(seq->items[0], "eq") == fa_expect_int(seq->items[1], "eq"));
+    }
+    return fa_bool(
+        fa_expect_number(seq->items[0], "eq") == fa_expect_number(seq->items[1], "eq"));
 }
 
-static FaValue *fa_max_int(FaValue *input) {
-    FaValue *seq = fa_expect_seq(input, "max_int");
+static FaValue *fa_max(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "max");
     if (seq->count != 2) {
-        fputs("flowarrow runtime: max_int expected two inputs\n", stderr);
+        fputs("flowarrow runtime: max expected two inputs\n", stderr);
         exit(65);
     }
-    int64_t left = fa_expect_int(seq->items[0], "max_int");
-    int64_t right = fa_expect_int(seq->items[1], "max_int");
-    return fa_int(left > right ? left : right);
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        int64_t left = fa_expect_int(seq->items[0], "max");
+        int64_t right = fa_expect_int(seq->items[1], "max");
+        return fa_int(left > right ? left : right);
+    }
+    double left = fa_expect_number(seq->items[0], "max");
+    double right = fa_expect_number(seq->items[1], "max");
+    return fa_real(left > right ? left : right);
 }
 
 static FaValue *fa_has_faults(FaValue *input) {
@@ -468,10 +515,10 @@ FaValue *fa_builtin(const char *name, FaValue *input) {
     if (strcmp(name, "parse_real") == 0) return fa_parse_real(input);
     if (strcmp(name, "format_real") == 0) return fa_format_real(input);
     if (strcmp(name, "concat_bytes") == 0) return fa_concat_bytes(input);
-    if (strcmp(name, "add_int") == 0) return fa_add_int(input);
-    if (strcmp(name, "sub_int") == 0) return fa_sub_int(input);
-    if (strcmp(name, "eq_int") == 0) return fa_eq_int(input);
-    if (strcmp(name, "max_int") == 0) return fa_max_int(input);
+    if (strcmp(name, "add") == 0) return fa_add(input);
+    if (strcmp(name, "sub") == 0) return fa_sub(input);
+    if (strcmp(name, "eq") == 0) return fa_eq(input);
+    if (strcmp(name, "max") == 0) return fa_max(input);
     if (strcmp(name, "not_empty") == 0) return fa_not_empty(input);
     if (strcmp(name, "has_faults") == 0) return fa_has_faults(input);
     if (strcmp(name, "format_faults") == 0) return fa_format_faults(input);
@@ -573,18 +620,19 @@ FaValue *fa_reduce(FaValue *input, const char *op, FaValue *identity) {
         return fa_concat_bytes(seq);
     }
     if (strcmp(op, "add") == 0) {
-        double total = fa_expect_real(identity, "reduce add identity");
+        if (identity && identity->kind == FA_INT) {
+            int64_t total = fa_expect_int(identity, "reduce add identity");
+            for (size_t i = 0; i < seq->count; i++) {
+                total = fa_checked_integer_add(
+                    total, fa_expect_int(seq->items[i], "reduce add"), "reduce add");
+            }
+            return fa_int(total);
+        }
+        double total = fa_expect_number(identity, "reduce add identity");
         for (size_t i = 0; i < seq->count; i++) {
-            total += fa_expect_real(seq->items[i], "reduce add");
+            total += fa_expect_number(seq->items[i], "reduce add");
         }
         return fa_real(total);
-    }
-    if (strcmp(op, "add_int") == 0) {
-        int64_t total = fa_expect_int(identity, "reduce add_int identity");
-        for (size_t i = 0; i < seq->count; i++) {
-            total = fa_checked_add_int(total, fa_expect_int(seq->items[i], "reduce add_int"), "reduce add_int");
-        }
-        return fa_int(total);
     }
     fprintf(stderr, "flowarrow runtime: unsupported reduce op `%s`\n", op);
     exit(65);

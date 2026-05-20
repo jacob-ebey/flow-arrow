@@ -47,7 +47,7 @@ expressed as a pure dataflow graph:
 5. **Pluralisation via `select`, not branching.** "1 bottle" vs
    "N bottles" is chosen with the pure `select` combinator:
    both candidate strings are ordinary graph inputs, and the
-   predicate `eq_int(n, 1)` picks one. The scheduler still sees
+   predicate `eq(n, 1)` picks one. The scheduler still sees
    the full dependency graph.
 
 ## What it does *not* require

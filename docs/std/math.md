@@ -7,50 +7,63 @@ resolution.
 ## Nodes
 
 ```text
-add          : (Real, Real) -> Real
-add_int      : (Int, Int)   -> Int
-sub_int      : (Int, Int)   -> Int
-eq_int       : (Int, Int)   -> Bool
+add          : (Int, Int)   -> Int
+             | (Int, Real)  -> Real
+             | (Real, Int)  -> Real
+             | (Real, Real) -> Real
+sub          : (Int, Int)   -> Int
+             | (Int, Real)  -> Real
+             | (Real, Int)  -> Real
+             | (Real, Real) -> Real
+eq           : (Int, Int)   -> Bool
+             | (Int, Real)  -> Bool
+             | (Real, Int)  -> Bool
+             | (Real, Real) -> Bool
+max          : (Int, Int)   -> Int
+             | (Int, Real)  -> Real
+             | (Real, Int)  -> Real
+             | (Real, Real) -> Real
 ```
 
 ## Semantics
 
 ### `add`
 
-Adds two `Real` values.
+Adds two numeric values. Integer plus integer returns `Int`; any
+combination involving `Real` returns `Real`.
 
 - Declared associative for the initial portable profile.
-- Identity: `0.0`.
-- Suitable for `reduce add(identity: 0.0)`.
-
-### `add_int`
-
-Adds two `Int` values.
-
-- Associative.
-- Identity: `0`.
-- Suitable for `reduce add_int(identity: 0)`.
+- Identities: `0` for integer reductions, `0.0` for real reductions.
+- Suitable for `reduce add(identity: 0)` and `reduce add(identity: 0.0)`.
 - Overflow is a boundary/data validation fault reported by the host
-  runtime.
+  runtime for integer results.
 
-### `sub_int`
+### `sub`
 
-Subtracts the second `Int` from the first.
+Subtracts the second numeric value from the first. Integer minus integer
+returns `Int`; any combination involving `Real` returns `Real`.
 
 - Not associative.
 - Must not be used with `reduce` or `scan`.
+- Overflow is a boundary/data validation fault reported by the host
+  runtime for integer results.
 
-### `eq_int`
+### `eq`
 
-Returns whether two `Int` values are equal.
+Returns whether two numeric values are equal.
+
+### `max`
+
+Returns the larger of two numeric values. Integer with integer returns
+`Int`; any combination involving `Real` returns `Real`.
 
 ## Examples
 
 ```flow
-import std.math { add, eq_int }
+import std.math { add, eq }
 
 node is_sum_one(x: Real, y: Real, n: Int) -> out: Bool {
     (x, y) -> add -> sum
-    (n, 1) -> eq_int -> out
+    (n, 1) -> eq -> out
 }
 ```

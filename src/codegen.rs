@@ -225,7 +225,9 @@ impl<'a> Codegen<'a> {
                         "  {pair} = call ptr @fa_fault_map(ptr {value}, ptr {function})"
                     ));
                     let ok_value = self.next_temp();
-                    self.line(&format!("  {ok_value} = call ptr @fa_seq_get(ptr {pair}, i64 0)"));
+                    self.line(&format!(
+                        "  {ok_value} = call ptr @fa_seq_get(ptr {pair}, i64 0)"
+                    ));
                     let fault_value = self.next_temp();
                     self.line(&format!(
                         "  {fault_value} = call ptr @fa_seq_get(ptr {pair}, i64 1)"

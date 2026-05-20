@@ -22,7 +22,7 @@ import std.bytes { concat_bytes }
 import std.cli { Args }
 import std.io { write_stdout }
 import std.int { format_int }
-import std.math { sub_int, eq_int }
+import std.math { sub, eq }
 
 program main(args: Args) -> exit_code: Int {
     (99, 0, -1) -> range_step                        -> indices
@@ -40,13 +40,13 @@ program main(args: Args) -> exit_code: Int {
 #
 node verse_for(n: Int) -> v: Bytes {
     n              -> format_int        -> n_str
-    (n, 1)         -> sub_int           -> m
+    (n, 1)         -> sub               -> m
     m              -> format_int        -> m_str
 
     # Pluralisation: "bottle" when count == 1, "bottles" otherwise.
     # Pure data selection — no branch hides in the graph.
-    (n, 1)                            -> eq_int -> n_is_one
-    (m, 1)                            -> eq_int -> m_is_one
+    (n, 1)                            -> eq -> n_is_one
+    (m, 1)                            -> eq -> m_is_one
     (n_is_one, "bottle", "bottles")   -> select -> n_word
     (m_is_one, "bottle", "bottles")   -> select -> m_word
 

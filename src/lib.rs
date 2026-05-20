@@ -231,13 +231,78 @@ mod tests {
             import std.math as math
 
             program main(args: Args) -> exit_code: Int {
-                (3, 1) -> math.sub_int -> exit_code
+                (3, 1) -> math.sub -> exit_code
             }
         "#;
         let module = parser::parse(source).expect("parse");
         typecheck::check_module(&module).expect("typecheck");
         let llvm = codegen::emit_module(&module).expect("llvm");
-        assert!(llvm.contains("sub_int\\00"));
+        assert!(llvm.contains("sub\\00"));
+    }
+
+    #[test]
+    fn typechecks_mixed_numeric_add_and_llvm_type_names() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { add }
+
+            node mixed(left: i64, right: double) -> out: double {
+                (left, right) -> add -> out
+            }
+
+            node numeric_identity(value: Int|Real) -> out: Int|Real {
+                value -> out
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                (1, 2.5) -> add -> total
+                0 -> exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+        let llvm = codegen::emit_module(&module).expect("llvm");
+        assert!(llvm.contains("add\\00"));
+    }
+
+    #[test]
+    fn llvm_backend_runs_numeric_math_variants() {
+        let root =
+            std::env::temp_dir().join(format!("flowarrow-math-variants-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("temp dir");
+        let path = root.join("main.flow");
+        fs::write(
+            &path,
+            r#"
+                import std.cli { Args }
+                import std.math { sub, eq, max }
+
+                program main(args: Args) -> exit_code: Int {
+                    (5, 2.5) -> sub -> mixed_sub
+                    (2, 2.5) -> max -> mixed_max
+                    (mixed_sub, mixed_max) -> eq -> real_ok
+
+                    (4, 7) -> max -> int_max
+                    (int_max, 7) -> eq -> max_ok
+
+                    (9, 4) -> sub -> int_sub
+                    (int_sub, 5) -> eq -> sub_ok
+
+                    (real_ok, max_ok, false) -> select -> first_ok
+                    (first_ok, sub_ok, false) -> select -> all_ok
+                    (all_ok, 0, 1) -> select -> exit_code
+                }
+            "#,
+        )
+        .expect("write source");
+
+        let build = build_file(&path, None).expect("build");
+        let output = Command::new(&build.executable).output().expect("run");
+        assert!(
+            output.status.success(),
+            "program failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -293,17 +358,17 @@ mod tests {
     }
 
     #[test]
-    fn typechecks_and_codegen_parse_int_and_add_int_reduce() {
+    fn typechecks_and_codegen_parse_int_and_add_reduce() {
         let source = r#"
             import std.cli { Args }
             import std.io { read_stdin, write_stdout }
             import std.bytes { split_lines }
             import std.int { parse_int, format_int }
-            import std.math { add_int }
+            import std.math { add }
 
             program main(args: Args) -> exit_code: Faultable[Int] {
                 () -> read_stdin -> split_lines -> map parse_int -> numbers
-                numbers -> reduce add_int(identity: 0) -> total
+                numbers -> reduce add(identity: 0) -> total
                 total -> format_int -> output
                 output -> write_stdout -> exit_code
             }
@@ -312,7 +377,7 @@ mod tests {
         typecheck::check_module(&module).expect("typecheck");
         let llvm = codegen::emit_module(&module).expect("llvm");
         assert!(llvm.contains("call ptr @fa_map"));
-        assert!(llvm.contains("add_int\\00"));
+        assert!(llvm.contains("add\\00"));
     }
 
     #[test]

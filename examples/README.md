@@ -11,7 +11,7 @@ import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 import std.real { parse_real, format_real }
 import std.int { parse_int, format_int }
-import std.math { add, add_int, sub_int, eq_int, max_int }
+import std.math { add, sub, eq, max }
 import std.predicates { not_empty }
 import std.fault { Fault, has_faults, format_faults }
 ```
@@ -33,11 +33,10 @@ write_stderr      : Bytes -> Int
 
 # Predicates / arithmetic
 not_empty         : Bytes -> Bool
-add               : (Real, Real) -> Real             # associative
-add_int           : (Int, Int)   -> Int              # associative
-sub_int           : (Int, Int)   -> Int
-eq_int            : (Int, Int)   -> Bool
-max_int           : (Int, Int)   -> Int
+add               : (Int|Real, Int|Real) -> Int|Real # associative
+sub               : (Int|Real, Int|Real) -> Int|Real
+eq                : (Int|Real, Int|Real) -> Bool
+max               : (Int|Real, Int|Real) -> Int|Real
 
 # Faults
 Fault

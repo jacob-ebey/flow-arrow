@@ -76,6 +76,12 @@ pub enum Stage {
         fault: String,
     },
     Filter(String),
-    Repeat { count: Endpoint, node: String },
-    Reduce { op: String, identity: Endpoint },
+    Repeat {
+        count: Endpoint,
+        node: String,
+    },
+    Reduce {
+        op: String,
+        identity: Endpoint,
+    },
 }

@@ -19,7 +19,7 @@ import std.cli { Args }
 import std.fault { has_faults, format_faults }
 import std.io { read_stdin, write_stdout, write_stderr }
 import std.real { parse_real, format_real }
-import std.math { add, max_int }
+import std.math { add, max }
 import std.predicates { not_empty }
 
 program main(args: Args) -> exit_code: Int {
@@ -40,5 +40,5 @@ program main(args: Args) -> exit_code: Int {
     stdout_output -> write_stdout     -> stdout_status
     stderr_output -> write_stderr     -> stderr_status
     (invalid_input, 65, stdout_status) -> select -> data_status
-    (data_status, stderr_status) -> max_int -> exit_code
+    (data_status, stderr_status) -> max -> exit_code
 }

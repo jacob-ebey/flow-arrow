@@ -18,7 +18,7 @@ import std.bytes { concat_bytes }
 import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 import std.int { parse_int, format_int }
-import std.math { add_int }
+import std.math { add }
 
 program main(args: Args) -> exit_code: Faultable[Int] {
     () -> read_stdin -> parse_int -> depth
@@ -34,7 +34,7 @@ node fib_result(depth: Int) -> result: Int {
 
 node fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
     b -> next_a
-    (a, b) -> add_int -> next_b
+    (a, b) -> add -> next_b
 }
 
 node first_int(a: Int, b: Int) -> out: Int {

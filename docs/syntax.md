@@ -161,7 +161,9 @@ port           ::= IDENT ":" type
 ## 3. Types
 
 ```ebnf
-type           ::= type_name type_args?
+type           ::= type_alternative ("|" type_alternative)*
+
+type_alternative ::= type_name type_args?
 
 type_name      ::= IDENT ("." IDENT)?
 
@@ -178,6 +180,9 @@ Examples (informative):
 Real
 Int
 Bool
+i64
+double
+Int|Real
 Fault
 Faultable[Real]
 Image[H, W]
@@ -466,7 +471,8 @@ port_or_list   ::= port | "(" port_list ")"
 port_list      ::= port ("," port)*
 port           ::= IDENT ":" type
 
-type           ::= type_name type_args?
+type           ::= type_alternative ("|" type_alternative)*
+type_alternative ::= type_name type_args?
 type_name      ::= IDENT ("." IDENT)?
 type_args      ::= "[" type_arg ("," type_arg)* "]"
 type_arg       ::= type | INT | IDENT

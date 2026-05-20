@@ -55,18 +55,17 @@ pub const SYMBOLS: &[StdSymbol] = &[
     node("std.real", "format_real", "Real", "Bytes"),
     node("std.int", "parse_int", "Bytes", "Faultable[Int]"),
     node("std.int", "format_int", "Int", "Bytes"),
-    reduce_node("std.math", "add", "(Real,Real)", "Real"),
     reducible_node(
         "std.math",
-        "add_int",
-        "(Int,Int)",
-        "Int",
-        "(Int,Int)",
-        "Int",
+        "add",
+        "(Number,Number)",
+        "Number",
+        "(Number,Number)",
+        "Number",
     ),
-    node("std.math", "sub_int", "(Int,Int)", "Int"),
-    node("std.math", "eq_int", "(Int,Int)", "Bool"),
-    node("std.math", "max_int", "(Int,Int)", "Int"),
+    node("std.math", "sub", "(Number,Number)", "Number"),
+    node("std.math", "eq", "(Number,Number)", "Bool"),
+    node("std.math", "max", "(Number,Number)", "Number"),
     node("std.predicates", "not_empty", "Bytes", "Bool"),
     node("std.fault", "has_faults", "Seq[Fault]", "Bool"),
     node("std.fault", "format_faults", "Seq[Fault]", "Bytes"),
@@ -132,25 +131,6 @@ const fn io_node(
         reduce_output: None,
         effect: Effect::Io,
         runtime: RuntimeSupport::DirectBuiltin,
-    }
-}
-
-const fn reduce_node(
-    module: &'static str,
-    name: &'static str,
-    input: &'static str,
-    output: &'static str,
-) -> StdSymbol {
-    StdSymbol {
-        module,
-        name,
-        kind: SymbolKind::Node,
-        input: Some(input),
-        output: Some(output),
-        reduce_input: Some(input),
-        reduce_output: Some(output),
-        effect: Effect::Pure,
-        runtime: RuntimeSupport::ReduceOnly,
     }
 }
 

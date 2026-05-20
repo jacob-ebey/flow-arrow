@@ -129,35 +129,61 @@ impl Parser {
     }
 
     fn parse_type_name(&mut self) -> Result<String, String> {
-        let mut ty = self.expect_ident()?;
-        if self.eat(Token::Dot) {
-            ty.push('.');
-            ty.push_str(&self.expect_ident()?);
-        }
-        if self.eat(Token::LBracket) {
-            ty.push('[');
-            let mut first = true;
-            while !self.eat(Token::RBracket) {
-                if !first {
-                    self.expect(Token::Comma)?;
-                    ty.push(',');
+        let mut text = String::new();
+        let mut depth = 0usize;
+        loop {
+            match self.peek().clone() {
+                Token::Ident(name) => {
+                    self.bump();
+                    text.push_str(&name);
                 }
-                first = false;
-                match self.peek().clone() {
-                    Token::Ident(name) => {
-                        self.bump();
-                        ty.push_str(&name);
-                    }
-                    Token::Int(value) => {
-                        self.bump();
-                        ty.push_str(&value.to_string());
-                    }
-                    other => return Err(format!("expected type argument, found {other:?}")),
+                Token::Int(value) => {
+                    self.bump();
+                    text.push_str(&value.to_string());
                 }
+                Token::LParen => {
+                    self.bump();
+                    depth += 1;
+                    text.push('(');
+                }
+                Token::RParen if depth > 0 => {
+                    self.bump();
+                    depth -= 1;
+                    text.push(')');
+                }
+                Token::LBracket => {
+                    self.bump();
+                    depth += 1;
+                    text.push('[');
+                }
+                Token::RBracket if depth > 0 => {
+                    self.bump();
+                    depth -= 1;
+                    text.push(']');
+                }
+                Token::Comma if depth > 0 => {
+                    self.bump();
+                    text.push(',');
+                }
+                Token::Pipe => {
+                    self.bump();
+                    text.push('|');
+                }
+                Token::Dot => {
+                    self.bump();
+                    text.push('.');
+                }
+                Token::Comma | Token::RParen | Token::LBrace if !text.is_empty() && depth == 0 => {
+                    break;
+                }
+                other if text.is_empty() => return Err(format!("expected type, found {other:?}")),
+                other => return Err(format!("unexpected token in type `{text}`: {other:?}")),
             }
-            ty.push(']');
         }
-        Ok(ty)
+        if depth != 0 {
+            return Err(format!("unterminated type `{text}`"));
+        }
+        Ok(text)
     }
 
     fn parse_block(&mut self) -> Result<Vec<Chain>, String> {
