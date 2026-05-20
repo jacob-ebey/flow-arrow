@@ -11,7 +11,7 @@ import std.cli { Args, argv }
 import std.io { read_stdin, write_stdout }
 import std.real { parse_real, format_real }
 import std.int { parse_int, format_int }
-import std.math { add, sub, mul, div, rem, eq, lt, gt, le, ge, max }
+import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, min, max }
 import std.predicates { not_empty, is_empty, and, or, xor, not, all, any }
 import std.fault { Fault, has_faults, format_faults }
 ```
@@ -43,6 +43,10 @@ sub               : (Int|Real, Int|Real) -> Int|Real
 mul               : (Int|Real, Int|Real) -> Int|Real
 div               : (Int|Real, Int|Real) -> Int|Real # truncates toward zero for Int
 rem               : (Int|Real, Int|Real) -> Int|Real # same sign as dividend for Int
+neg               : Int|Real -> Int|Real
+abs               : Int|Real -> Int|Real
+sqrt              : Int|Real -> Real
+min               : (Int|Real, Int|Real) -> Int|Real
 max               : (Int|Real, Int|Real) -> Int|Real
 
 # Comparisons

@@ -172,11 +172,15 @@ define i32 @main(i32 %argc, ptr %argv) {\n\
             "mul",
             "div",
             "rem",
+            "neg",
+            "abs",
+            "sqrt",
             "eq",
             "lt",
             "gt",
             "le",
             "ge",
+            "min",
             "max",
             "not_empty",
             "is_empty",
@@ -491,11 +495,15 @@ fn is_builtin(name: &str) -> bool {
             | "mul"
             | "div"
             | "rem"
+            | "neg"
+            | "abs"
+            | "sqrt"
             | "eq"
             | "lt"
             | "gt"
             | "le"
             | "ge"
+            | "min"
             | "max"
             | "not_empty"
             | "is_empty"

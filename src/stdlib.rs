@@ -10,7 +10,23 @@ mod real;
 mod seq;
 
 const VECTOR_FLOW: &str = include_str!("stdlib/source/vector.flow");
-const VECTOR_EXPORTS: &[&str] = &["sum", "dot"];
+const VECTOR_EXPORTS: &[&str] = &[
+    "sum",
+    "mean",
+    "neg",
+    "abs",
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "equals",
+    "dot",
+    "squared_norm",
+    "l1_norm",
+    "norm",
+    "squared_distance",
+    "distance",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
@@ -79,11 +95,15 @@ pub const SYMBOLS: &[StdSymbol] = &[
     math::MUL,
     math::DIV,
     math::REM,
+    math::NEG,
+    math::ABS,
+    math::SQRT,
     math::EQ,
     math::LT,
     math::GT,
     math::LE,
     math::GE,
+    math::MIN,
     math::MAX,
     predicates::NOT_EMPTY,
     predicates::IS_EMPTY,
@@ -145,6 +165,12 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "add"
             | "sub"
             | "mul"
+            | "div"
+            | "rem"
+            | "neg"
+            | "abs"
+            | "sqrt"
+            | "min"
             | "max"
             | "eq"
             | "lt"

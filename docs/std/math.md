@@ -27,6 +27,12 @@ rem          : (Int, Int)   -> Int
              | (Int, Real)  -> Real
              | (Real, Int)  -> Real
              | (Real, Real) -> Real
+neg          : Int          -> Int
+             | Real         -> Real
+abs          : Int          -> Int
+             | Real         -> Real
+sqrt         : Int          -> Real
+             | Real         -> Real
 eq           : (Int, Int)   -> Bool
              | (Int, Real)  -> Bool
              | (Real, Int)  -> Bool
@@ -47,6 +53,10 @@ ge           : (Int, Int)   -> Bool
              | (Int, Real)  -> Bool
              | (Real, Int)  -> Bool
              | (Real, Real) -> Bool
+min          : (Int, Int)   -> Int
+             | (Int, Real)  -> Real
+             | (Real, Int)  -> Real
+             | (Real, Real) -> Real
 max          : (Int, Int)   -> Int
              | (Int, Real)  -> Real
              | (Real, Int)  -> Real
@@ -105,6 +115,21 @@ C `fmod`).
 - Remainder by zero is a boundary/data validation fault.
 - Not associative.
 
+### `neg`
+
+Returns the additive inverse. Integer overflow on `Int::MIN` is reported
+as a runtime usage fault.
+
+### `abs`
+
+Returns the absolute value. Integer overflow on `Int::MIN` is reported
+as a runtime usage fault.
+
+### `sqrt`
+
+Returns the square root as `Real`. Negative inputs are reported as a
+runtime usage fault.
+
 ### `eq`
 
 Returns whether two numeric values are equal.
@@ -125,6 +150,11 @@ Returns whether the first numeric value is less than or equal to the second.
 
 Returns whether the first numeric value is greater than or equal to the second.
 
+### `min`
+
+Returns the smaller of two numeric values. Integer with integer returns
+`Int`; any combination involving `Real` returns `Real`.
+
 ### `max`
 
 Returns the larger of two numeric values. Integer with integer returns
@@ -133,7 +163,7 @@ Returns the larger of two numeric values. Integer with integer returns
 ## Examples
 
 ```flow
-import std.math { add, eq, mul, rem, lt }
+import std.math { add, eq, mul, rem, lt, sqrt }
 
 node is_sum_one(x: Real, y: Real, n: Int) -> out: Bool {
     ($x, $y) -> add -> $sum
@@ -147,5 +177,11 @@ node is_divisible(n: Int, d: Int) -> out: Bool {
 
 node is_positive(n: Int) -> out: Bool {
     ($n, 0) -> gt -> $out
+}
+
+node hypotenuse(x: Real, y: Real) -> out: Real {
+    ($x, $x) -> mul -> $xx
+    ($y, $y) -> mul -> $yy
+    ($xx, $yy) -> add -> sqrt -> $out
 }
 ```

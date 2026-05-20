@@ -4,7 +4,7 @@ mod support;
 fn std_math_nodes_run() {
     let source = r#"
         import std.cli { Args }
-        import std.math { add, sub, mul, div, rem, eq, lt, gt, le, ge, max }
+        import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, min, max }
 
         program main(args: Args) -> exit_code: Int {
             (2, 3) -> add -> $five_a
@@ -17,10 +17,18 @@ fn std_math_nodes_run() {
             ($three, 3) -> eq -> $div_ok
             (10, 3) -> rem -> $one
             ($one, 1) -> eq -> $rem_ok
+            5 -> neg -> $minus_five
+            ($minus_five, -5) -> eq -> $neg_ok
+            -8 -> abs -> $eight
+            ($eight, 8) -> eq -> $abs_ok
+            81 -> sqrt -> $nine
+            ($nine, 9.0) -> eq -> $sqrt_ok
             (2, 3) -> lt -> $lt_ok
             (3, 2) -> gt -> $gt_ok
             (3, 3) -> le -> $le_ok
             (3, 3) -> ge -> $ge_ok
+            (7, 4) -> min -> $four
+            ($four, 4) -> eq -> $min_ok
             (7, 4) -> max -> $seven
             ($seven, 7) -> eq -> $max_ok
 
@@ -28,11 +36,15 @@ fn std_math_nodes_run() {
             ($s1, $mul_ok, false) -> select -> $s2
             ($s2, $div_ok, false) -> select -> $s3
             ($s3, $rem_ok, false) -> select -> $s4
-            ($s4, $lt_ok, false) -> select -> $s5
-            ($s5, $gt_ok, false) -> select -> $s6
-            ($s6, $le_ok, false) -> select -> $s7
-            ($s7, $ge_ok, false) -> select -> $s8
-            ($s8, $max_ok, false) -> select -> $all_ok
+            ($s4, $neg_ok, false) -> select -> $s5
+            ($s5, $abs_ok, false) -> select -> $s6
+            ($s6, $sqrt_ok, false) -> select -> $s7
+            ($s7, $lt_ok, false) -> select -> $s8
+            ($s8, $gt_ok, false) -> select -> $s9
+            ($s9, $le_ok, false) -> select -> $s10
+            ($s10, $ge_ok, false) -> select -> $s11
+            ($s11, $min_ok, false) -> select -> $s12
+            ($s12, $max_ok, false) -> select -> $all_ok
             ($all_ok, 0, 1) -> select -> $exit_code
         }
     "#;

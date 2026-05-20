@@ -1,14 +1,110 @@
-import std.math { add, mul }
-import std.seq { zip }
+import std.math {
+    add as scalar_add,
+    sub as scalar_sub,
+    mul as scalar_mul,
+    div as scalar_div,
+    neg as scalar_neg,
+    abs as scalar_abs,
+    sqrt as scalar_sqrt,
+    eq as scalar_eq,
+}
+import std.predicates { all }
+import std.seq { length, zip }
 
 node sum(values: Seq[Real]) -> total: Real {
-    $values -> reduce add(identity: 0.0) -> $total
+    $values -> reduce scalar_add(identity: 0.0) -> $total
+}
+
+node mean(values: Seq[Real]) -> average: Real {
+    $values -> sum -> $total
+    $values -> length -> $count
+    ($total, $count) -> scalar_div -> $average
+}
+
+node _add_pair(pair: (Real,Real)) -> out: Real {
+    $pair -> scalar_add -> $out
+}
+
+node _sub_pair(pair: (Real,Real)) -> out: Real {
+    $pair -> scalar_sub -> $out
+}
+
+node _mul_pair(pair: (Real,Real)) -> out: Real {
+    $pair -> scalar_mul -> $out
+}
+
+node _div_pair(pair: (Real,Real)) -> out: Real {
+    $pair -> scalar_div -> $out
+}
+
+node _eq_pair(pair: (Real,Real)) -> out: Bool {
+    $pair -> scalar_eq -> $out
+}
+
+node _neg_value(value: Real) -> out: Real {
+    $value -> scalar_neg -> $out
+}
+
+node _abs_value(value: Real) -> out: Real {
+    $value -> scalar_abs -> $out
+}
+
+node neg(values: Seq[Real]) -> out: Seq[Real] {
+    $values -> map _neg_value -> $out
+}
+
+node abs(values: Seq[Real]) -> out: Seq[Real] {
+    $values -> map _abs_value -> $out
+}
+
+node add(inputs: (Seq[Real],Seq[Real])) -> out: Seq[Real] {
+    $inputs -> zip -> map _add_pair -> $out
+}
+
+node sub(inputs: (Seq[Real],Seq[Real])) -> out: Seq[Real] {
+    $inputs -> zip -> map _sub_pair -> $out
+}
+
+node mul(inputs: (Seq[Real],Seq[Real])) -> out: Seq[Real] {
+    $inputs -> zip -> map _mul_pair -> $out
+}
+
+node div(inputs: (Seq[Real],Seq[Real])) -> out: Seq[Real] {
+    $inputs -> zip -> map _div_pair -> $out
+}
+
+node equals(inputs: (Seq[Real],Seq[Real])) -> out: Bool {
+    $inputs -> zip -> map _eq_pair -> all -> $out
 }
 
 node _dot_pair(pair: (Real,Real)) -> product: Real {
-    $pair -> mul -> $product
+    $pair -> scalar_mul -> $product
 }
 
 node dot(inputs: (Seq[Real],Seq[Real])) -> total: Real {
-    $inputs -> zip -> map _dot_pair -> reduce add(identity: 0.0) -> $total
+    $inputs -> zip -> map _dot_pair -> reduce scalar_add(identity: 0.0) -> $total
+}
+
+node _square(value: Real) -> out: Real {
+    ($value, $value) -> scalar_mul -> $out
+}
+
+node squared_norm(values: Seq[Real]) -> total: Real {
+    $values -> map _square -> sum -> $total
+}
+
+node l1_norm(values: Seq[Real]) -> total: Real {
+    $values -> abs -> sum -> $total
+}
+
+node norm(values: Seq[Real]) -> total: Real {
+    $values -> squared_norm -> scalar_sqrt -> $total
+}
+
+node squared_distance(inputs: (Seq[Real],Seq[Real])) -> total: Real {
+    $inputs -> sub -> squared_norm -> $total
+}
+
+node distance(inputs: (Seq[Real],Seq[Real])) -> total: Real {
+    $inputs -> squared_distance -> scalar_sqrt -> $total
 }

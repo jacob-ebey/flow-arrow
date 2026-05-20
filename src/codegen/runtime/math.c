@@ -26,6 +26,9 @@ static FaValue fa_binary_numeric(FaValue input, const char *op) {
   if (strcmp(op, "max") == 0 && left.kind == FA_INT && right.kind == FA_INT) {
     return fa_int(left.i > right.i ? left.i : right.i);
   }
+  if (strcmp(op, "min") == 0 && left.kind == FA_INT && right.kind == FA_INT) {
+    return fa_int(left.i < right.i ? left.i : right.i);
+  }
   if (strcmp(op, "div") == 0 && left.kind == FA_INT && right.kind == FA_INT) {
     if (right.i == 0) fa_die_usage("flowarrow runtime: div by zero");
     return fa_int(left.i / right.i);
@@ -47,6 +50,7 @@ static FaValue fa_binary_numeric(FaValue input, const char *op) {
     if (r == 0.0) fa_die_usage("flowarrow runtime: rem by zero");
     return fa_real(fmod(l, r));
   }
+  if (strcmp(op, "min") == 0) return fa_real(l < r ? l : r);
   if (strcmp(op, "max") == 0) return fa_real(l > r ? l : r);
   fa_die_usage("flowarrow runtime: unknown numeric op");
   return fa_unit();
@@ -57,7 +61,33 @@ static FaValue fa_builtin_sub(FaValue input) { return fa_binary_numeric(input, "
 static FaValue fa_builtin_mul(FaValue input) { return fa_binary_numeric(input, "mul"); }
 static FaValue fa_builtin_div(FaValue input) { return fa_binary_numeric(input, "div"); }
 static FaValue fa_builtin_rem(FaValue input) { return fa_binary_numeric(input, "rem"); }
+static FaValue fa_builtin_min(FaValue input) { return fa_binary_numeric(input, "min"); }
 static FaValue fa_builtin_max(FaValue input) { return fa_binary_numeric(input, "max"); }
+
+static FaValue fa_unary_numeric(FaValue input, const char *op) {
+  if (input.kind == FA_FAULT) return input;
+  if (strcmp(op, "neg") == 0 && input.kind == FA_INT) {
+    if (input.i == INT64_MIN) fa_die_usage("flowarrow runtime: neg overflow");
+    return fa_int(-input.i);
+  }
+  if (strcmp(op, "abs") == 0 && input.kind == FA_INT) {
+    if (input.i == INT64_MIN) fa_die_usage("flowarrow runtime: abs overflow");
+    return fa_int(input.i < 0 ? -input.i : input.i);
+  }
+  double value = fa_expect_number(input, op);
+  if (strcmp(op, "neg") == 0) return fa_real(-value);
+  if (strcmp(op, "abs") == 0) return fa_real(fabs(value));
+  if (strcmp(op, "sqrt") == 0) {
+    if (value < 0.0) fa_die_usage("flowarrow runtime: sqrt of negative number");
+    return fa_real(sqrt(value));
+  }
+  fa_die_usage("flowarrow runtime: unknown unary numeric op");
+  return fa_unit();
+}
+
+static FaValue fa_builtin_neg(FaValue input) { return fa_unary_numeric(input, "neg"); }
+static FaValue fa_builtin_abs(FaValue input) { return fa_unary_numeric(input, "abs"); }
+static FaValue fa_builtin_sqrt(FaValue input) { return fa_unary_numeric(input, "sqrt"); }
 
 static FaValue fa_compare_numeric(FaValue input, const char *op) {
   if (input.kind == FA_FAULT) return input;
@@ -185,4 +215,3 @@ static FaValue fa_builtin_range_step(FaValue input) {
   }
   return out;
 }
-
