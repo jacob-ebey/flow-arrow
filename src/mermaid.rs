@@ -77,6 +77,24 @@ impl MermaidEmitter {
                     self.edges(&current, &operation, None, "    ");
                     current = vec![operation];
                 }
+                Stage::FaultMap { node, ok, fault } => {
+                    if !is_last {
+                        return Err("`fault map` must be the final stage in a chain".to_string());
+                    }
+                    let operation = self.node(&format!("fault map {node}"), "    ");
+                    self.edges(&current, &operation, None, "    ");
+                    let ok_node = self.node(&format!("ok {ok}"), "    ");
+                    self.edge(&operation, &ok_node, Some("ok"), "    ");
+                    if env.insert(ok.clone(), vec![ok_node]).is_some() {
+                        return Err(format!("value `{ok}` is bound more than once"));
+                    }
+                    let fault_node = self.node(&format!("fault {fault}"), "    ");
+                    self.edge(&operation, &fault_node, Some("fault"), "    ");
+                    if env.insert(fault.clone(), vec![fault_node]).is_some() {
+                        return Err(format!("value `{fault}` is bound more than once"));
+                    }
+                    current = Vec::new();
+                }
                 Stage::Filter(name) => {
                     let operation = self.node(&format!("filter {name}"), "    ");
                     self.edges(&current, &operation, None, "    ");

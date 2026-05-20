@@ -107,6 +107,7 @@ impl<'a> Codegen<'a> {
         self.line("declare ptr @fa_seq_get(ptr, i64)");
         self.line("declare ptr @fa_builtin(ptr, ptr)");
         self.line("declare ptr @fa_map(ptr, ptr)");
+        self.line("declare ptr @fa_fault_map(ptr, ptr)");
         self.line("declare ptr @fa_filter(ptr, ptr)");
         self.line("declare ptr @fa_repeat(ptr, ptr, ptr)");
         self.line("declare ptr @fa_reduce(ptr, ptr, ptr)");
@@ -213,6 +214,28 @@ impl<'a> Codegen<'a> {
                         "  {tmp} = call ptr @fa_map(ptr {value}, ptr {function})"
                     ));
                     value = tmp;
+                }
+                Stage::FaultMap { node, ok, fault } => {
+                    if !is_last {
+                        return Err("`fault map` must be the final stage in a chain".to_string());
+                    }
+                    let function = self.function_pointer_for(node)?;
+                    let pair = self.next_temp();
+                    self.line(&format!(
+                        "  {pair} = call ptr @fa_fault_map(ptr {value}, ptr {function})"
+                    ));
+                    let ok_value = self.next_temp();
+                    self.line(&format!("  {ok_value} = call ptr @fa_seq_get(ptr {pair}, i64 0)"));
+                    let fault_value = self.next_temp();
+                    self.line(&format!(
+                        "  {fault_value} = call ptr @fa_seq_get(ptr {pair}, i64 1)"
+                    ));
+                    if env.insert(ok.clone(), ok_value).is_some() {
+                        return Err(format!("value `{ok}` is bound more than once"));
+                    }
+                    if env.insert(fault.clone(), fault_value).is_some() {
+                        return Err(format!("value `{fault}` is bound more than once"));
+                    }
                 }
                 Stage::Filter(predicate) => {
                     let function = self.function_pointer_for(predicate)?;

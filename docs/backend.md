@@ -310,10 +310,10 @@ v0.1 is released.
 
 1. **Concrete memory model across the FFI boundary** — borrowed vs.
    transferred conventions; whether arenas are exposed to callers.
-2. **Error / failure surface** — FlowArrow is pure and cannot throw,
-   but `program` boundaries may fail. How is failure expressed in
-   the C ABI? (Likely: out-parameter status code; never via
-   longjmp / exceptions.)
+2. **Fault surface** — FlowArrow is pure and cannot throw exceptions,
+   but invalid data and `program` boundaries may fault. How are faults
+   expressed in the C ABI? (Likely: out-parameter status code; never via
+   longjmp, exceptions, or host-language unwinding.)
 3. **ABI versioning** — how the compiler and runtime negotiate
    compatible versions. Symbol versioning vs. a single
    `flowarrow_abi_version` constant.

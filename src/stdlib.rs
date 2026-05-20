@@ -34,6 +34,7 @@ pub const INTRINSIC_MODULE: &str = "__intrinsic";
 
 pub const SYMBOLS: &[StdSymbol] = &[
     ty("std.cli", "Args"),
+    ty("std.fault", "Fault"),
     node("std.bytes", "split_lines", "Bytes", "Seq[Bytes]"),
     reducible_node(
         "std.bytes",
@@ -49,10 +50,10 @@ pub const SYMBOLS: &[StdSymbol] = &[
     unsupported_node("std.cli", "flag_value", "(Args,Bytes)", "Bytes"),
     io_node("std.io", "read_stdin", "()", "Bytes"),
     io_node("std.io", "write_stdout", "Bytes", "Int"),
-    unsupported_io_node("std.io", "write_stderr", "Bytes", "Int"),
-    node("std.real", "parse_real", "Bytes", "Real"),
+    io_node("std.io", "write_stderr", "Bytes", "Int"),
+    node("std.real", "parse_real", "Bytes", "Faultable[Real]"),
     node("std.real", "format_real", "Real", "Bytes"),
-    node("std.int", "parse_int", "Bytes", "Int"),
+    node("std.int", "parse_int", "Bytes", "Faultable[Int]"),
     node("std.int", "format_int", "Int", "Bytes"),
     reduce_node("std.math", "add", "(Real,Real)", "Real"),
     reducible_node(
@@ -65,7 +66,10 @@ pub const SYMBOLS: &[StdSymbol] = &[
     ),
     node("std.math", "sub_int", "(Int,Int)", "Int"),
     node("std.math", "eq_int", "(Int,Int)", "Bool"),
+    node("std.math", "max_int", "(Int,Int)", "Int"),
     node("std.predicates", "not_empty", "Bytes", "Bool"),
+    node("std.fault", "has_faults", "Seq[Fault]", "Bool"),
+    node("std.fault", "format_faults", "Seq[Fault]", "Bytes"),
     node(INTRINSIC_MODULE, "range_step", "(Int,Int,Int)", "Seq[Int]"),
     generic_node(INTRINSIC_MODULE, "select", "(Bool,T,T)", "T"),
 ];
@@ -165,25 +169,6 @@ const fn unsupported_node(
         reduce_input: None,
         reduce_output: None,
         effect: Effect::Pure,
-        runtime: RuntimeSupport::Unsupported,
-    }
-}
-
-const fn unsupported_io_node(
-    module: &'static str,
-    name: &'static str,
-    input: &'static str,
-    output: &'static str,
-) -> StdSymbol {
-    StdSymbol {
-        module,
-        name,
-        kind: SymbolKind::Node,
-        input: Some(input),
-        output: Some(output),
-        reduce_input: None,
-        reduce_output: None,
-        effect: Effect::Io,
         runtime: RuntimeSupport::Unsupported,
     }
 }

@@ -53,9 +53,9 @@ Returns whether a flag is present.
 Returns a flag's value as bytes.
 
 - The second input is the flag name as bytes, for example `"--output"`.
-- If the flag is missing or has no value, behavior is a validation
-  failure reported by the host runtime. A future optional-value type may
-  make this total.
+- If the flag is missing or has no value, behavior is a validation fault
+  reported by the host runtime. A future optional-value type may make
+  this total.
 
 ## Example
 

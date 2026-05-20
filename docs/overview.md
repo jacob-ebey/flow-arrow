@@ -393,6 +393,11 @@ parameters or return value. These nodes are visible in the dependency
 graph and may only appear inside `program` bodies; reusable `node`
 declarations remain pure.
 
+Runtime invalid states are **faults**, not exceptions and not ordinary
+control flow. Faults are reserved for unintended invalid states such as
+malformed input, numeric overflow, or boundary I/O faults. See
+[`faults.md`](./faults.md).
+
 ---
 
 # 13. Imports and the standard library

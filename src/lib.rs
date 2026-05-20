@@ -241,6 +241,58 @@ mod tests {
     }
 
     #[test]
+    fn typechecks_parse_and_sum_lines_example() {
+        typecheck_file(Path::new("examples/parse-and-sum-lines/main.flow")).expect("typecheck");
+    }
+
+    #[test]
+    fn llvm_backend_runs_parse_and_sum_lines_with_faults() {
+        let build =
+            build_file(Path::new("examples/parse-and-sum-lines/main.flow"), None).expect("build");
+
+        let mut ok_child = Command::new(&build.executable)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn ok");
+        ok_child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(b"1\n2\n3.5\n")
+            .expect("write stdin");
+        let ok_output = ok_child.wait_with_output().expect("run ok");
+        assert!(
+            ok_output.status.success(),
+            "program failed: {}",
+            String::from_utf8_lossy(&ok_output.stderr)
+        );
+        assert_eq!(String::from_utf8(ok_output.stdout).expect("utf8"), "6.5\n");
+        assert_eq!(String::from_utf8(ok_output.stderr).expect("utf8"), "");
+
+        let mut fault_child = Command::new(&build.executable)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn fault");
+        fault_child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(b"1\nwat\n3\n")
+            .expect("write stdin");
+        let fault_output = fault_child.wait_with_output().expect("run fault");
+        assert_eq!(fault_output.status.code(), Some(65));
+        assert_eq!(String::from_utf8(fault_output.stdout).expect("utf8"), "");
+        assert_eq!(
+            String::from_utf8(fault_output.stderr).expect("utf8"),
+            "line 2: expected Real, got \"wat\"\n"
+        );
+    }
+
+    #[test]
     fn typechecks_and_codegen_parse_int_and_add_int_reduce() {
         let source = r#"
             import std.cli { Args }
@@ -249,7 +301,7 @@ mod tests {
             import std.int { parse_int, format_int }
             import std.math { add_int }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: Faultable[Int] {
                 () -> read_stdin -> split_lines -> map parse_int -> numbers
                 numbers -> reduce add_int(identity: 0) -> total
                 total -> format_int -> output

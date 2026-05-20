@@ -15,6 +15,8 @@ enum Type {
     Bool,
     Bytes,
     Args,
+    Fault,
+    Faultable(Box<Type>),
     Seq(Box<Type>),
     Tuple(Vec<Type>),
     Var(String),
@@ -49,6 +51,33 @@ struct Checker<'a> {
     types: HashMap<String, Type>,
 }
 
+impl Type {
+    fn contains_faultable(&self) -> bool {
+        match self {
+            Type::Faultable(_) => true,
+            Type::Seq(item) => item.contains_faultable(),
+            Type::Tuple(items) => items.iter().any(Type::contains_faultable),
+            _ => false,
+        }
+    }
+
+    fn inner_faultable(&self) -> Type {
+        match self {
+            Type::Faultable(item) => (**item).clone(),
+            other => other.clone(),
+        }
+    }
+
+    fn strip_faultable(&self) -> Type {
+        match self {
+            Type::Faultable(item) => item.strip_faultable(),
+            Type::Seq(item) => Type::Seq(Box::new(item.strip_faultable())),
+            Type::Tuple(items) => Type::Tuple(items.iter().map(Type::strip_faultable).collect()),
+            other => other.clone(),
+        }
+    }
+}
+
 impl<'a> Checker<'a> {
     fn new(module: &'a Module) -> Result<Self, String> {
         let mut checker = Self {
@@ -71,7 +100,14 @@ impl<'a> Checker<'a> {
             return Err("`main` must be declared as a program".to_string());
         }
         self.expect_type("program main input", &main.signature.input, &Type::Args)?;
-        self.expect_type("program main output", &main.signature.output, &Type::Int)?;
+        if main.signature.output != Type::Int
+            && main.signature.output != Type::Faultable(Box::new(Type::Int))
+        {
+            return Err(format!(
+                "program main output expected `Int` or `Faultable[Int]`, found `{}`",
+                main.signature.output
+            ));
+        }
 
         for decl in &self.module.declarations {
             match decl {
@@ -143,7 +179,8 @@ impl<'a> Checker<'a> {
         }
         match symbol.kind {
             SymbolKind::Type => {
-                if self.types.insert(name.to_string(), Type::Args).is_some() {
+                let ty = parse_type(symbol.name)?;
+                if self.types.insert(name.to_string(), ty).is_some() {
                     return Err(format!("duplicate type import `{name}`"));
                 }
             }
@@ -239,6 +276,9 @@ impl<'a> Checker<'a> {
                 .get(&name)
                 .cloned()
                 .ok_or_else(|| format!("unknown type `{name}`")),
+            Type::Faultable(item) => Ok(Type::Faultable(Box::new(
+                self.resolve_declared_type(*item)?,
+            ))),
             Type::Seq(item) => Ok(Type::Seq(Box::new(self.resolve_declared_type(*item)?))),
             Type::Tuple(items) => {
                 let mut resolved = Vec::with_capacity(items.len());
@@ -253,7 +293,7 @@ impl<'a> Checker<'a> {
 
     fn validate_declared_type(&self, ty: &Type) -> Result<(), String> {
         match ty {
-            Type::Seq(item) => self.validate_declared_type(item),
+            Type::Faultable(item) | Type::Seq(item) => self.validate_declared_type(item),
             Type::Tuple(items) => {
                 for item in items {
                     self.validate_declared_type(item)?;
@@ -324,6 +364,18 @@ impl<'a> Checker<'a> {
                 Stage::Map(name) => {
                     value_type = self.apply_map(callable, name, &value_type)?;
                 }
+                Stage::FaultMap { node, ok, fault } => {
+                    if !is_last {
+                        return Err("`fault map` must be the final stage in a chain".to_string());
+                    }
+                    let (ok_type, fault_type) = self.apply_fault_map(callable, node, &value_type)?;
+                    if env.insert(ok.clone(), ok_type).is_some() {
+                        return Err(format!("value `{ok}` is bound more than once"));
+                    }
+                    if env.insert(fault.clone(), fault_type).is_some() {
+                        return Err(format!("value `{fault}` is bound more than once"));
+                    }
+                }
                 Stage::Filter(name) => {
                     value_type = self.apply_filter(callable, name, &value_type)?;
                 }
@@ -368,7 +420,9 @@ impl<'a> Checker<'a> {
                 for item in items {
                     let ty = self.endpoint_type(item, env)?;
                     if let Some(expected) = &item_type {
-                        self.expect_type("sequence literal item", &ty, expected)?;
+                        item_type = Some(sequence_item_type(expected, &ty).map_err(|error| {
+                            format!("sequence literal item type mismatch: {error}")
+                        })?);
                     } else {
                         item_type = Some(ty);
                     }
@@ -408,10 +462,18 @@ impl<'a> Checker<'a> {
             return Err(format!("`{name}` can only be used as a reduce operation"));
         }
         let mut vars = HashMap::new();
-        match_types(&node.signature.input, input, &mut vars)
+        let input_faultable = input.contains_faultable();
+        let actual_input = input.strip_faultable();
+        match_types(&node.signature.input, &actual_input, &mut vars)
             .map_err(|error| format!("`{name}` input type mismatch: {error}"))?;
-        substitute(&node.signature.output, &vars)
+        let output = substitute(&node.signature.output, &vars)
             .ok_or_else(|| format!("`{name}` output type contains unresolved type variables"))
+            ?;
+        Ok(if input_faultable && !matches!(output, Type::Faultable(_)) {
+            Type::Faultable(Box::new(output))
+        } else {
+            output
+        })
     }
 
     fn apply_map(&self, callable: &Callable, name: &str, input: &Type) -> Result<Type, String> {
@@ -420,6 +482,26 @@ impl<'a> Checker<'a> {
         };
         let output = self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
         Ok(Type::Seq(Box::new(output)))
+    }
+
+    fn apply_fault_map(
+        &self,
+        callable: &Callable,
+        name: &str,
+        input: &Type,
+    ) -> Result<(Type, Type), String> {
+        let Type::Seq(item_type) = input else {
+            return Err(format!(
+                "`fault map {name}` expected Seq input, found `{input}`"
+            ));
+        };
+        let output = self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
+        let Type::Faultable(ok) = output else {
+            return Err(format!(
+                "`fault map {name}` expected a faultable node, found output `{output}`"
+            ));
+        };
+        Ok((Type::Seq(ok), Type::Seq(Box::new(Type::Fault))))
     }
 
     fn apply_filter(&self, callable: &Callable, name: &str, input: &Type) -> Result<Type, String> {
@@ -462,18 +544,24 @@ impl<'a> Checker<'a> {
             .reduce_signature
             .as_ref()
             .ok_or_else(|| format!("`{name}` is not implemented as a reduce operation"))?;
-        let pair = Type::Tuple(vec![(**item_type).clone(), (**item_type).clone()]);
+        let item_faultable = matches!(item_type.as_ref(), Type::Faultable(_));
+        let plain_item_type = item_type.inner_faultable();
+        let pair = Type::Tuple(vec![plain_item_type.clone(), plain_item_type.clone()]);
         let mut vars = HashMap::new();
         match_types(&signature.input, &pair, &mut vars)
             .map_err(|error| format!("`reduce {name}` operation mismatch: {error}"))?;
         let output = substitute(&signature.output, &vars)
             .ok_or_else(|| format!("`reduce {name}` has unresolved output type"))?;
-        self.expect_type(&format!("reduce `{name}` result"), &output, item_type)?;
-        self.expect_type(&format!("reduce `{name}` identity"), identity, item_type)?;
+        self.expect_type(&format!("reduce `{name}` result"), &output, &plain_item_type)?;
+        self.expect_type(&format!("reduce `{name}` identity"), identity, &plain_item_type)?;
         if callable.name.is_empty() {
             return Err("internal error: empty callable name".to_string());
         }
-        Ok((**item_type).clone())
+        Ok(if item_faultable {
+            Type::Faultable(Box::new(plain_item_type))
+        } else {
+            plain_item_type
+        })
     }
 
     fn is_function_pointer_compatible(&self, node: &CallableInfo) -> bool {
@@ -494,7 +582,22 @@ fn primitive_types() -> HashMap<String, Type> {
         ("Real".to_string(), Type::Real),
         ("Bool".to_string(), Type::Bool),
         ("Bytes".to_string(), Type::Bytes),
+        ("Fault".to_string(), Type::Fault),
     ])
+}
+
+fn sequence_item_type(left: &Type, right: &Type) -> Result<Type, String> {
+    if left == right {
+        return Ok(left.clone());
+    }
+    match (left, right) {
+        (Type::Faultable(inner), other) | (other, Type::Faultable(inner))
+            if inner.as_ref() == other =>
+        {
+            Ok(Type::Faultable(inner.clone()))
+        }
+        _ => Err(format!("expected `{left}`, found `{right}`")),
+    }
 }
 
 fn match_types(
@@ -517,6 +620,9 @@ fn match_types(
                 Ok(())
             }
         }
+        (Type::Faultable(expected), Type::Faultable(actual)) => {
+            match_types(expected, actual, vars)
+        }
         (Type::Seq(expected), Type::Seq(actual)) => match_types(expected, actual, vars),
         (Type::Tuple(expected), Type::Tuple(actual)) if expected.len() == actual.len() => {
             for (expected, actual) in expected.iter().zip(actual) {
@@ -532,6 +638,7 @@ fn match_types(
 fn substitute(ty: &Type, vars: &HashMap<String, Type>) -> Option<Type> {
     match ty {
         Type::Var(name) => vars.get(name).cloned(),
+        Type::Faultable(item) => Some(Type::Faultable(Box::new(substitute(item, vars)?))),
         Type::Seq(item) => Some(Type::Seq(Box::new(substitute(item, vars)?))),
         Type::Tuple(items) => {
             let mut out = Vec::with_capacity(items.len());
@@ -594,6 +701,11 @@ impl TypeParser {
             self.expect(']')?;
             return Ok(Type::Seq(Box::new(item)));
         }
+        if name == "Faultable" && self.eat('[') {
+            let item = self.parse_type()?;
+            self.expect(']')?;
+            return Ok(Type::Faultable(Box::new(item)));
+        }
         Ok(match name.as_str() {
             "Unit" => Type::Unit,
             "Int" => Type::Int,
@@ -601,6 +713,7 @@ impl TypeParser {
             "Bool" => Type::Bool,
             "Bytes" => Type::Bytes,
             "Args" => Type::Args,
+            "Fault" => Type::Fault,
             _ => Type::Var(name),
         })
     }
@@ -649,6 +762,8 @@ impl fmt::Display for Type {
             Type::Bool => write!(f, "Bool"),
             Type::Bytes => write!(f, "Bytes"),
             Type::Args => write!(f, "Args"),
+            Type::Fault => write!(f, "Fault"),
+            Type::Faultable(item) => write!(f, "Faultable[{item}]"),
             Type::Seq(item) => write!(f, "Seq[{item}]"),
             Type::Tuple(items) => {
                 write!(f, "(")?;

@@ -20,7 +20,7 @@ import std.io { read_stdin, write_stdout }
 import std.int { parse_int, format_int }
 import std.math { add_int }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: Faultable[Int] {
     () -> read_stdin -> parse_int -> depth
     depth -> fib_result -> format_int -> result
     [result, "\n"] -> concat_bytes -> output

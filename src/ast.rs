@@ -70,6 +70,11 @@ pub enum Endpoint {
 pub enum Stage {
     Endpoint(Endpoint),
     Map(String),
+    FaultMap {
+        node: String,
+        ok: String,
+        fault: String,
+    },
     Filter(String),
     Repeat { count: Endpoint, node: String },
     Reduce { op: String, identity: Endpoint },

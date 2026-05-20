@@ -38,7 +38,7 @@ Writes bytes to standard output and produces an exit code.
 
 - Legal only in a `program` body.
 - Produces `0` on success.
-- Failure produces a non-zero host-defined exit code.
+- A boundary fault produces a non-zero host-defined exit code.
 - The program's returned `Int` exit code should depend on this node if
   stdout must be written before process exit.
 
@@ -48,7 +48,7 @@ Writes bytes to standard error and produces an exit code.
 
 - Legal only in a `program` body.
 - Produces `0` on success.
-- Failure produces a non-zero host-defined exit code.
+- A boundary fault produces a non-zero host-defined exit code.
 
 ## Example
 

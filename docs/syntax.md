@@ -56,7 +56,7 @@ and may not be used as identifiers:
 import    as        node      program   map       reduce
 scan      repeat    select    identity  grid      cell
 stencil2d range     range_between        range_step
-filter    length
+filter    length    fault     ok
 ```
 
 ### 1.3 Literals
@@ -178,6 +178,8 @@ Examples (informative):
 Real
 Int
 Bool
+Fault
+Faultable[Real]
 Image[H, W]
 Image[H, W, RGB]
 Vec[N, Real]
@@ -292,6 +294,7 @@ They are not first-class identifiers and may appear only between
 combinator     ::= map_comb
                  | reduce_comb
                  | scan_comb
+                 | fault_map_comb
                  | repeat_comb
                  | select_comb
                  | grid_comb
@@ -300,6 +303,11 @@ combinator     ::= map_comb
                  | length_comb
 
 map_comb       ::= "map" IDENT
+
+fault_map_comb ::= "fault" "map" IDENT "{"
+                   "ok" "->" IDENT ","
+                   "fault" "->" IDENT
+                   "}"
 
 reduce_comb    ::= "reduce" IDENT "(" "identity" ":" literal ")"
 
@@ -333,6 +341,11 @@ Notes:
 
 - `reduce` and `scan` require their `IDENT` operator to be associative
   (a semantic check, not a syntactic one).
+- `fault map f { ok -> xs, fault -> fs }` applies a faultable node to
+  each element. Successful values bind to `xs`; graph-visible faults bind
+  to `fs : Seq[Fault]`. Handling faults is optional: unhandled faults
+  propagate through the type as `Faultable[T]`, and any declaration that
+  returns them must say so in its output type.
 - `repeat<N>` accepts either an integer literal **or** a `name_ref` of
   type `Int`. When `N` is a runtime value, the iteration count varies
   per invocation but the body graph is still static.
@@ -469,12 +482,16 @@ fanout         ::= "{" fanout_arm ("," fanout_arm)* "}"
 fanout_arm     ::= stage ("->" stage)*
 seq_literal    ::= "[" "]" | "[" endpoint ("," endpoint)* "]"
 
-combinator     ::= map_comb | reduce_comb | scan_comb
+combinator     ::= map_comb | fault_map_comb | reduce_comb | scan_comb
                  | repeat_comb | select_comb
                  | stencil_comb | grid_comb
                  | range_comb | filter_comb | length_comb
 
 map_comb       ::= "map" IDENT
+fault_map_comb ::= "fault" "map" IDENT "{"
+                   "ok" "->" IDENT ","
+                   "fault" "->" IDENT
+                   "}"
 reduce_comb    ::= "reduce" IDENT "(" "identity" ":" literal ")"
 scan_comb      ::= "scan"   IDENT "(" "identity" ":" literal ")"
 repeat_comb    ::= "repeat" "<" repeat_count ">" IDENT

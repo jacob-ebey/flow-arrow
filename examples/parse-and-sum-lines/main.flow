@@ -1,0 +1,44 @@
+# parse-and-sum-lines
+#
+# Reads newline-delimited real numbers from stdin. If every line parses,
+# sums them, writes the total to stdout, and returns the process exit
+# code. If any line is invalid, writes fault diagnostics to stderr and
+# returns a non-zero exit code.
+#
+# This intentionally looks close to add-numbers-from-stdin, but its
+# purpose is different: it is the smallest program that should force
+# FlowArrow to make parse faults explicit instead of leaving them as
+# host-runtime validation faults.
+#
+# The `fault map` stage partitions a sequence into successful parsed
+# values and graph-visible faults. Faults represent unintended invalid
+# states; they are not a control-flow construct.
+
+import std.bytes { split_lines, concat_bytes }
+import std.cli { Args }
+import std.fault { has_faults, format_faults }
+import std.io { read_stdin, write_stdout, write_stderr }
+import std.real { parse_real, format_real }
+import std.math { add, max_int }
+import std.predicates { not_empty }
+
+program main(args: Args) -> exit_code: Int {
+    () -> read_stdin                  -> input
+    input -> split_lines              -> raw_lines
+    raw_lines -> filter not_empty     -> lines
+    lines -> fault map parse_real { ok -> numbers, fault -> faults }
+
+    numbers -> reduce add(identity: 0.0) -> total
+    total -> format_real              -> total_bytes
+    [total_bytes, "\n"] -> concat_bytes -> success_output
+
+    faults -> has_faults              -> invalid_input
+    faults -> format_faults           -> fault_output
+    (invalid_input, "", success_output) -> select -> stdout_output
+    (invalid_input, fault_output, "") -> select -> stderr_output
+
+    stdout_output -> write_stdout     -> stdout_status
+    stderr_output -> write_stderr     -> stderr_status
+    (invalid_input, 65, stdout_status) -> select -> data_status
+    (data_status, stderr_status) -> max_int -> exit_code
+}

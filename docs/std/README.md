@@ -17,6 +17,7 @@ Initial modules:
 | [`std.int`](./int.md) | `Int` parsing and formatting |
 | [`std.math`](./math.md) | Arithmetic and comparisons |
 | [`std.predicates`](./predicates.md) | Reusable predicates |
+| [`std.fault`](./fault.md) | Fault diagnostics and fault-status helpers |
 
 Example:
 

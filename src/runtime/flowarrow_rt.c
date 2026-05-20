@@ -12,7 +12,8 @@ typedef enum {
     FA_REAL = 2,
     FA_BOOL = 3,
     FA_BYTES = 4,
-    FA_SEQ = 5
+    FA_SEQ = 5,
+    FA_FAULT = 6
 } FaKind;
 
 typedef struct FaValue {
@@ -152,6 +153,13 @@ static FaValue *fa_bytes_from_slice(const char *bytes, size_t len) {
     return value;
 }
 
+static FaValue *fa_fault_from_cstr(const char *message) {
+    FaValue *value = fa_alloc(FA_FAULT);
+    value->len = strlen(message);
+    value->bytes = fa_copy_bytes(message, value->len);
+    return value;
+}
+
 static FaValue *fa_read_stdin(FaValue *input) {
     (void)input;
     size_t cap = 4096;
@@ -257,7 +265,7 @@ FaValue *fa_parse_int(FaValue *input) {
     return fa_int((int64_t)value);
 }
 
-FaValue *fa_parse_real(FaValue *input) {
+static bool fa_try_parse_real(FaValue *input, double *out) {
     FaValue *bytes = fa_expect_bytes(input, "parse_real");
     char *copy = fa_copy_bytes(bytes->bytes, bytes->len);
     char *start = copy;
@@ -270,11 +278,21 @@ FaValue *fa_parse_real(FaValue *input) {
     while (end && isspace((unsigned char)*end)) {
         end++;
     }
-    if (start == end || errno == ERANGE || !end || *end != '\0') {
+    bool ok = !(start == end || errno == ERANGE || !end || *end != '\0');
+    free(copy);
+    if (ok) {
+        *out = value;
+    }
+    return ok;
+}
+
+FaValue *fa_parse_real(FaValue *input) {
+    FaValue *bytes = fa_expect_bytes(input, "parse_real");
+    double value = 0.0;
+    if (!fa_try_parse_real(input, &value)) {
         fprintf(stderr, "flowarrow runtime: invalid Real input `%.*s`\n", (int)bytes->len, bytes->bytes);
         exit(65);
     }
-    free(copy);
     return fa_real(value);
 }
 
@@ -350,6 +368,51 @@ static FaValue *fa_eq_int(FaValue *input) {
     return fa_bool(fa_expect_int(seq->items[0], "eq_int") == fa_expect_int(seq->items[1], "eq_int"));
 }
 
+static FaValue *fa_max_int(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "max_int");
+    if (seq->count != 2) {
+        fputs("flowarrow runtime: max_int expected two inputs\n", stderr);
+        exit(65);
+    }
+    int64_t left = fa_expect_int(seq->items[0], "max_int");
+    int64_t right = fa_expect_int(seq->items[1], "max_int");
+    return fa_int(left > right ? left : right);
+}
+
+static FaValue *fa_has_faults(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "has_faults");
+    return fa_bool(seq->count > 0);
+}
+
+static FaValue *fa_format_faults(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "format_faults");
+    size_t total = 0;
+    for (size_t i = 0; i < seq->count; i++) {
+        FaValue *fault = seq->items[i];
+        if (!fault || fault->kind != FA_FAULT) {
+            fputs("flowarrow runtime: format_faults expected Fault items\n", stderr);
+            exit(65);
+        }
+        total += fault->len + 1;
+    }
+    FaValue *out = fa_alloc(FA_BYTES);
+    out->len = total;
+    out->bytes = (char *)malloc(total + 1);
+    if (!out->bytes) {
+        fputs("flowarrow runtime: allocation failed\n", stderr);
+        exit(70);
+    }
+    size_t offset = 0;
+    for (size_t i = 0; i < seq->count; i++) {
+        FaValue *fault = seq->items[i];
+        memcpy(out->bytes + offset, fault->bytes, fault->len);
+        offset += fault->len;
+        out->bytes[offset++] = '\n';
+    }
+    out->bytes[offset] = '\0';
+    return out;
+}
+
 static FaValue *fa_select(FaValue *input) {
     FaValue *seq = fa_expect_seq(input, "select");
     if (seq->count != 3 || !seq->items[0] || seq->items[0]->kind != FA_BOOL) {
@@ -390,6 +453,12 @@ static FaValue *fa_write_stdout(FaValue *input) {
     return fa_int(written == bytes->len ? 0 : 1);
 }
 
+static FaValue *fa_write_stderr(FaValue *input) {
+    FaValue *bytes = fa_expect_bytes(input, "write_stderr");
+    size_t written = fwrite(bytes->bytes, 1, bytes->len, stderr);
+    return fa_int(written == bytes->len ? 0 : 1);
+}
+
 FaValue *fa_builtin(const char *name, FaValue *input) {
     if (strcmp(name, "read_stdin") == 0) return fa_read_stdin(input);
     if (strcmp(name, "split_lines") == 0) return fa_split_lines(input);
@@ -402,9 +471,13 @@ FaValue *fa_builtin(const char *name, FaValue *input) {
     if (strcmp(name, "add_int") == 0) return fa_add_int(input);
     if (strcmp(name, "sub_int") == 0) return fa_sub_int(input);
     if (strcmp(name, "eq_int") == 0) return fa_eq_int(input);
+    if (strcmp(name, "max_int") == 0) return fa_max_int(input);
     if (strcmp(name, "not_empty") == 0) return fa_not_empty(input);
+    if (strcmp(name, "has_faults") == 0) return fa_has_faults(input);
+    if (strcmp(name, "format_faults") == 0) return fa_format_faults(input);
     if (strcmp(name, "select") == 0) return fa_select(input);
     if (strcmp(name, "write_stdout") == 0) return fa_write_stdout(input);
+    if (strcmp(name, "write_stderr") == 0) return fa_write_stderr(input);
     fprintf(stderr, "flowarrow runtime: unknown builtin `%s`\n", name);
     exit(65);
 }
@@ -416,6 +489,43 @@ FaValue *fa_map(FaValue *input, FaValue *(*fn)(FaValue *)) {
         fa_seq_set(out, (int64_t)i, fn(seq->items[i]));
     }
     return out;
+}
+
+FaValue *fa_fault_map(FaValue *input, FaValue *(*fn)(FaValue *)) {
+    FaValue *seq = fa_expect_seq(input, "fault map");
+    FaValue *ok = fa_seq_new((int64_t)seq->count);
+    FaValue *faults = fa_seq_new((int64_t)seq->count);
+    int64_t ok_count = 0;
+    int64_t fault_count = 0;
+
+    for (size_t i = 0; i < seq->count; i++) {
+        if (fn == fa_parse_real) {
+            double value = 0.0;
+            if (fa_try_parse_real(seq->items[i], &value)) {
+                fa_seq_set(ok, ok_count++, fa_real(value));
+            } else {
+                FaValue *bytes = fa_expect_bytes(seq->items[i], "parse_real");
+                char message[512];
+                snprintf(message, sizeof(message), "line %zu: expected Real, got \"%.*s\"", i + 1, (int)bytes->len, bytes->bytes);
+                fa_seq_set(faults, fault_count++, fa_fault_from_cstr(message));
+            }
+        } else {
+            fa_seq_set(ok, ok_count++, fn(seq->items[i]));
+        }
+    }
+
+    FaValue *trimmed_ok = fa_seq_new(ok_count);
+    for (int64_t i = 0; i < ok_count; i++) {
+        fa_seq_set(trimmed_ok, i, ok->items[i]);
+    }
+    FaValue *trimmed_faults = fa_seq_new(fault_count);
+    for (int64_t i = 0; i < fault_count; i++) {
+        fa_seq_set(trimmed_faults, i, faults->items[i]);
+    }
+    FaValue *pair = fa_seq_new(2);
+    fa_seq_set(pair, 0, trimmed_ok);
+    fa_seq_set(pair, 1, trimmed_faults);
+    return pair;
 }
 
 FaValue *fa_filter(FaValue *input, FaValue *(*pred)(FaValue *)) {

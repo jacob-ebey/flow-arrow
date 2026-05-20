@@ -30,7 +30,7 @@ Adds two `Int` values.
 - Associative.
 - Identity: `0`.
 - Suitable for `reduce add_int(identity: 0)`.
-- Overflow is a boundary/data validation failure reported by the host
+- Overflow is a boundary/data validation fault reported by the host
   runtime.
 
 ### `sub_int`

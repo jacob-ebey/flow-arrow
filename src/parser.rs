@@ -187,6 +187,21 @@ impl Parser {
                 self.bump();
                 Ok(Stage::Map(self.expect_ident()?))
             }
+            Some("fault") => {
+                self.bump();
+                self.expect_keyword("map")?;
+                let node = self.expect_ident()?;
+                self.expect(Token::LBrace)?;
+                self.expect_keyword("ok")?;
+                self.expect(Token::Arrow)?;
+                let ok = self.expect_ident()?;
+                self.expect(Token::Comma)?;
+                self.expect_keyword("fault")?;
+                self.expect(Token::Arrow)?;
+                let fault = self.expect_ident()?;
+                self.expect(Token::RBrace)?;
+                Ok(Stage::FaultMap { node, ok, fault })
+            }
             Some("filter") => {
                 self.bump();
                 Ok(Stage::Filter(self.expect_ident()?))
