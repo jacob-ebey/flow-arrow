@@ -9,10 +9,10 @@ $ echo "1\n2\n3.5\n" | flowarrow run main.flow
 
 It exercises three things at once:
 
-1. **Boundary-only effects.** `program main(input: Bytes) -> output: Bytes`
-   is the *entire* interface to the outside world. The graph itself
-   is pure; the runtime is responsible for wiring `input` to stdin
-   and `output` to stdout.
+1. **Boundary-only effects.** `program main(args: Args) -> exit_code: Int`
+   is the process entry shape. Stdin and stdout are explicit
+   `std.io` boundary nodes (`read_stdin`, `write_stdout`) inside the
+   program body, and the returned value is the process exit code.
 
 2. **Dynamic-size sequences.** The number of input lines is not
    known at compile time. `split_lines` produces a `Seq[Bytes]`

@@ -1,31 +1,42 @@
 # add-numbers-from-stdin
 #
 # Reads bytes from stdin, treats each non-empty line as a real number,
-# sums them, and writes the result (followed by a newline) to stdout.
+# sums them, writes the result (followed by a newline) to stdout, and
+# returns the process exit code.
 #
 # Demonstrates:
-#   - boundary-only effects (program inputs and outputs are Bytes)
+#   - command-line entry shape: Args -> Int
+#   - stdin/stdout through explicit std.io boundary nodes
 #   - dynamic-size sequences (the number of input lines is a runtime value)
 #   - parallel reduce over an associative operator
 #
 # Dataflow shape:
 #
-#   input ─> split_lines ─> filter not_empty ─> map parse_real
-#                                                    │
-#                                                    ▼
-#                                          reduce add(identity: 0.0)
-#                                                    │
-#                                                    ▼
-#                                              format_real
-#                                                    │
-#                                                    ▼
-#                                          append_newline ─> output
+#   () ─> read_stdin ─> split_lines ─> filter not_empty ─> map parse_real
+#                                                               │
+#                                                               ▼
+#                                                     reduce add(identity: 0.0)
+#                                                               │
+#                                                               ▼
+#                                                         format_real
+#                                                               │
+#                                                               ▼
+#                                                     append_newline ─> write_stdout ─> exit_code
 
-program main(input: Bytes) -> output: Bytes {
+import std.bytes { split_lines, concat_bytes }
+import std.cli { Args }
+import std.io { read_stdin, write_stdout }
+import std.real { parse_real, format_real }
+import std.math { add }
+import std.predicates { not_empty }
+
+program main(args: Args) -> exit_code: Int {
+    () -> read_stdin                  -> input
     input -> split_lines             -> raw_lines
     raw_lines -> filter not_empty    -> lines
     lines -> map parse_real          -> numbers
     numbers -> reduce add(identity: 0.0) -> total
     total -> format_real             -> total_bytes
     [total_bytes, "\n"] -> concat_bytes -> output
+    output -> write_stdout           -> exit_code
 }

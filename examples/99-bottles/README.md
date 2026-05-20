@@ -13,15 +13,12 @@ Take one down and pass it around, 97 bottles of beer on the wall.
 
 ...
 
-1 bottles of beer on the wall, 1 bottles of beer.
+1 bottle of beer on the wall, 1 bottle of beer.
 Take one down and pass it around, 0 bottles of beer on the wall.
 
 No more bottles of beer on the wall, no more bottles of beer.
 Go to the store and buy some more, 99 bottles of beer on the wall.
 ```
-
-(Yes, the canonical lyric pluralises "1 bottles". A grammatically
-correct version is left as an exercise in `select`.)
 
 ## Why this example matters
 
@@ -46,6 +43,12 @@ expressed as a pure dataflow graph:
    bottles" stanza is a separate pure node (`final_verse_node`)
    joined to the body with `concat2`. There is no `if i == 0` —
    that path would hide control flow inside the graph.
+
+5. **Pluralisation via `select`, not branching.** "1 bottle" vs
+   "N bottles" is chosen with the pure `select` combinator:
+   both candidate strings are ordinary graph inputs, and the
+   predicate `eq_int(n, 1)` picks one. The scheduler still sees
+   the full dependency graph.
 
 ## What it does *not* require
 

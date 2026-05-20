@@ -53,10 +53,10 @@ Identifiers are case-sensitive. The following are **reserved keywords**
 and may not be used as identifiers:
 
 ```text
-node      program   map       reduce    scan      repeat
-select    identity  grid      cell      stencil2d
-range     range_between        range_step          filter
-length
+import    as        node      program   map       reduce
+scan      repeat    select    identity  grid      cell
+stencil2d range     range_between        range_step
+filter    length
 ```
 
 ### 1.3 Literals
@@ -85,17 +85,67 @@ The only multi-character token is `->` (the **flow arrow**).
 ```ebnf
 program        ::= declaration*
 
-declaration    ::= node_decl
+declaration    ::= import_decl
+                 | node_decl
                  | program_decl
+
+import_decl    ::= "import" import_source import_clause
+
+import_source  ::= module_path
+                 | STRING
+
+module_path    ::= IDENT ("." IDENT)*
+
+import_clause  ::= "as" IDENT
+                 | "{" import_item ("," import_item)* ","? "}"
+
+import_item    ::= IDENT ("as" IDENT)?
 
 node_decl      ::= "node" IDENT "(" port_list? ")" "->" port_or_list block
 
 program_decl   ::= "program" IDENT "(" port_list? ")" "->" port_or_list block
 ```
 
+`import_decl` is compile-time-only. It introduces names into the module
+namespace but never creates dataflow graph nodes or edges.
+
+Two import sources exist:
+
+- `module_path` imports from the standard library or package
+  dependencies, for example `std.bytes` or `acme.image.filters`.
+- `STRING` imports from a local FlowArrow source file, resolved relative
+  to the importing file, for example `"./filters.flow"` or
+  `"../shared/math.flow"`.
+
+Two import clauses exist:
+
+```flow
+import std.bytes { split_lines, concat_bytes }
+import std.math as math
+import "./filters.flow" { blur, sobel as detect_edges }
+import "./format.flow" as format
+```
+
+Selective imports (`{ ... }`) introduce bare names into the current
+module. `as` imports introduce a namespace alias; imported declarations
+are referenced through that alias, such as `math.add` or `format.render`.
+Name collisions are compile-time errors unless one side is explicitly
+renamed with `as`.
+
+Import resolution must be deterministic and acyclic. Cyclic imports are
+ill-formed, even if the cycle would only involve declarations that are
+not used.
+
+All top-level `node` declarations are exportable from their source
+module. A `program` declaration may be imported only as a named entry
+point for tooling; it cannot be used as an ordinary pure node inside
+another `node` or `program` body.
+
 A `program_decl` has identical syntax to a `node_decl`; the difference
-is semantic (it is the program entry point and its inputs/outputs are
-the boundary across which effects may occur — see `overview.md` §12).
+is semantic: the canonical command-line entry point is
+`program main(args: Args) -> exit_code: Int`, with stdin/stdout/stderr
+handled by explicit `std.io` boundary nodes inside the program body
+(see `overview.md` §12).
 
 ```ebnf
 port_or_list   ::= port
@@ -111,7 +161,9 @@ port           ::= IDENT ":" type
 ## 3. Types
 
 ```ebnf
-type           ::= IDENT type_args?
+type           ::= type_name type_args?
+
+type_name      ::= IDENT ("." IDENT)?
 
 type_args      ::= "[" type_arg ("," type_arg)* "]"
 
@@ -345,9 +397,10 @@ Within a single `node_decl` or `program_decl`:
 1. Each `IDENT` appearing as the **rightmost endpoint** of a chain or
    fanout arm is a **binding occurrence**: it introduces a new name.
 2. A name may be bound **exactly once** (single static assignment).
-3. Every other occurrence of an `IDENT` is a **use**: it must resolve
-   either to an input port of the enclosing node, or to a name bound
-   elsewhere in the same block.
+3. Every other occurrence of an `IDENT` or imported qualified name
+   (`alias.name`) is a **use**: it must resolve either to an input port
+   of the enclosing node, a name bound elsewhere in the same block, or
+   an imported top-level declaration.
 4. The set of bindings and uses forms the data-dependency graph; it
    must be acyclic. Cycles are syntactically expressible but
    semantically rejected.
@@ -385,7 +438,14 @@ For convenience, the complete syntactic grammar is reproduced here.
 ```ebnf
 program        ::= declaration*
 
-declaration    ::= node_decl | program_decl
+declaration    ::= import_decl | node_decl | program_decl
+
+import_decl    ::= "import" import_source import_clause
+import_source  ::= module_path | STRING
+module_path    ::= IDENT ("." IDENT)*
+import_clause  ::= "as" IDENT
+                 | "{" import_item ("," import_item)* ","? "}"
+import_item    ::= IDENT ("as" IDENT)?
 
 node_decl      ::= "node"    IDENT "(" port_list? ")" "->" port_or_list block
 program_decl   ::= "program" IDENT "(" port_list? ")" "->" port_or_list block
@@ -394,7 +454,8 @@ port_or_list   ::= port | "(" port_list ")"
 port_list      ::= port ("," port)*
 port           ::= IDENT ":" type
 
-type           ::= IDENT type_args?
+type           ::= type_name type_args?
+type_name      ::= IDENT ("." IDENT)?
 type_args      ::= "[" type_arg ("," type_arg)* "]"
 type_arg       ::= type | INT | IDENT
 

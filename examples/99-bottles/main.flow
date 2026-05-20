@@ -8,20 +8,29 @@
 #   - concatenating verses in order via reduce on an associative,
 #     non-commutative operator (byte concatenation)
 #   - emitting the final "no more bottles" verse as a join, not a branch
+#   - grammatical pluralisation via the pure `select` combinator
+#     ("1 bottle" vs "N bottles") — no `if` in the graph
 #
 # Dataflow shape:
 #
 #   ()  ─> range_step(99, 0, -1) ─> indices
 #       indices ─> map verse_for ─> verses
 #       verses ─> reduce concat_bytes(identity: "") ─> body
-#       (body, final_verse) ─> concat2 ─> output
+#       (body, final_verse) ─> concat2 ─> write_stdout ─> exit_code
 
-program main(input: Bytes) -> output: Bytes {
+import std.bytes { concat_bytes }
+import std.cli { Args }
+import std.io { write_stdout }
+import std.int { format_int }
+import std.math { sub_int, eq_int }
+
+program main(args: Args) -> exit_code: Int {
     (99, 0, -1) -> range_step                        -> indices
     indices     -> map verse_for                     -> verses
     verses      -> reduce concat_bytes(identity: "") -> body
     () -> final_verse_node                           -> tail
     [body, tail] -> concat_bytes                     -> output
+    output       -> write_stdout                     -> exit_code
 }
 
 # A single verse, parameterised by the current bottle count `n`.
@@ -34,14 +43,21 @@ node verse_for(n: Int) -> v: Bytes {
     (n, 1)         -> sub_int           -> m
     m              -> format_int        -> m_str
 
-    # Line 1: "{n} bottles of beer on the wall, {n} bottles of beer.\n"
-    [n_str, " bottles of beer on the wall, ",
-     n_str, " bottles of beer.\n"]
+    # Pluralisation: "bottle" when count == 1, "bottles" otherwise.
+    # Pure data selection — no branch hides in the graph.
+    (n, 1)                            -> eq_int -> n_is_one
+    (m, 1)                            -> eq_int -> m_is_one
+    (n_is_one, "bottle", "bottles")   -> select -> n_word
+    (m_is_one, "bottle", "bottles")   -> select -> m_word
+
+    # Line 1: "{n} {n_word} of beer on the wall, {n} {n_word} of beer.\n"
+    [n_str, " ", n_word, " of beer on the wall, ",
+     n_str, " ", n_word, " of beer.\n"]
                    -> concat_bytes      -> line1
 
-    # Line 2: "Take one down and pass it around, {m} bottles of beer on the wall.\n\n"
+    # Line 2: "Take one down and pass it around, {m} {m_word} of beer on the wall.\n\n"
     ["Take one down and pass it around, ",
-     m_str, " bottles of beer on the wall.\n\n"]
+     m_str, " ", m_word, " of beer on the wall.\n\n"]
                    -> concat_bytes      -> line2
 
     [line1, line2] -> concat_bytes      -> v

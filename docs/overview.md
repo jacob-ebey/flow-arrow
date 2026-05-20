@@ -261,7 +261,7 @@ xs -> length -> n
 ```
 
 `grid<...>` dimensions and `repeat<...>` counts may also be runtime
-values (see §9 and §14).
+values (see §9 and §15).
 
 ### What stays forbidden
 
@@ -373,19 +373,117 @@ timestamp -> compute_deadline -> deadline
 
 # 12. Effects are boundary-only
 
-A complete program may have external inputs and outputs, but effects are outside the dataflow graph.
+A complete program receives command-line arguments and flags as its
+ordinary input and returns an integer process exit code.
 
 ```flow
-program main(input: Bytes) -> output: Bytes {
+import std.cli { Args }
+import std.io { read_stdin, write_stdout }
+
+program main(args: Args) -> exit_code: Int {
+    () -> read_stdin -> input
     input -> parse -> transform -> encode -> output
+    output -> write_stdout -> exit_code
 }
 ```
 
-The runtime may connect `input` and `output` to files, sockets, or devices, but the FlowArrow graph itself is pure.
+Standard input, standard output, and standard error are accessed through
+explicit program-boundary nodes in `std.io`, not through `main`'s
+parameters or return value. These nodes are visible in the dependency
+graph and may only appear inside `program` bodies; reusable `node`
+declarations remain pure.
 
 ---
 
-# 13. Image-processing example
+# 13. Imports and the standard library
+
+FlowArrow source files may import pure nodes, boundary nodes, and types
+from the standard library, package dependencies, or local `.flow` files.
+Imports are compile-time name resolution only: they do not create graph
+nodes, edges, ordering, effects, or hidden global state.
+
+```flow
+import std.bytes { split_lines, concat_bytes }
+import std.cli { Args }
+import std.io { read_stdin, write_stdout }
+import std.real { parse_real, format_real }
+import std.math as math
+import "./filters.flow" { blur, sobel as detect_edges }
+import "./format.flow" as format
+```
+
+There are two import sources:
+
+- **Library imports** use a dotted module path (`std.bytes`,
+  `std.math`, `acme.image.filters`). The `std` root is reserved for the
+  FlowArrow standard library.
+- **Local imports** use a string path resolved relative to the importing
+  file (`"./filters.flow"`, `"../shared/math.flow"`).
+
+There are two import forms:
+
+```flow
+# selective import: introduces bare names
+import std.bytes { split_lines, concat_bytes }
+
+# qualified import: introduces an alias namespace
+import std.math as math
+```
+
+Selective imports make imported declarations available as ordinary
+names:
+
+```flow
+input -> split_lines -> lines
+```
+
+Qualified imports require the alias:
+
+```flow
+(x, y) -> math.add -> sum
+```
+
+The `math.add` reference is still a statically resolved computation
+node. It is not dynamic dispatch; the compiler resolves the alias and
+target before building the dependency DAG.
+
+Local imports work the same way:
+
+```flow
+import "./image/filters.flow" as filters
+
+node enhance(img: Image[H, W, RGB]) -> out: Image[H, W, RGB] {
+    img -> filters.normalize -> n
+    n -> filters.sharpen -> out
+}
+```
+
+Name collisions are compile-time errors unless one side is renamed:
+
+```flow
+import std.bytes { concat_bytes }
+import "./html.flow" { concat_bytes as concat_html }
+```
+
+Import resolution is deterministic and acyclic. Cyclic imports are
+ill-formed; imports are a module-system feature, not a way to construct
+recursive or dynamic dataflow graphs.
+
+All top-level `node` declarations are exportable from their source
+module. A `program` declaration is an entry point, not a reusable pure
+node, and cannot be called from another graph.
+
+The examples in `examples/` import stdlib primitives such as
+`read_stdin`, `write_stdout`, `split_lines`, `parse_real`,
+`concat_bytes`, and `add` explicitly from the relevant `std.*` modules
+instead of assuming they are globally available.
+
+The initial standard-library module surface is documented in
+[`docs/std/`](./std/).
+
+---
+
+# 14. Image-processing example
 
 ```flow
 node detect_edges(img: Image[H, W, RGB]) -> edges: Image[H, W, Gray] {
@@ -412,7 +510,7 @@ img ─────────┤                       ├─> equalize ─> g
 
 ---
 
-# 14. Matrix multiplication example
+# 15. Matrix multiplication example
 
 ```flow
 node matmul(
@@ -436,7 +534,7 @@ Each cell computation may itself contain parallelism through `dot`.
 
 ---
 
-# 15. Forbidden syntax
+# 16. Forbidden syntax
 
 FlowArrow deliberately does not include:
 
@@ -467,9 +565,16 @@ These constructs either create hidden ordering, hidden effects, or dynamic depen
 
 ---
 
-# 16. Allowed syntax summary
+# 17. Allowed syntax summary
 
 ```flow
+# imports
+import std.bytes { split_lines, concat_bytes }
+import std.cli { Args }
+import std.io { read_stdin, write_stdout }
+import std.math as math
+import "./filters.flow" { blur, sobel as detect_edges }
+
 # pipeline
 x -> f -> y
 
@@ -507,7 +612,7 @@ xs -> length -> n
 
 ---
 
-# 17. Compilation model
+# 18. Compilation model
 
 Every program compiles to:
 
@@ -548,12 +653,17 @@ Therefore, FlowArrow exposes exactly the maximum legal parallelism expressible b
 
 ---
 
-# 18. Minimal grammar sketch
+# 19. Minimal grammar sketch
 
 ```ebnf
 program     ::= declaration*
 
-declaration ::= "node" IDENT "(" ports? ")" "->" ports block
+declaration ::= import_decl
+              | "node" IDENT "(" ports? ")" "->" ports block
+              | "program" IDENT "(" ports? ")" "->" ports block
+
+import_decl ::= "import" (module_path | STRING)
+                ( "as" IDENT | "{" import_item ("," import_item)* "}" )
 
 ports       ::= port ("," port)*
 port        ::= IDENT ":" TYPE
@@ -583,7 +693,7 @@ combinator  ::= "map" IDENT
 
 ---
 
-# 19. Core invariant
+# 20. Core invariant
 
 A FlowArrow program is valid only if:
 
