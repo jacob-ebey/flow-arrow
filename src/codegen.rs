@@ -104,11 +104,14 @@ impl<'a> Codegen<'a> {
         self.line("declare ptr @fa_cstr(ptr)");
         self.line("declare ptr @fa_seq_new(i64)");
         self.line("declare void @fa_seq_set(ptr, i64, ptr)");
+        self.line("declare ptr @fa_seq_get(ptr, i64)");
         self.line("declare ptr @fa_builtin(ptr, ptr)");
         self.line("declare ptr @fa_map(ptr, ptr)");
         self.line("declare ptr @fa_filter(ptr, ptr)");
+        self.line("declare ptr @fa_repeat(ptr, ptr, ptr)");
         self.line("declare ptr @fa_reduce(ptr, ptr, ptr)");
         self.line("declare ptr @fa_parse_real(ptr)");
+        self.line("declare ptr @fa_parse_int(ptr)");
         self.line("declare ptr @fa_not_empty(ptr)");
         self.line("declare i32 @fa_value_to_exit_code(ptr)");
         self.line("");
@@ -120,34 +123,64 @@ impl<'a> Codegen<'a> {
         } else {
             format!("flow_node_{}", sanitize_symbol(&callable.name))
         };
-        let params = callable
-            .inputs
-            .iter()
-            .map(|port| format!("ptr %{}", sanitize_local(&port.name)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.line(&format!("define ptr @{symbol}({params}) {{"));
+        self.line(&format!("define ptr @{symbol}(ptr %__input) {{"));
         let mut env = HashMap::new();
-        for port in &callable.inputs {
-            env.insert(
-                port.name.clone(),
-                format!("%{}", sanitize_local(&port.name)),
-            );
+        match callable.inputs.as_slice() {
+            [] => {
+                let tmp = self.next_temp();
+                self.line(&format!("  {tmp} = call ptr @fa_unit()"));
+            }
+            [port] => {
+                env.insert(port.name.clone(), "%__input".to_string());
+            }
+            ports => {
+                for (index, port) in ports.iter().enumerate() {
+                    let tmp = self.next_temp();
+                    self.line(&format!(
+                        "  {tmp} = call ptr @fa_seq_get(ptr %__input, i64 {index})"
+                    ));
+                    env.insert(port.name.clone(), tmp);
+                }
+            }
         }
         for chain in &callable.chains {
             self.emit_chain(chain, &mut env)?;
         }
-        let output = callable
-            .outputs
-            .first()
-            .ok_or_else(|| format!("`{}` must declare an output", callable.name))?;
-        let result = env
-            .get(&output.name)
-            .ok_or_else(|| format!("output `{}` is never bound", output.name))?;
+        let result = self.emit_outputs(callable, &env)?;
         self.line(&format!("  ret ptr {result}"));
         self.line("}");
         self.line("");
         Ok(())
+    }
+
+    fn emit_outputs(
+        &mut self,
+        callable: &Callable,
+        env: &HashMap<String, String>,
+    ) -> Result<String, String> {
+        match callable.outputs.as_slice() {
+            [] => Err(format!("`{}` must declare an output", callable.name)),
+            [output] => env
+                .get(&output.name)
+                .cloned()
+                .ok_or_else(|| format!("output `{}` is never bound", output.name)),
+            outputs => {
+                let seq = self.next_temp();
+                self.line(&format!(
+                    "  {seq} = call ptr @fa_seq_new(i64 {})",
+                    outputs.len()
+                ));
+                for (index, output) in outputs.iter().enumerate() {
+                    let value = env
+                        .get(&output.name)
+                        .ok_or_else(|| format!("output `{}` is never bound", output.name))?;
+                    self.line(&format!(
+                        "  call void @fa_seq_set(ptr {seq}, i64 {index}, ptr {value})"
+                    ));
+                }
+                Ok(seq)
+            }
+        }
     }
 
     fn emit_chain(
@@ -186,6 +219,15 @@ impl<'a> Codegen<'a> {
                     let tmp = self.next_temp();
                     self.line(&format!(
                         "  {tmp} = call ptr @fa_filter(ptr {value}, ptr {function})"
+                    ));
+                    value = tmp;
+                }
+                Stage::Repeat { count, node } => {
+                    let count_value = self.emit_endpoint_value(count, env)?;
+                    let function = self.function_pointer_for(node)?;
+                    let tmp = self.next_temp();
+                    self.line(&format!(
+                        "  {tmp} = call ptr @fa_repeat(ptr {value}, ptr {count_value}, ptr {function})"
                     ));
                     value = tmp;
                 }
@@ -363,10 +405,6 @@ fn sanitize_symbol(name: &str) -> String {
             }
         })
         .collect()
-}
-
-fn sanitize_local(name: &str) -> String {
-    sanitize_symbol(name)
 }
 
 fn llvm_bytes(bytes: &[u8]) -> String {

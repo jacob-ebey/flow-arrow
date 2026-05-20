@@ -198,7 +198,7 @@ mod tests {
     fn typecheck_rejects_unimplemented_stdlib_export() {
         let source = r#"
             import std.cli { Args }
-            import std.int { parse_int }
+            import std.cli { argv }
 
             program main(args: Args) -> exit_code: Int {
                 0 -> exit_code
@@ -238,6 +238,29 @@ mod tests {
         typecheck::check_module(&module).expect("typecheck");
         let llvm = codegen::emit_module(&module).expect("llvm");
         assert!(llvm.contains("sub_int\\00"));
+    }
+
+    #[test]
+    fn typechecks_and_codegen_parse_int_and_add_int_reduce() {
+        let source = r#"
+            import std.cli { Args }
+            import std.io { read_stdin, write_stdout }
+            import std.bytes { split_lines }
+            import std.int { parse_int, format_int }
+            import std.math { add_int }
+
+            program main(args: Args) -> exit_code: Int {
+                () -> read_stdin -> split_lines -> map parse_int -> numbers
+                numbers -> reduce add_int(identity: 0) -> total
+                total -> format_int -> output
+                output -> write_stdout -> exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+        let llvm = codegen::emit_module(&module).expect("llvm");
+        assert!(llvm.contains("call ptr @fa_map"));
+        assert!(llvm.contains("add_int\\00"));
     }
 
     #[test]
@@ -295,5 +318,29 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "6.5\n");
+    }
+
+    #[test]
+    fn llvm_backend_runs_fibonacci_from_stdin() {
+        let build = build_file(Path::new("examples/fibonacci/main.flow"), None).expect("build");
+        let mut child = Command::new(&build.executable)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(b"12\n")
+            .expect("write stdin");
+        let output = child.wait_with_output().expect("run");
+        assert!(
+            output.status.success(),
+            "program failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "89\n");
     }
 }

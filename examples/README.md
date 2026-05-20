@@ -10,14 +10,15 @@ import std.bytes { split_lines, concat_bytes }
 import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 import std.real { parse_real, format_real }
-import std.int { format_int }
-import std.math { add, sub_int, eq_int }
+import std.int { parse_int, format_int }
+import std.math { add, add_int, sub_int, eq_int }
 import std.predicates { not_empty }
 ```
 
 ```text
 # Byte / text
 split_lines       : Bytes -> Seq[Bytes]
+parse_int         : Bytes -> Int
 parse_real        : Bytes -> Real
 format_int        : Int   -> Bytes
 format_real       : Real  -> Bytes
@@ -31,6 +32,7 @@ write_stdout      : Bytes -> Int
 # Predicates / arithmetic
 not_empty         : Bytes -> Bool
 add               : (Real, Real) -> Real             # associative
+add_int           : (Int, Int)   -> Int              # associative
 sub_int           : (Int, Int)   -> Int
 eq_int            : (Int, Int)   -> Bool
 ```
@@ -48,3 +50,4 @@ Mermaid `flowchart TD` diagram.
 | ----------------------------- | ------------------------------------------------------ |
 | `add-numbers-from-stdin/`     | Boundary I/O, dynamic-size sequences, parallel reduce. |
 | `99-bottles/`                 | Pure string generation via `range_step` + `map` + concat reduce. |
+| `fibonacci/`                  | Stdin integer parsing and FlowArrow Fibonacci iteration. |

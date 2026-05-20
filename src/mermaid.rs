@@ -82,6 +82,14 @@ impl MermaidEmitter {
                     self.edges(&current, &operation, None, "    ");
                     current = vec![operation];
                 }
+                Stage::Repeat { count, node } => {
+                    let operation =
+                        self.node(&format!("repeat<{}> {node}", endpoint_label(count)), "    ");
+                    self.edges(&current, &operation, None, "    ");
+                    let count = self.emit_endpoint(count, env)?;
+                    self.edges(&count, &operation, Some("count"), "    ");
+                    current = vec![operation];
+                }
                 Stage::Reduce { op, identity } => {
                     let operation = self.node(
                         &format!("reduce {op}\nidentity: {}", endpoint_label(identity)),

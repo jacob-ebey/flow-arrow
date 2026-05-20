@@ -71,5 +71,6 @@ pub enum Stage {
     Endpoint(Endpoint),
     Map(String),
     Filter(String),
+    Repeat { count: Endpoint, node: String },
     Reduce { op: String, identity: Endpoint },
 }

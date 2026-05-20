@@ -327,6 +327,11 @@ impl<'a> Checker<'a> {
                 Stage::Filter(name) => {
                     value_type = self.apply_filter(callable, name, &value_type)?;
                 }
+                Stage::Repeat { count, node } => {
+                    let count_type = self.endpoint_type(count, env)?;
+                    self.expect_type("repeat count", &count_type, &Type::Int)?;
+                    value_type = self.apply_repeat(callable, node, &value_type)?;
+                }
                 Stage::Reduce { op, identity } => {
                     let identity_type = self.endpoint_type(identity, env)?;
                     value_type = self.apply_reduce(callable, op, &value_type, &identity_type)?;
@@ -426,6 +431,12 @@ impl<'a> Checker<'a> {
         let output = self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
         self.expect_type(&format!("filter `{name}` result"), &output, &Type::Bool)?;
         Ok(input.clone())
+    }
+
+    fn apply_repeat(&self, callable: &Callable, name: &str, input: &Type) -> Result<Type, String> {
+        let output = self.apply_node(callable, CallableKind::Node, name, input, true)?;
+        self.expect_type(&format!("repeat `{name}` result"), &output, input)?;
+        Ok(output)
     }
 
     fn apply_reduce(

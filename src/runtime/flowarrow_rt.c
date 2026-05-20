@@ -94,6 +94,14 @@ void fa_seq_set(FaValue *seq, int64_t index, FaValue *item) {
     seq->items[index] = item;
 }
 
+FaValue *fa_seq_get(FaValue *seq, int64_t index) {
+    if (!seq || seq->kind != FA_SEQ || index < 0 || (size_t)index >= seq->count) {
+        fputs("flowarrow runtime: invalid sequence read\n", stderr);
+        exit(65);
+    }
+    return seq->items[index];
+}
+
 static FaValue *fa_expect_seq(FaValue *value, const char *op) {
     if (!value || value->kind != FA_SEQ) {
         fprintf(stderr, "flowarrow runtime: %s expected Seq input\n", op);
@@ -228,6 +236,27 @@ static FaValue *fa_format_int(FaValue *input) {
     return fa_cstr(buf);
 }
 
+FaValue *fa_parse_int(FaValue *input) {
+    FaValue *bytes = fa_expect_bytes(input, "parse_int");
+    char *copy = fa_copy_bytes(bytes->bytes, bytes->len);
+    char *start = copy;
+    while (isspace((unsigned char)*start)) {
+        start++;
+    }
+    errno = 0;
+    char *end = NULL;
+    long long value = strtoll(start, &end, 10);
+    while (end && isspace((unsigned char)*end)) {
+        end++;
+    }
+    if (start == end || errno == ERANGE || !end || *end != '\0') {
+        fprintf(stderr, "flowarrow runtime: invalid Int input `%.*s`\n", (int)bytes->len, bytes->bytes);
+        exit(65);
+    }
+    free(copy);
+    return fa_int((int64_t)value);
+}
+
 FaValue *fa_parse_real(FaValue *input) {
     FaValue *bytes = fa_expect_bytes(input, "parse_real");
     char *copy = fa_copy_bytes(bytes->bytes, bytes->len);
@@ -260,6 +289,15 @@ FaValue *fa_not_empty(FaValue *input) {
     return fa_bool(bytes->len > 0);
 }
 
+static int64_t fa_checked_add_int(int64_t left, int64_t right, const char *op) {
+    int64_t result = 0;
+    if (__builtin_add_overflow(left, right, &result)) {
+        fprintf(stderr, "flowarrow runtime: %s overflow\n", op);
+        exit(65);
+    }
+    return result;
+}
+
 static FaValue *fa_concat_bytes(FaValue *input) {
     FaValue *seq = fa_expect_seq(input, "concat_bytes");
     size_t total = 0;
@@ -281,6 +319,17 @@ static FaValue *fa_concat_bytes(FaValue *input) {
     }
     out->bytes[total] = '\0';
     return out;
+}
+
+static FaValue *fa_add_int(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "add_int");
+    if (seq->count != 2) {
+        fputs("flowarrow runtime: add_int expected two inputs\n", stderr);
+        exit(65);
+    }
+    int64_t left = fa_expect_int(seq->items[0], "add_int");
+    int64_t right = fa_expect_int(seq->items[1], "add_int");
+    return fa_int(fa_checked_add_int(left, right, "add_int"));
 }
 
 static FaValue *fa_sub_int(FaValue *input) {
@@ -346,9 +395,11 @@ FaValue *fa_builtin(const char *name, FaValue *input) {
     if (strcmp(name, "split_lines") == 0) return fa_split_lines(input);
     if (strcmp(name, "range_step") == 0) return fa_range_step(input);
     if (strcmp(name, "format_int") == 0) return fa_format_int(input);
+    if (strcmp(name, "parse_int") == 0) return fa_parse_int(input);
     if (strcmp(name, "parse_real") == 0) return fa_parse_real(input);
     if (strcmp(name, "format_real") == 0) return fa_format_real(input);
     if (strcmp(name, "concat_bytes") == 0) return fa_concat_bytes(input);
+    if (strcmp(name, "add_int") == 0) return fa_add_int(input);
     if (strcmp(name, "sub_int") == 0) return fa_sub_int(input);
     if (strcmp(name, "eq_int") == 0) return fa_eq_int(input);
     if (strcmp(name, "not_empty") == 0) return fa_not_empty(input);
@@ -390,6 +441,19 @@ FaValue *fa_filter(FaValue *input, FaValue *(*pred)(FaValue *)) {
     return out;
 }
 
+FaValue *fa_repeat(FaValue *initial, FaValue *count_value, FaValue *(*step)(FaValue *)) {
+    int64_t count = fa_expect_int(count_value, "repeat count");
+    if (count < 0) {
+        fputs("flowarrow runtime: repeat count cannot be negative\n", stderr);
+        exit(65);
+    }
+    FaValue *state = initial;
+    for (int64_t i = 0; i < count; i++) {
+        state = step(state);
+    }
+    return state;
+}
+
 FaValue *fa_reduce(FaValue *input, const char *op, FaValue *identity) {
     FaValue *seq = fa_expect_seq(input, "reduce");
     if (seq->count == 0) {
@@ -404,6 +468,13 @@ FaValue *fa_reduce(FaValue *input, const char *op, FaValue *identity) {
             total += fa_expect_real(seq->items[i], "reduce add");
         }
         return fa_real(total);
+    }
+    if (strcmp(op, "add_int") == 0) {
+        int64_t total = fa_expect_int(identity, "reduce add_int identity");
+        for (size_t i = 0; i < seq->count; i++) {
+            total = fa_checked_add_int(total, fa_expect_int(seq->items[i], "reduce add_int"), "reduce add_int");
+        }
+        return fa_int(total);
     }
     fprintf(stderr, "flowarrow runtime: unsupported reduce op `%s`\n", op);
     exit(65);

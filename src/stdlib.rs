@@ -52,10 +52,17 @@ pub const SYMBOLS: &[StdSymbol] = &[
     unsupported_io_node("std.io", "write_stderr", "Bytes", "Int"),
     node("std.real", "parse_real", "Bytes", "Real"),
     node("std.real", "format_real", "Real", "Bytes"),
-    unsupported_node("std.int", "parse_int", "Bytes", "Int"),
+    node("std.int", "parse_int", "Bytes", "Int"),
     node("std.int", "format_int", "Int", "Bytes"),
     reduce_node("std.math", "add", "(Real,Real)", "Real"),
-    unsupported_node("std.math", "add_int", "(Int,Int)", "Int"),
+    reducible_node(
+        "std.math",
+        "add_int",
+        "(Int,Int)",
+        "Int",
+        "(Int,Int)",
+        "Int",
+    ),
     node("std.math", "sub_int", "(Int,Int)", "Int"),
     node("std.math", "eq_int", "(Int,Int)", "Bool"),
     node("std.predicates", "not_empty", "Bytes", "Bool"),
@@ -202,6 +209,7 @@ pub fn direct_builtin(name: &str) -> Option<&'static StdSymbol> {
 pub fn function_pointer(name: &str) -> Option<&'static str> {
     match name {
         "parse_real" => Some("@fa_parse_real"),
+        "parse_int" => Some("@fa_parse_int"),
         "not_empty" => Some("@fa_not_empty"),
         _ => None,
     }

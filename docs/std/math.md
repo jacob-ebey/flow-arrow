@@ -7,10 +7,10 @@ resolution.
 ## Nodes
 
 ```text
-add     : (Real, Real) -> Real
-add_int : (Int, Int)   -> Int
-sub_int : (Int, Int)   -> Int
-eq_int  : (Int, Int)   -> Bool
+add          : (Real, Real) -> Real
+add_int      : (Int, Int)   -> Int
+sub_int      : (Int, Int)   -> Int
+eq_int       : (Int, Int)   -> Bool
 ```
 
 ## Semantics
@@ -30,8 +30,8 @@ Adds two `Int` values.
 - Associative.
 - Identity: `0`.
 - Suitable for `reduce add_int(identity: 0)`.
-- Overflow behavior is target-defined until the integer model is
-  finalized; portable programs should avoid overflow.
+- Overflow is a boundary/data validation failure reported by the host
+  runtime.
 
 ### `sub_int`
 

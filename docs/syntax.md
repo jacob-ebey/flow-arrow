@@ -294,7 +294,6 @@ combinator     ::= map_comb
                  | scan_comb
                  | repeat_comb
                  | select_comb
-                 | stencil_comb
                  | grid_comb
                  | range_comb
                  | filter_comb

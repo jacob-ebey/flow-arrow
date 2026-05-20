@@ -191,6 +191,17 @@ impl Parser {
                 self.bump();
                 Ok(Stage::Filter(self.expect_ident()?))
             }
+            Some("repeat") => {
+                self.bump();
+                self.expect(Token::Less)?;
+                let count = match self.peek().clone() {
+                    Token::Ident(_) | Token::Int(_) => self.parse_endpoint()?,
+                    other => return Err(format!("expected repeat count, found {other:?}")),
+                };
+                self.expect(Token::Greater)?;
+                let node = self.expect_ident()?;
+                Ok(Stage::Repeat { count, node })
+            }
             Some("reduce") => {
                 self.bump();
                 let op = self.expect_ident()?;
