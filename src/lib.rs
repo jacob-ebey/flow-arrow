@@ -7,7 +7,6 @@ mod codegen;
 mod lexer;
 mod mermaid;
 mod parser;
-mod runtime;
 mod stdlib;
 mod typecheck;
 
@@ -37,6 +36,7 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
     let module = parser::parse(&source)?;
     typecheck::check_module(&module)?;
     let llvm = codegen::emit_module(&module)?;
+    let runtime_c = codegen::emit_runtime_c(&module)?;
 
     if let Some(out) = emit_llvm {
         fs::write(out, &llvm)
@@ -52,7 +52,7 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
     let runtime_path = cache_dir.join("runtime.c");
     let hash_path = cache_dir.join("build.hash");
     let executable = build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX));
-    let build_hash = format!("{:016x}", build_hash(&source));
+    let build_hash = format!("{:016x}", build_hash(&source, &runtime_c));
 
     if executable.exists()
         && fs::read_to_string(&hash_path)
@@ -67,11 +67,11 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
 
     fs::write(&llvm_path, llvm)
         .map_err(|error| format!("failed to write `{}`: {error}", llvm_path.display()))?;
-    fs::write(&runtime_path, runtime::C_SOURCE)
+    fs::write(&runtime_path, runtime_c)
         .map_err(|error| format!("failed to write `{}`: {error}", runtime_path.display()))?;
 
     let output = Command::new("clang")
-        .arg("-O0")
+        .arg("-Oz")
         .arg(&llvm_path)
         .arg(&runtime_path)
         .arg("-o")
@@ -144,7 +144,7 @@ fn host_target() -> String {
     format!("{arch}-{os}")
 }
 
-fn build_hash(source: &str) -> u64 {
+fn build_hash(source: &str, runtime_c: &str) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
 
@@ -153,7 +153,7 @@ fn build_hash(source: &str) -> u64 {
         .as_bytes()
         .iter()
         .chain(source.as_bytes())
-        .chain(runtime::C_SOURCE.as_bytes())
+        .chain(runtime_c.as_bytes())
     {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(FNV_PRIME);
@@ -190,9 +190,10 @@ mod tests {
         let source = include_str!("../examples/99-bottles/main.flow");
         let module = parser::parse(source).expect("parse");
         let llvm = codegen::emit_module(&module).expect("llvm");
-        assert!(llvm.contains("define ptr @flow_node_verse_for"));
-        assert!(llvm.contains("call ptr @fa_map"));
-        assert!(llvm.contains("call ptr @fa_reduce"));
+        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
+        assert!(runtime_c.contains("static FaValue flow_node_verse_for"));
+        assert!(runtime_c.contains("fa_map("));
+        assert!(runtime_c.contains("fa_reduce("));
         assert!(llvm.contains("define i32 @main"));
     }
 
@@ -277,8 +278,8 @@ mod tests {
         "#;
         let module = parser::parse(source).expect("parse");
         typecheck::check_module(&module).expect("typecheck");
-        let llvm = codegen::emit_module(&module).expect("llvm");
-        assert!(llvm.contains("sub\\00"));
+        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
+        assert!(runtime_c.contains("fa_node_sub"));
     }
 
     #[test]
@@ -302,8 +303,8 @@ mod tests {
         "#;
         let module = parser::parse(source).expect("parse");
         typecheck::check_module(&module).expect("typecheck");
-        let llvm = codegen::emit_module(&module).expect("llvm");
-        assert!(llvm.contains("add\\00"));
+        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
+        assert!(runtime_c.contains("fa_node_add"));
     }
 
     #[test]
@@ -505,9 +506,9 @@ mod tests {
         "#;
         let module = parser::parse(source).expect("parse");
         typecheck::check_module(&module).expect("typecheck");
-        let llvm = codegen::emit_module(&module).expect("llvm");
-        assert!(llvm.contains("call ptr @fa_map"));
-        assert!(llvm.contains("add\\00"));
+        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
+        assert!(runtime_c.contains("fa_map("));
+        assert!(runtime_c.contains("FA_REDUCE_ADD"));
     }
 
     #[test]
@@ -539,10 +540,10 @@ mod tests {
     fn llvm_backend_runs_add_numbers_from_stdin() {
         let source = include_str!("../examples/add-numbers-from-stdin/main.flow");
         let module = parser::parse(source).expect("parse");
-        let llvm = codegen::emit_module(&module).expect("llvm");
-        assert!(llvm.contains("call ptr @fa_filter"));
-        assert!(llvm.contains("call ptr @fa_map"));
-        assert!(llvm.contains("call ptr @fa_reduce"));
+        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
+        assert!(runtime_c.contains("fa_filter("));
+        assert!(runtime_c.contains("fa_map("));
+        assert!(runtime_c.contains("fa_reduce("));
 
         let build = build_file(Path::new("examples/add-numbers-from-stdin/main.flow"), None)
             .expect("build");

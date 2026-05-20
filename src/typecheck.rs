@@ -464,7 +464,7 @@ impl<'a> Checker<'a> {
                 callable.name
             ));
         }
-        if as_function && !self.is_function_pointer_compatible(node) {
+        if as_function && !self.supports_higher_order_call(node) {
             return Err(format!("`{name}` cannot be used as a map/filter function"));
         }
         if !as_function && node.runtime == RuntimeSupport::ReduceOnly {
@@ -614,8 +614,8 @@ impl<'a> Checker<'a> {
         })
     }
 
-    fn is_function_pointer_compatible(&self, node: &CallableInfo) -> bool {
-        !node.is_stdlib || stdlib::function_pointer(&node.runtime_name).is_some()
+    fn supports_higher_order_call(&self, node: &CallableInfo) -> bool {
+        !node.is_stdlib || stdlib::supports_higher_order_call(&node.runtime_name)
     }
 
     fn expect_type(&self, label: &str, actual: &Type, expected: &Type) -> Result<(), String> {

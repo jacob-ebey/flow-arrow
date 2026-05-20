@@ -93,24 +93,11 @@ pub fn find_export(module: &str, name: &str) -> Option<&'static StdSymbol> {
         .find(|symbol| symbol.module == module && symbol.name == name)
 }
 
-pub fn direct_builtin(name: &str) -> Option<&'static StdSymbol> {
-    SYMBOLS.iter().find(|symbol| {
-        symbol.name == name
-            && symbol.kind == SymbolKind::Node
-            && symbol.runtime == RuntimeSupport::DirectBuiltin
-    })
-}
-
-pub fn function_pointer(name: &str) -> Option<&'static str> {
-    match name {
-        "parse_real" => Some("@fa_parse_real"),
-        "parse_int" => Some("@fa_parse_int"),
-        "not_empty" => Some("@fa_not_empty"),
-        "format_int" => Some("@fa_format_int"),
-        "format_real" => Some("@fa_format_real"),
-        "not" => Some("@fa_not"),
-        _ => None,
-    }
+pub fn supports_higher_order_call(name: &str) -> bool {
+    matches!(
+        name,
+        "parse_real" | "parse_int" | "not_empty" | "format_int" | "format_real" | "not"
+    )
 }
 
 const fn ty(module: &'static str, name: &'static str) -> StdSymbol {

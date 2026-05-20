@@ -1,43 +1,83 @@
 use crate::ast::*;
 use crate::stdlib::{self, RuntimeSupport};
+mod runtime;
 use std::collections::{BTreeSet, HashMap};
 
 pub fn emit_module(module: &Module) -> Result<String, String> {
-    let mut generator = Codegen {
-        out: String::new(),
-        temp: 0,
-        string_id: 0,
-        strings: Vec::new(),
-        callables: HashMap::new(),
-        stdlib_names: HashMap::new(),
-    };
-    generator.collect_imports(module)?;
-    generator.collect_callables(module)?;
-    generator.emit_prelude();
-    for decl in &module.declarations {
-        match decl {
-            Decl::Node(callable) => generator.emit_callable(callable, false)?,
-            Decl::Program(callable) => generator.emit_callable(callable, true)?,
-            Decl::Import(_) => {}
-        }
-    }
-    generator.emit_entrypoint();
-    generator.emit_strings();
-    Ok(generator.out)
+    Codegen::new(module)?.emit_llvm_entry()
+}
+
+pub fn emit_runtime_c(module: &Module) -> Result<String, String> {
+    Codegen::new(module)?.emit_runtime_c()
 }
 
 struct Codegen<'a> {
-    out: String,
+    module: &'a Module,
     temp: usize,
-    string_id: usize,
-    strings: Vec<(String, Vec<u8>)>,
     callables: HashMap<String, &'a Callable>,
     stdlib_names: HashMap<String, String>,
 }
 
 impl<'a> Codegen<'a> {
-    fn collect_imports(&mut self, module: &Module) -> Result<(), String> {
-        for decl in &module.declarations {
+    fn new(module: &'a Module) -> Result<Self, String> {
+        let mut generator = Self {
+            module,
+            temp: 0,
+            callables: HashMap::new(),
+            stdlib_names: HashMap::new(),
+        };
+        generator.collect_imports()?;
+        generator.collect_callables()?;
+        Ok(generator)
+    }
+
+    fn emit_llvm_entry(&self) -> Result<String, String> {
+        Ok("declare i32 @flow_unboxed_main(i32, ptr)\n\n\
+define i32 @main(i32 %argc, ptr %argv) {\n\
+  %exit = call i32 @flow_unboxed_main(i32 %argc, ptr %argv)\n\
+  ret i32 %exit\n\
+}\n"
+        .to_string())
+    }
+
+    fn emit_runtime_c(mut self) -> Result<String, String> {
+        let mut out = String::new();
+        runtime::emit_preamble(&mut out);
+        self.emit_builtin_forwarders(&mut out);
+
+        let names = self
+            .callables
+            .keys()
+            .map(|name| name.as_str())
+            .collect::<BTreeSet<_>>();
+        for name in &names {
+            out.push_str(&format!(
+                "static FaValue {}(FaValue input);\n",
+                user_fn_name(name)
+            ));
+        }
+        out.push('\n');
+
+        for decl in &self.module.declarations {
+            match decl {
+                Decl::Node(callable) => self.emit_callable(&mut out, callable, false)?,
+                Decl::Program(callable) => self.emit_callable(&mut out, callable, true)?,
+                Decl::Import(_) => {}
+            }
+        }
+
+        out.push_str(
+            "int flow_unboxed_main(int argc, char **argv) {\n\
+  FaValue args = fa_args(argc, argv);\n\
+  FaValue result = flow_program_main(args);\n\
+  return fa_value_to_exit_code(result);\n\
+}\n",
+        );
+        Ok(out)
+    }
+
+    fn collect_imports(&mut self) -> Result<(), String> {
+        for decl in &self.module.declarations {
             let Decl::Import(import) = decl else {
                 continue;
             };
@@ -75,8 +115,8 @@ impl<'a> Codegen<'a> {
         Ok(())
     }
 
-    fn collect_callables(&mut self, module: &'a Module) -> Result<(), String> {
-        for decl in &module.declarations {
+    fn collect_callables(&mut self) -> Result<(), String> {
+        for decl in &self.module.declarations {
             match decl {
                 Decl::Node(callable) | Decl::Program(callable) => {
                     if self
@@ -96,67 +136,98 @@ impl<'a> Codegen<'a> {
         Ok(())
     }
 
-    fn emit_prelude(&mut self) {
-        self.line("declare ptr @fa_unit()");
-        self.line("declare ptr @fa_int(i64)");
-        self.line("declare ptr @fa_real(double)");
-        self.line("declare ptr @fa_bool(i1)");
-        self.line("declare ptr @fa_cstr(ptr)");
-        self.line("declare ptr @fa_args(i32, ptr)");
-        self.line("declare ptr @fa_seq_new(i64)");
-        self.line("declare void @fa_seq_set(ptr, i64, ptr)");
-        self.line("declare ptr @fa_seq_get(ptr, i64)");
-        self.line("declare ptr @fa_builtin(ptr, ptr)");
-        self.line("declare ptr @fa_map(ptr, ptr)");
-        self.line("declare ptr @fa_fault_map(ptr, ptr)");
-        self.line("declare ptr @fa_filter(ptr, ptr)");
-        self.line("declare ptr @fa_repeat(ptr, ptr, ptr)");
-        self.line("declare ptr @fa_reduce(ptr, ptr, ptr)");
-        self.line("declare ptr @fa_parse_real(ptr)");
-        self.line("declare ptr @fa_parse_int(ptr)");
-        self.line("declare ptr @fa_not_empty(ptr)");
-        self.line("declare i32 @fa_value_to_exit_code(ptr)");
-        self.line("");
+    fn emit_builtin_forwarders(&self, out: &mut String) {
+        for name in [
+            "argv",
+            "read_stdin",
+            "split_lines",
+            "range_step",
+            "format_int",
+            "parse_int",
+            "parse_real",
+            "format_real",
+            "concat_bytes",
+            "join_bytes",
+            "add",
+            "sub",
+            "mul",
+            "div",
+            "rem",
+            "eq",
+            "lt",
+            "gt",
+            "le",
+            "ge",
+            "max",
+            "not_empty",
+            "is_empty",
+            "has_faults",
+            "format_faults",
+            "write_stdout",
+            "write_stderr",
+            "select",
+            "and",
+            "or",
+            "xor",
+            "not",
+            "all",
+            "any",
+        ] {
+            out.push_str(&format!(
+                "#define {} fa_builtin_{}\n",
+                builtin_fn_name(name),
+                name
+            ));
+        }
+        out.push('\n');
     }
 
-    fn emit_callable(&mut self, callable: &Callable, is_program: bool) -> Result<(), String> {
+    fn emit_callable(
+        &mut self,
+        out: &mut String,
+        callable: &Callable,
+        is_program: bool,
+    ) -> Result<(), String> {
+        self.temp = 0;
         let symbol = if is_program {
             "flow_program_main".to_string()
         } else {
-            format!("flow_node_{}", sanitize_symbol(&callable.name))
+            user_fn_name(&callable.name)
         };
-        self.line(&format!("define ptr @{symbol}(ptr %__input) {{"));
+        out.push_str(&format!("static FaValue {symbol}(FaValue input) {{\n"));
         let mut env = HashMap::new();
         match callable.inputs.as_slice() {
             [] => {
-                let tmp = self.next_temp();
-                self.line(&format!("  {tmp} = call ptr @fa_unit()"));
+                out.push_str("  (void)input;\n");
             }
             [port] => {
-                env.insert(port.name.clone(), "%__input".to_string());
+                let var = c_ident(&port.name);
+                out.push_str(&format!("  FaValue {var} = input;\n"));
+                env.insert(port.name.clone(), var);
             }
             ports => {
+                out.push_str("  FaValue __inputs = fa_expect_seq(input, \"node input\");\n");
                 for (index, port) in ports.iter().enumerate() {
-                    let tmp = self.next_temp();
-                    self.line(&format!(
-                        "  {tmp} = call ptr @fa_seq_get(ptr %__input, i64 {index})"
+                    let var = c_ident(&port.name);
+                    out.push_str(&format!(
+                        "  FaValue {var} = fa_seq_get(__inputs, {index});\n"
                     ));
-                    env.insert(port.name.clone(), tmp);
+                    env.insert(port.name.clone(), var);
                 }
             }
         }
         for chain in &callable.chains {
-            self.emit_chain(chain, &mut env)?;
+            self.emit_chain(out, chain, &mut env)?;
         }
-        let result = self.emit_outputs(callable, &env)?;
-        self.line(&format!("  ret ptr {result}"));
-        self.line("}");
-        self.line("");
+        let result = self.emit_outputs(out, callable, &env)?;
+        out.push_str(&format!("  return {result};\n"));
+        out.push_str("}\n\n");
         Ok(())
     }
 
     fn emit_outputs(
         &mut self,
+        out: &mut String,
         callable: &Callable,
         env: &HashMap<String, String>,
     ) -> Result<String, String> {
@@ -168,17 +239,15 @@ impl<'a> Codegen<'a> {
                 .ok_or_else(|| format!("output `{}` is never bound", output.name)),
             outputs => {
                 let seq = self.next_temp();
-                self.line(&format!(
-                    "  {seq} = call ptr @fa_seq_new(i64 {})",
+                out.push_str(&format!(
+                    "  FaValue {seq} = fa_seq_new({});\n",
                     outputs.len()
                 ));
                 for (index, output) in outputs.iter().enumerate() {
                     let value = env
                         .get(&output.name)
                         .ok_or_else(|| format!("output `{}` is never bound", output.name))?;
-                    self.line(&format!(
-                        "  call void @fa_seq_set(ptr {seq}, i64 {index}, ptr {value})"
-                    ));
+                    out.push_str(&format!("  fa_seq_set(&{seq}, {index}, {value});\n"));
                 }
                 Ok(seq)
             }
@@ -187,83 +256,76 @@ impl<'a> Codegen<'a> {
 
     fn emit_chain(
         &mut self,
+        out: &mut String,
         chain: &Chain,
         env: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        let mut value = self.emit_endpoint_value(&chain.source, env)?;
+        let mut value = self.emit_endpoint_value(out, &chain.source, env)?;
         for (index, stage) in chain.stages.iter().enumerate() {
             let is_last = index + 1 == chain.stages.len();
             match stage {
                 Stage::Endpoint(Endpoint::Name(name)) if is_last => {
                     let canonical_name = self.canonical_name(name);
-                    if self.callables.contains_key(name)
-                        || stdlib::direct_builtin(&canonical_name).is_some()
-                    {
-                        value = self.emit_call(name, value)?;
+                    if self.callables.contains_key(name) || is_builtin(&canonical_name) {
+                        value = self.emit_call(out, name, &value);
                     } else if env.insert(name.clone(), value.clone()).is_some() {
                         return Err(format!("value `{name}` is bound more than once"));
                     }
                 }
                 Stage::Endpoint(endpoint) => match endpoint {
-                    Endpoint::Name(name) => value = self.emit_call(name, value)?,
+                    Endpoint::Name(name) => value = self.emit_call(out, name, &value),
                     _ => return Err("non-name endpoints may only appear as values".to_string()),
                 },
                 Stage::Map(node) => {
-                    let function = self.function_pointer_for(node)?;
                     let tmp = self.next_temp();
-                    self.line(&format!(
-                        "  {tmp} = call ptr @fa_map(ptr {value}, ptr {function})"
-                    ));
+                    let function = self.function_for(node)?;
+                    out.push_str(&format!("  FaValue {tmp} = fa_map({value}, {function});\n"));
                     value = tmp;
                 }
                 Stage::FaultMap { node, ok, fault } => {
                     if !is_last {
                         return Err("`fault map` must be the final stage in a chain".to_string());
                     }
-                    let function = self.function_pointer_for(node)?;
-                    let pair = self.next_temp();
-                    self.line(&format!(
-                        "  {pair} = call ptr @fa_fault_map(ptr {value}, ptr {function})"
+                    let function = self.function_for(node)?;
+                    let tmp = self.next_temp();
+                    out.push_str(&format!(
+                        "  FaFaultMapResult {tmp} = fa_fault_map({value}, {function});\n"
                     ));
-                    let ok_value = self.next_temp();
-                    self.line(&format!(
-                        "  {ok_value} = call ptr @fa_seq_get(ptr {pair}, i64 0)"
-                    ));
-                    let fault_value = self.next_temp();
-                    self.line(&format!(
-                        "  {fault_value} = call ptr @fa_seq_get(ptr {pair}, i64 1)"
-                    ));
-                    if env.insert(ok.clone(), ok_value).is_some() {
+                    if env.insert(ok.clone(), format!("{tmp}.ok")).is_some() {
                         return Err(format!("value `{ok}` is bound more than once"));
                     }
-                    if env.insert(fault.clone(), fault_value).is_some() {
+                    if env.insert(fault.clone(), format!("{tmp}.faults")).is_some() {
                         return Err(format!("value `{fault}` is bound more than once"));
                     }
                 }
                 Stage::Filter(predicate) => {
-                    let function = self.function_pointer_for(predicate)?;
                     let tmp = self.next_temp();
-                    self.line(&format!(
-                        "  {tmp} = call ptr @fa_filter(ptr {value}, ptr {function})"
+                    let function = self.function_for(predicate)?;
+                    out.push_str(&format!(
+                        "  FaValue {tmp} = fa_filter({value}, {function});\n"
                     ));
                     value = tmp;
                 }
                 Stage::Repeat { count, node } => {
-                    let count_value = self.emit_endpoint_value(count, env)?;
-                    let function = self.function_pointer_for(node)?;
+                    let count_value = self.emit_endpoint_value(out, count, env)?;
                     let tmp = self.next_temp();
-                    self.line(&format!(
-                        "  {tmp} = call ptr @fa_repeat(ptr {value}, ptr {count_value}, ptr {function})"
+                    let function = self.function_for(node)?;
+                    out.push_str(&format!(
+                        "  FaValue {tmp} = fa_repeat({value}, {count_value}, {function});\n"
                     ));
                     value = tmp;
                 }
                 Stage::Reduce { op, identity } => {
-                    let canonical_op = self.canonical_name(op);
-                    let op_name = self.emit_string_ptr(&canonical_op);
-                    let identity_value = self.emit_endpoint_value(identity, env)?;
+                    let identity_value = self.emit_endpoint_value(out, identity, env)?;
                     let tmp = self.next_temp();
-                    self.line(&format!(
-                        "  {tmp} = call ptr @fa_reduce(ptr {value}, ptr {op_name}, ptr {identity_value})"
+                    let op_name = self.canonical_name(op);
+                    let reducer = match op_name.as_str() {
+                        "add" => "FA_REDUCE_ADD",
+                        "concat_bytes" => "FA_REDUCE_CONCAT_BYTES",
+                        other => return Err(format!("unsupported reduce op `{other}`")),
+                    };
+                    out.push_str(&format!(
+                        "  FaValue {tmp} = fa_reduce({value}, {reducer}, {identity_value});\n"
                     ));
                     value = tmp;
                 }
@@ -272,26 +334,20 @@ impl<'a> Codegen<'a> {
         Ok(())
     }
 
-    fn emit_call(&mut self, name: &str, input: String) -> Result<String, String> {
-        if self.callables.contains_key(name) {
-            let tmp = self.next_temp();
-            self.line(&format!(
-                "  {tmp} = call ptr @flow_node_{}(ptr {input})",
-                sanitize_symbol(name)
-            ));
-            return Ok(tmp);
-        }
-        let canonical_name = self.canonical_name(name);
-        let name_ptr = self.emit_string_ptr(&canonical_name);
+    fn emit_call(&mut self, out: &mut String, name: &str, input: &str) -> String {
         let tmp = self.next_temp();
-        self.line(&format!(
-            "  {tmp} = call ptr @fa_builtin(ptr {name_ptr}, ptr {input})"
-        ));
-        Ok(tmp)
+        let function = if self.callables.contains_key(name) {
+            user_fn_name(name)
+        } else {
+            builtin_fn_name(&self.canonical_name(name))
+        };
+        out.push_str(&format!("  FaValue {tmp} = {function}({input});\n"));
+        tmp
     }
 
     fn emit_endpoint_value(
         &mut self,
+        out: &mut String,
         endpoint: &Endpoint,
         env: &HashMap<String, String>,
     ) -> Result<String, String> {
@@ -302,117 +358,56 @@ impl<'a> Codegen<'a> {
                 .ok_or_else(|| format!("unknown value `{name}`")),
             Endpoint::Int(value) => {
                 let tmp = self.next_temp();
-                self.line(&format!("  {tmp} = call ptr @fa_int(i64 {value})"));
+                out.push_str(&format!("  FaValue {tmp} = fa_int({value});\n"));
                 Ok(tmp)
             }
             Endpoint::Real(value) => {
                 let tmp = self.next_temp();
-                self.line(&format!(
-                    "  {tmp} = call ptr @fa_real(double {:.17e})",
-                    value
-                ));
+                out.push_str(&format!("  FaValue {tmp} = fa_real({value:.17e});\n"));
                 Ok(tmp)
             }
             Endpoint::Bool(value) => {
                 let tmp = self.next_temp();
-                let bit = if *value { 1 } else { 0 };
-                self.line(&format!("  {tmp} = call ptr @fa_bool(i1 {bit})"));
+                let bit = if *value { "true" } else { "false" };
+                out.push_str(&format!("  FaValue {tmp} = fa_bool({bit});\n"));
                 Ok(tmp)
             }
             Endpoint::String(value) => {
-                let ptr = self.emit_string_ptr(value);
                 let tmp = self.next_temp();
-                self.line(&format!("  {tmp} = call ptr @fa_cstr(ptr {ptr})"));
+                out.push_str(&format!(
+                    "  FaValue {tmp} = fa_bytes_literal(\"{}\", {});\n",
+                    c_string(value),
+                    value.len()
+                ));
                 Ok(tmp)
             }
             Endpoint::Unit => {
                 let tmp = self.next_temp();
-                self.line(&format!("  {tmp} = call ptr @fa_unit()"));
+                out.push_str(&format!("  FaValue {tmp} = fa_unit();\n"));
                 Ok(tmp)
             }
             Endpoint::Tuple(items) | Endpoint::Seq(items) => {
                 let seq = self.next_temp();
-                self.line(&format!(
-                    "  {seq} = call ptr @fa_seq_new(i64 {})",
-                    items.len()
-                ));
+                out.push_str(&format!("  FaValue {seq} = fa_seq_new({});\n", items.len()));
                 for (index, item) in items.iter().enumerate() {
-                    let value = self.emit_endpoint_value(item, env)?;
-                    self.line(&format!(
-                        "  call void @fa_seq_set(ptr {seq}, i64 {index}, ptr {value})"
-                    ));
+                    let value = self.emit_endpoint_value(out, item, env)?;
+                    out.push_str(&format!("  fa_seq_set(&{seq}, {index}, {value});\n"));
                 }
                 Ok(seq)
             }
         }
     }
 
-    fn emit_entrypoint(&mut self) {
-        self.line("define i32 @main(i32 %argc, ptr %argv) {");
-        let args = self.next_temp();
-        self.line(&format!(
-            "  {args} = call ptr @fa_args(i32 %argc, ptr %argv)"
-        ));
-        let value = self.next_temp();
-        self.line(&format!(
-            "  {value} = call ptr @flow_program_main(ptr {args})"
-        ));
-        let exit = self.next_temp();
-        self.line(&format!(
-            "  {exit} = call i32 @fa_value_to_exit_code(ptr {value})"
-        ));
-        self.line(&format!("  ret i32 {exit}"));
-        self.line("}");
-        self.line("");
-    }
-
-    fn function_pointer_for(&self, name: &str) -> Result<String, String> {
+    fn function_for(&self, name: &str) -> Result<String, String> {
         if self.callables.contains_key(name) {
-            return Ok(format!("@flow_node_{}", sanitize_symbol(name)));
+            return Ok(user_fn_name(name));
         }
         let canonical_name = self.canonical_name(name);
-        stdlib::function_pointer(&canonical_name)
-            .map(ToString::to_string)
-            .ok_or_else(|| format!("`{name}` cannot be used as a map/filter function yet"))
-    }
-
-    fn emit_string_ptr(&mut self, value: &str) -> String {
-        let global = format!("@.flow.str.{}", self.string_id);
-        self.string_id += 1;
-        let mut bytes = value.as_bytes().to_vec();
-        bytes.push(0);
-        let len = bytes.len();
-        self.strings.push((global.clone(), bytes));
-        let tmp = self.next_temp();
-        self.line(&format!(
-            "  {tmp} = getelementptr inbounds [{len} x i8], ptr {global}, i64 0, i64 0"
-        ));
-        tmp
-    }
-
-    fn emit_strings(&mut self) {
-        let mut seen = BTreeSet::new();
-        let strings = std::mem::take(&mut self.strings);
-        for (global, bytes) in strings {
-            if seen.insert(global.clone()) {
-                self.line(&format!(
-                    "{global} = private unnamed_addr constant [{} x i8] c\"{}\"",
-                    bytes.len(),
-                    llvm_bytes(&bytes)
-                ));
-            }
+        if is_builtin(&canonical_name) {
+            Ok(builtin_fn_name(&canonical_name))
+        } else {
+            Err(format!("`{name}` cannot be used as a function"))
         }
-    }
-
-    fn next_temp(&mut self) -> String {
-        let temp = format!("%t{}", self.temp);
-        self.temp += 1;
-        temp
-    }
-
-    fn line(&mut self, line: &str) {
-        self.out.push_str(line);
-        self.out.push('\n');
     }
 
     fn canonical_name(&self, name: &str) -> String {
@@ -421,6 +416,68 @@ impl<'a> Codegen<'a> {
             .cloned()
             .unwrap_or_else(|| name.to_string())
     }
+
+    fn next_temp(&mut self) -> String {
+        let temp = format!("t{}", self.temp);
+        self.temp += 1;
+        temp
+    }
+}
+
+fn is_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "argv"
+            | "read_stdin"
+            | "split_lines"
+            | "range_step"
+            | "format_int"
+            | "parse_int"
+            | "parse_real"
+            | "format_real"
+            | "concat_bytes"
+            | "join_bytes"
+            | "add"
+            | "sub"
+            | "mul"
+            | "div"
+            | "rem"
+            | "eq"
+            | "lt"
+            | "gt"
+            | "le"
+            | "ge"
+            | "max"
+            | "not_empty"
+            | "is_empty"
+            | "has_faults"
+            | "format_faults"
+            | "write_stdout"
+            | "write_stderr"
+            | "select"
+            | "and"
+            | "or"
+            | "xor"
+            | "not"
+            | "all"
+            | "any"
+    )
+}
+
+fn user_fn_name(name: &str) -> String {
+    if name == "main" {
+        "flow_program_main".to_string()
+    } else {
+        format!("flow_node_{}", sanitize_symbol(name))
+    }
+}
+
+fn builtin_fn_name(name: &str) -> String {
+    format!("fa_node_{}", sanitize_symbol(name))
+}
+
+fn c_ident(name: &str) -> String {
+    format!("v_{}", sanitize_symbol(name))
 }
 
 fn sanitize_symbol(name: &str) -> String {
@@ -435,15 +492,87 @@ fn sanitize_symbol(name: &str) -> String {
         .collect()
 }
 
-fn llvm_bytes(bytes: &[u8]) -> String {
+fn c_string(value: &str) -> String {
     let mut out = String::new();
-    for &byte in bytes {
+    for byte in value.bytes() {
         match byte {
-            b'\\' => out.push_str("\\5C"),
-            b'"' => out.push_str("\\22"),
+            b'\\' => out.push_str("\\\\"),
+            b'"' => out.push_str("\\\""),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
             0x20..=0x7e => out.push(byte as char),
-            _ => out.push_str(&format!("\\{byte:02X}")),
+            _ => out.push_str(&format!("\\x{byte:02x}")),
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{parser, typecheck};
+
+    fn checked_module(source: &str) -> Module {
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+        module
+    }
+
+    #[test]
+    fn llvm_entry_is_only_a_thin_shim_to_unboxed_c_runtime() {
+        let module = checked_module(
+            r#"
+                import std.cli { Args }
+
+                program main(args: Args) -> exit_code: Int {
+                    0 -> exit_code
+                }
+            "#,
+        );
+
+        let llvm = emit_module(&module).expect("llvm");
+
+        assert_eq!(
+            llvm,
+            "declare i32 @flow_unboxed_main(i32, ptr)\n\n\
+define i32 @main(i32 %argc, ptr %argv) {\n\
+  %exit = call i32 @flow_unboxed_main(i32 %argc, ptr %argv)\n\
+  ret i32 %exit\n\
+}\n"
+        );
+    }
+
+    #[test]
+    fn runtime_emits_unboxed_values_and_direct_builtin_calls() {
+        let module = checked_module(
+            r#"
+                import std.cli { Args }
+                import std.bytes { split_lines }
+                import std.predicates { not_empty }
+                import std.real { parse_real, format_real }
+                import std.math { add }
+                import std.io { read_stdin, write_stdout }
+
+                program main(args: Args) -> exit_code: Faultable[Int] {
+                    () -> read_stdin -> split_lines -> filter not_empty -> map parse_real -> reduce add(identity: 0.0) -> total
+                    total -> format_real -> write_stdout -> exit_code
+                }
+            "#,
+        );
+
+        let runtime_c = emit_runtime_c(&module).expect("runtime c");
+
+        assert!(runtime_c.contains("typedef struct FaValue FaValue;"));
+        assert!(runtime_c.contains("FaValue *items;"));
+        assert!(runtime_c.contains("static FaValue fa_builtin_parse_real(FaValue input)"));
+        assert!(runtime_c.contains("fa_filter("));
+        assert!(runtime_c.contains("fa_node_not_empty"));
+        assert!(runtime_c.contains("fa_map("));
+        assert!(runtime_c.contains("fa_node_parse_real"));
+        assert!(runtime_c.contains("fa_reduce("));
+        assert!(runtime_c.contains("FA_REDUCE_ADD"));
+        assert!(!runtime_c.contains("fa_builtin("));
+        assert!(!runtime_c.contains("FaValue **items"));
+    }
 }
