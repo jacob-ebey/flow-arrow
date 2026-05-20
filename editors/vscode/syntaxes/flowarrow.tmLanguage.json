@@ -1,0 +1,226 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "FlowArrow",
+  "scopeName": "source.flowarrow",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#forbidden-keywords"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#imports"
+    },
+    {
+      "include": "#combinators"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#booleans"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.flowarrow",
+          "match": "#.*$"
+        },
+        {
+          "name": "comment.block.flowarrow",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.flowarrow",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.flowarrow",
+          "match": "\\\\[\"\\\\ntr]"
+        },
+        {
+          "name": "invalid.illegal.escape.flowarrow",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "forbidden-keywords": {
+      "name": "invalid.illegal.keyword.flowarrow",
+      "match": "\\b(?:for|while|break|continue|return|throw|try|catch|await|spawn|join|lock|mutex|atomic|var|set|if|else|take_while|find_first)\\b|(?:\\+\\+|--|\\+=|-=|\\*=|/=|=)"
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "meta.declaration.node.flowarrow",
+          "match": "\\b(node|program)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.flowarrow"
+            },
+            "2": {
+              "name": "entity.name.function.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "meta.cell.flowarrow",
+          "match": "\\b(cell)\\s*(?=\\()",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.cell.flowarrow"
+            }
+          }
+        }
+      ]
+    },
+    "imports": {
+      "patterns": [
+        {
+          "name": "meta.import.flowarrow",
+          "match": "\\b(import)\\s+((?:[A-Za-z_][A-Za-z0-9_]*)(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.flowarrow"
+            },
+            "2": {
+              "name": "support.module.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "keyword.control.import.alias.flowarrow",
+          "match": "\\b(as)\\b"
+        },
+        {
+          "name": "support.module.std.flowarrow",
+          "match": "\\bstd(?:\\.[A-Za-z_][A-Za-z0-9_]*)*\\b"
+        }
+      ]
+    },
+    "combinators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.combinator.flowarrow",
+          "match": "\\b(?:map|reduce|scan|repeat|select|stencil2d|grid|range|range_between|range_step|filter|length)\\b"
+        },
+        {
+          "name": "keyword.other.identity.flowarrow",
+          "match": "\\bidentity\\b"
+        },
+        {
+          "name": "keyword.other.radius.flowarrow",
+          "match": "\\bradius\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "name": "keyword.other.reserved.flowarrow",
+      "match": "\\b(?:import|as|node|program|cell)\\b"
+    },
+    "booleans": {
+      "name": "constant.language.boolean.flowarrow",
+      "match": "\\b(?:true|false)\\b"
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.real.flowarrow",
+          "match": "(?<![A-Za-z0-9_])-?\\d+\\.\\d+(?:[eE]-?\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.flowarrow",
+          "match": "(?<![A-Za-z0-9_])-?\\d+\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.flowarrow",
+          "match": "\\b(?:Args|Bool|Bytes|Image|Int|Kernel|Matrix|Real|Seq|Vec)\\b"
+        },
+        {
+          "name": "meta.type.annotation.flowarrow",
+          "match": "(:)\\s*([A-Z][A-Za-z0-9_]*(?:\\.[A-Z][A-Za-z0-9_]*)?)",
+          "captures": {
+            "1": {
+              "name": "punctuation.separator.type.flowarrow"
+            },
+            "2": {
+              "name": "entity.name.type.flowarrow"
+            }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.flowarrow",
+          "match": "(-)(>)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.flowarrow"
+            },
+            "2": {
+              "name": "keyword.operator.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "keyword.operator.accessor.flowarrow",
+          "match": "\\."
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.definition.block.flowarrow",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.definition.group.flowarrow",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.definition.sequence.flowarrow",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.separator.comma.flowarrow",
+          "match": ","
+        },
+        {
+          "name": "punctuation.separator.type.flowarrow",
+          "match": ":"
+        }
+      ]
+    }
+  }
+}

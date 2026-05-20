@@ -1,0 +1,38 @@
+{
+  "name": "flowarrow-vscode",
+  "displayName": "FlowArrow",
+  "description": "Syntax highlighting and language configuration for FlowArrow source files.",
+  "version": "0.1.0",
+  "publisher": "flowarrow",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "flowarrow",
+        "aliases": [
+          "FlowArrow",
+          "flowarrow",
+          "flow"
+        ],
+        "extensions": [
+          ".flow",
+          ".flowarrow"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "flowarrow",
+        "scopeName": "source.flowarrow",
+        "path": "./syntaxes/flowarrow.tmLanguage.json"
+      }
+    ]
+  }
+}
