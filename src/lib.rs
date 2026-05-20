@@ -460,4 +460,188 @@ mod tests {
         );
         assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "89\n");
     }
+
+    #[test]
+    fn llvm_backend_runs_new_math_nodes() {
+        let root =
+            std::env::temp_dir().join(format!("flowarrow-new-math-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("temp dir");
+        let path = root.join("main.flow");
+        fs::write(
+            &path,
+            r#"
+                import std.cli { Args }
+                import std.math { mul, div, rem, lt, gt, le, ge, eq }
+
+                program main(args: Args) -> exit_code: Int {
+                    # mul: 3 * 4 = 12
+                    (3, 4) -> mul -> product
+                    (product, 12) -> eq -> mul_ok
+
+                    # div: 10 / 3 = 3 (truncating)
+                    (10, 3) -> div -> quotient
+                    (quotient, 3) -> eq -> div_ok
+
+                    # rem: 10 % 3 = 1
+                    (10, 3) -> rem -> remainder
+                    (remainder, 1) -> eq -> rem_ok
+
+                    # lt: 2 < 5 = true
+                    (2, 5) -> lt -> lt_ok
+
+                    # gt: 7 > 3 = true
+                    (7, 3) -> gt -> gt_ok
+
+                    # le: 4 <= 4 = true
+                    (4, 4) -> le -> le_ok
+
+                    # ge: 5 >= 3 = true
+                    (5, 3) -> ge -> ge_ok
+
+                    (mul_ok, div_ok, false) -> select -> s1
+                    (s1, rem_ok, false) -> select -> s2
+                    (s2, lt_ok, false) -> select -> s3
+                    (s3, gt_ok, false) -> select -> s4
+                    (s4, le_ok, false) -> select -> s5
+                    (s5, ge_ok, false) -> select -> all_ok
+                    (all_ok, 0, 1) -> select -> exit_code
+                }
+            "#,
+        )
+        .expect("write source");
+
+        let build = build_file(&path, None).expect("build");
+        let output = Command::new(&build.executable).output().expect("run");
+        assert!(
+            output.status.success(),
+            "new math nodes failed (exit {:?}): {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn llvm_backend_runs_predicate_logic_nodes() {
+        let root =
+            std::env::temp_dir().join(format!("flowarrow-predicates-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("temp dir");
+        let path = root.join("main.flow");
+        fs::write(
+            &path,
+            r#"
+                import std.cli { Args }
+                import std.predicates { and, or, not }
+
+                program main(args: Args) -> exit_code: Int {
+                    # and(true, true) = true
+                    (true, true) -> and -> and_tt
+                    # or(false, true) = true
+                    (false, true) -> or -> or_ft
+                    # not(false) = true
+                    false -> not -> not_false
+
+                    (and_tt, or_ft, false) -> select -> s1
+                    (s1, not_false, false) -> select -> all_ok
+                    (all_ok, 0, 1) -> select -> exit_code
+                }
+            "#,
+        )
+        .expect("write source");
+
+        let build = build_file(&path, None).expect("build");
+        let output = Command::new(&build.executable).output().expect("run");
+        assert!(
+            output.status.success(),
+            "predicate logic nodes failed (exit {:?}): {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn llvm_backend_runs_base_predicates() {
+        let root =
+            std::env::temp_dir().join(format!("flowarrow-base-predicates-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("temp dir");
+        let path = root.join("main.flow");
+        fs::write(
+            &path,
+            r#"
+                import std.cli { Args }
+                import std.predicates { is_empty, xor, not, all, any }
+
+                program main(args: Args) -> exit_code: Int {
+                    "" -> is_empty -> empty_ok
+                    "x" -> is_empty -> nonempty_is_empty
+                    nonempty_is_empty -> not -> nonempty_ok
+
+                    (true, false) -> xor -> xor_tf
+                    (true, true) -> xor -> xor_tt
+                    xor_tt -> not -> xor_tt_ok
+
+                    [true, true, true] -> all -> all_true_ok
+                    [true, false, true] -> all -> all_mixed
+                    all_mixed -> not -> all_mixed_ok
+
+                    [false, true, false] -> any -> any_mixed_ok
+                    [false, false] -> any -> any_false
+                    any_false -> not -> any_false_ok
+
+                    (empty_ok, nonempty_ok, false) -> select -> s1
+                    (s1, xor_tf, false) -> select -> s2
+                    (s2, xor_tt_ok, false) -> select -> s3
+                    (s3, all_true_ok, false) -> select -> s4
+                    (s4, all_mixed_ok, false) -> select -> s5
+                    (s5, any_mixed_ok, false) -> select -> s6
+                    (s6, any_false_ok, false) -> select -> all_ok
+                    (all_ok, 0, 1) -> select -> exit_code
+                }
+            "#,
+        )
+        .expect("write source");
+
+        let build = build_file(&path, None).expect("build");
+        let output = Command::new(&build.executable).output().expect("run");
+        assert!(
+            output.status.success(),
+            "base predicates failed (exit {:?}): {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn llvm_backend_runs_join_bytes() {
+        let root =
+            std::env::temp_dir().join(format!("flowarrow-join-bytes-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("temp dir");
+        let path = root.join("main.flow");
+        fs::write(
+            &path,
+            r#"
+                import std.bytes { join_bytes, concat_bytes }
+                import std.cli { Args }
+                import std.io { write_stdout }
+
+                program main(args: Args) -> exit_code: Int {
+                    (["hello", "world"], " ") -> join_bytes -> joined
+                    [joined, "\n"] -> concat_bytes -> output
+                    output -> write_stdout -> exit_code
+                }
+            "#,
+        )
+        .expect("write source");
+
+        let build = build_file(&path, None).expect("build");
+        let output = Command::new(&build.executable).output().expect("run");
+        assert!(
+            output.status.success(),
+            "join_bytes failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("utf8"),
+            "hello world\n"
+        );
+    }
 }

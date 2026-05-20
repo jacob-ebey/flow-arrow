@@ -15,7 +15,35 @@ sub          : (Int, Int)   -> Int
              | (Int, Real)  -> Real
              | (Real, Int)  -> Real
              | (Real, Real) -> Real
+mul          : (Int, Int)   -> Int
+             | (Int, Real)  -> Real
+             | (Real, Int)  -> Real
+             | (Real, Real) -> Real
+div          : (Int, Int)   -> Int
+             | (Int, Real)  -> Real
+             | (Real, Int)  -> Real
+             | (Real, Real) -> Real
+rem          : (Int, Int)   -> Int
+             | (Int, Real)  -> Real
+             | (Real, Int)  -> Real
+             | (Real, Real) -> Real
 eq           : (Int, Int)   -> Bool
+             | (Int, Real)  -> Bool
+             | (Real, Int)  -> Bool
+             | (Real, Real) -> Bool
+lt           : (Int, Int)   -> Bool
+             | (Int, Real)  -> Bool
+             | (Real, Int)  -> Bool
+             | (Real, Real) -> Bool
+gt           : (Int, Int)   -> Bool
+             | (Int, Real)  -> Bool
+             | (Real, Int)  -> Bool
+             | (Real, Real) -> Bool
+le           : (Int, Int)   -> Bool
+             | (Int, Real)  -> Bool
+             | (Real, Int)  -> Bool
+             | (Real, Real) -> Bool
+ge           : (Int, Int)   -> Bool
              | (Int, Real)  -> Bool
              | (Real, Int)  -> Bool
              | (Real, Real) -> Bool
@@ -48,9 +76,54 @@ returns `Int`; any combination involving `Real` returns `Real`.
 - Overflow is a boundary/data validation fault reported by the host
   runtime for integer results.
 
+### `mul`
+
+Multiplies two numeric values. Integer times integer returns `Int`; any
+combination involving `Real` returns `Real`.
+
+- Not associative in the reduce sense (no identity declared in the
+  initial profile; use user-defined wrappers for product reductions).
+- Overflow is a boundary/data validation fault reported by the host
+  runtime for integer results.
+
+### `div`
+
+Divides the first numeric value by the second. Integer divided by integer
+returns `Int` (truncating toward zero); any combination involving `Real`
+returns `Real`.
+
+- Division by zero is a boundary/data validation fault.
+- Not associative.
+
+### `rem`
+
+Returns the remainder of dividing the first numeric value by the second.
+Integer remainder by integer returns `Int` (same sign as the dividend,
+matching C `%`); any combination involving `Real` returns `Real` (matching
+C `fmod`).
+
+- Remainder by zero is a boundary/data validation fault.
+- Not associative.
+
 ### `eq`
 
 Returns whether two numeric values are equal.
+
+### `lt`
+
+Returns whether the first numeric value is strictly less than the second.
+
+### `gt`
+
+Returns whether the first numeric value is strictly greater than the second.
+
+### `le`
+
+Returns whether the first numeric value is less than or equal to the second.
+
+### `ge`
+
+Returns whether the first numeric value is greater than or equal to the second.
 
 ### `max`
 
@@ -60,10 +133,19 @@ Returns the larger of two numeric values. Integer with integer returns
 ## Examples
 
 ```flow
-import std.math { add, eq }
+import std.math { add, eq, mul, rem, lt }
 
 node is_sum_one(x: Real, y: Real, n: Int) -> out: Bool {
     (x, y) -> add -> sum
     (n, 1) -> eq -> out
+}
+
+node is_divisible(n: Int, d: Int) -> out: Bool {
+    (n, d) -> rem -> r
+    (r, 0) -> eq -> out
+}
+
+node is_positive(n: Int) -> out: Bool {
+    (n, 0) -> gt -> out
 }
 ```

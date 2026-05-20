@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdbool.h>
 #include <ctype.h>
 #include <errno.h>
@@ -253,7 +254,7 @@ static FaValue *fa_split_lines(FaValue *input) {
     return out;
 }
 
-static FaValue *fa_format_int(FaValue *input) {
+FaValue *fa_format_int(FaValue *input) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%lld", (long long)fa_expect_int(input, "format_int"));
     return fa_cstr(buf);
@@ -311,7 +312,7 @@ FaValue *fa_parse_real(FaValue *input) {
     return fa_real(value);
 }
 
-static FaValue *fa_format_real(FaValue *input) {
+FaValue *fa_format_real(FaValue *input) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%.15g", fa_expect_real(input, "format_real"));
     return fa_cstr(buf);
@@ -320,6 +321,11 @@ static FaValue *fa_format_real(FaValue *input) {
 FaValue *fa_not_empty(FaValue *input) {
     FaValue *bytes = fa_expect_bytes(input, "not_empty");
     return fa_bool(bytes->len > 0);
+}
+
+static FaValue *fa_is_empty(FaValue *input) {
+    FaValue *bytes = fa_expect_bytes(input, "is_empty");
+    return fa_bool(bytes->len == 0);
 }
 
 static int64_t fa_checked_integer_add(int64_t left, int64_t right, const char *op) {
@@ -426,6 +432,231 @@ static FaValue *fa_max(FaValue *input) {
     return fa_real(left > right ? left : right);
 }
 
+static FaValue *fa_mul(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "mul");
+    if (seq->count != 2) {
+        fputs("flowarrow runtime: mul expected two inputs\n", stderr);
+        exit(65);
+    }
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        int64_t left = fa_expect_int(seq->items[0], "mul");
+        int64_t right = fa_expect_int(seq->items[1], "mul");
+        int64_t result = 0;
+        if (__builtin_mul_overflow(left, right, &result)) {
+            fprintf(stderr, "flowarrow runtime: mul overflow\n");
+            exit(65);
+        }
+        return fa_int(result);
+    }
+    return fa_real(
+        fa_expect_number(seq->items[0], "mul") * fa_expect_number(seq->items[1], "mul"));
+}
+
+static FaValue *fa_div(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "div");
+    if (seq->count != 2) {
+        fputs("flowarrow runtime: div expected two inputs\n", stderr);
+        exit(65);
+    }
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        int64_t left = fa_expect_int(seq->items[0], "div");
+        int64_t right = fa_expect_int(seq->items[1], "div");
+        if (right == 0) {
+            fputs("flowarrow runtime: div by zero\n", stderr);
+            exit(65);
+        }
+        return fa_int(left / right);
+    }
+    double right = fa_expect_number(seq->items[1], "div");
+    if (right == 0.0) {
+        fputs("flowarrow runtime: div by zero\n", stderr);
+        exit(65);
+    }
+    return fa_real(fa_expect_number(seq->items[0], "div") / right);
+}
+
+static FaValue *fa_rem(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "rem");
+    if (seq->count != 2) {
+        fputs("flowarrow runtime: rem expected two inputs\n", stderr);
+        exit(65);
+    }
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        int64_t left = fa_expect_int(seq->items[0], "rem");
+        int64_t right = fa_expect_int(seq->items[1], "rem");
+        if (right == 0) {
+            fputs("flowarrow runtime: rem by zero\n", stderr);
+            exit(65);
+        }
+        return fa_int(left % right);
+    }
+    double right = fa_expect_number(seq->items[1], "rem");
+    if (right == 0.0) {
+        fputs("flowarrow runtime: rem by zero\n", stderr);
+        exit(65);
+    }
+    return fa_real(fmod(fa_expect_number(seq->items[0], "rem"), right));
+}
+
+static FaValue *fa_lt(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "lt");
+    if (seq->count != 2) {
+        fputs("flowarrow runtime: lt expected two inputs\n", stderr);
+        exit(65);
+    }
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        return fa_bool(fa_expect_int(seq->items[0], "lt") < fa_expect_int(seq->items[1], "lt"));
+    }
+    return fa_bool(fa_expect_number(seq->items[0], "lt") < fa_expect_number(seq->items[1], "lt"));
+}
+
+static FaValue *fa_gt(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "gt");
+    if (seq->count != 2) {
+        fputs("flowarrow runtime: gt expected two inputs\n", stderr);
+        exit(65);
+    }
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        return fa_bool(fa_expect_int(seq->items[0], "gt") > fa_expect_int(seq->items[1], "gt"));
+    }
+    return fa_bool(fa_expect_number(seq->items[0], "gt") > fa_expect_number(seq->items[1], "gt"));
+}
+
+static FaValue *fa_le(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "le");
+    if (seq->count != 2) {
+        fputs("flowarrow runtime: le expected two inputs\n", stderr);
+        exit(65);
+    }
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        return fa_bool(fa_expect_int(seq->items[0], "le") <= fa_expect_int(seq->items[1], "le"));
+    }
+    return fa_bool(fa_expect_number(seq->items[0], "le") <= fa_expect_number(seq->items[1], "le"));
+}
+
+static FaValue *fa_ge(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "ge");
+    if (seq->count != 2) {
+        fputs("flowarrow runtime: ge expected two inputs\n", stderr);
+        exit(65);
+    }
+    if (seq->items[0] && seq->items[0]->kind == FA_INT
+        && seq->items[1] && seq->items[1]->kind == FA_INT) {
+        return fa_bool(fa_expect_int(seq->items[0], "ge") >= fa_expect_int(seq->items[1], "ge"));
+    }
+    return fa_bool(fa_expect_number(seq->items[0], "ge") >= fa_expect_number(seq->items[1], "ge"));
+}
+
+static FaValue *fa_and(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "and");
+    if (seq->count != 2 || !seq->items[0] || seq->items[0]->kind != FA_BOOL
+        || !seq->items[1] || seq->items[1]->kind != FA_BOOL) {
+        fputs("flowarrow runtime: and expected (Bool, Bool)\n", stderr);
+        exit(65);
+    }
+    return fa_bool(seq->items[0]->b && seq->items[1]->b);
+}
+
+static FaValue *fa_or(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "or");
+    if (seq->count != 2 || !seq->items[0] || seq->items[0]->kind != FA_BOOL
+        || !seq->items[1] || seq->items[1]->kind != FA_BOOL) {
+        fputs("flowarrow runtime: or expected (Bool, Bool)\n", stderr);
+        exit(65);
+    }
+    return fa_bool(seq->items[0]->b || seq->items[1]->b);
+}
+
+static FaValue *fa_xor(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "xor");
+    if (seq->count != 2 || !seq->items[0] || seq->items[0]->kind != FA_BOOL
+        || !seq->items[1] || seq->items[1]->kind != FA_BOOL) {
+        fputs("flowarrow runtime: xor expected (Bool, Bool)\n", stderr);
+        exit(65);
+    }
+    return fa_bool(seq->items[0]->b != seq->items[1]->b);
+}
+
+FaValue *fa_not(FaValue *input) {
+    if (!input || input->kind != FA_BOOL) {
+        fputs("flowarrow runtime: not expected Bool\n", stderr);
+        exit(65);
+    }
+    return fa_bool(!input->b);
+}
+
+static FaValue *fa_all(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "all");
+    for (size_t i = 0; i < seq->count; i++) {
+        if (!seq->items[i] || seq->items[i]->kind != FA_BOOL) {
+            fputs("flowarrow runtime: all expected Seq[Bool]\n", stderr);
+            exit(65);
+        }
+        if (!seq->items[i]->b) {
+            return fa_bool(false);
+        }
+    }
+    return fa_bool(true);
+}
+
+static FaValue *fa_any(FaValue *input) {
+    FaValue *seq = fa_expect_seq(input, "any");
+    for (size_t i = 0; i < seq->count; i++) {
+        if (!seq->items[i] || seq->items[i]->kind != FA_BOOL) {
+            fputs("flowarrow runtime: any expected Seq[Bool]\n", stderr);
+            exit(65);
+        }
+        if (seq->items[i]->b) {
+            return fa_bool(true);
+        }
+    }
+    return fa_bool(false);
+}
+
+static FaValue *fa_join_bytes(FaValue *input) {
+    FaValue *pair = fa_expect_seq(input, "join_bytes");
+    if (pair->count != 2) {
+        fputs("flowarrow runtime: join_bytes expected (Seq[Bytes], Bytes)\n", stderr);
+        exit(65);
+    }
+    FaValue *seq = fa_expect_seq(pair->items[0], "join_bytes");
+    FaValue *sep = fa_expect_bytes(pair->items[1], "join_bytes");
+    if (seq->count == 0) {
+        return fa_bytes_from_slice("", 0);
+    }
+    size_t total = 0;
+    for (size_t i = 0; i < seq->count; i++) {
+        total += fa_expect_bytes(seq->items[i], "join_bytes")->len;
+    }
+    total += sep->len * (seq->count - 1);
+    FaValue *out = fa_alloc(FA_BYTES);
+    out->len = total;
+    out->bytes = (char *)malloc(total + 1);
+    if (!out->bytes) {
+        fputs("flowarrow runtime: allocation failed\n", stderr);
+        exit(70);
+    }
+    size_t offset = 0;
+    for (size_t i = 0; i < seq->count; i++) {
+        FaValue *part = fa_expect_bytes(seq->items[i], "join_bytes");
+        memcpy(out->bytes + offset, part->bytes, part->len);
+        offset += part->len;
+        if (i + 1 < seq->count) {
+            memcpy(out->bytes + offset, sep->bytes, sep->len);
+            offset += sep->len;
+        }
+    }
+    out->bytes[total] = '\0';
+    return out;
+}
+
+
 static FaValue *fa_has_faults(FaValue *input) {
     FaValue *seq = fa_expect_seq(input, "has_faults");
     return fa_bool(seq->count > 0);
@@ -517,12 +748,27 @@ FaValue *fa_builtin(const char *name, FaValue *input) {
     if (strcmp(name, "concat_bytes") == 0) return fa_concat_bytes(input);
     if (strcmp(name, "add") == 0) return fa_add(input);
     if (strcmp(name, "sub") == 0) return fa_sub(input);
+    if (strcmp(name, "mul") == 0) return fa_mul(input);
+    if (strcmp(name, "div") == 0) return fa_div(input);
+    if (strcmp(name, "rem") == 0) return fa_rem(input);
     if (strcmp(name, "eq") == 0) return fa_eq(input);
+    if (strcmp(name, "lt") == 0) return fa_lt(input);
+    if (strcmp(name, "gt") == 0) return fa_gt(input);
+    if (strcmp(name, "le") == 0) return fa_le(input);
+    if (strcmp(name, "ge") == 0) return fa_ge(input);
     if (strcmp(name, "max") == 0) return fa_max(input);
     if (strcmp(name, "not_empty") == 0) return fa_not_empty(input);
+    if (strcmp(name, "is_empty") == 0) return fa_is_empty(input);
     if (strcmp(name, "has_faults") == 0) return fa_has_faults(input);
     if (strcmp(name, "format_faults") == 0) return fa_format_faults(input);
     if (strcmp(name, "select") == 0) return fa_select(input);
+    if (strcmp(name, "and") == 0) return fa_and(input);
+    if (strcmp(name, "or") == 0) return fa_or(input);
+    if (strcmp(name, "xor") == 0) return fa_xor(input);
+    if (strcmp(name, "not") == 0) return fa_not(input);
+    if (strcmp(name, "all") == 0) return fa_all(input);
+    if (strcmp(name, "any") == 0) return fa_any(input);
+    if (strcmp(name, "join_bytes") == 0) return fa_join_bytes(input);
     if (strcmp(name, "write_stdout") == 0) return fa_write_stdout(input);
     if (strcmp(name, "write_stderr") == 0) return fa_write_stderr(input);
     fprintf(stderr, "flowarrow runtime: unknown builtin `%s`\n", name);
