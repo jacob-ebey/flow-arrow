@@ -53,6 +53,19 @@ fn run_cli() -> Result<u8, String> {
             flowarrow::typecheck_file(PathBuf::from(path).as_path())?;
             Ok(0)
         }
-        _ => Err("usage: flowarrow <run|build|typecheck> ...".to_string()),
+        Some("graph") => {
+            let path = args
+                .next()
+                .ok_or_else(|| "usage: flowarrow graph <path.flow>".to_string())?;
+            if args.next().is_some() {
+                return Err("usage: flowarrow graph <path.flow>".to_string());
+            }
+            print!(
+                "{}",
+                flowarrow::mermaid_file(PathBuf::from(path).as_path())?
+            );
+            Ok(0)
+        }
+        _ => Err("usage: flowarrow <run|build|typecheck|graph> ...".to_string()),
     }
 }

@@ -41,6 +41,9 @@ runtime; adding more should start in the compiler's stdlib registry.
 Use `flowarrow typecheck <path.flow>` to validate imports and graph
 types without emitting LLVM or invoking the native backend.
 
+Use `flowarrow graph <path.flow>` to print the typed execution graph as a
+Mermaid `flowchart TD` diagram.
+
 | Example                       | What it shows                                          |
 | ----------------------------- | ------------------------------------------------------ |
 | `add-numbers-from-stdin/`     | Boundary I/O, dynamic-size sequences, parallel reduce. |

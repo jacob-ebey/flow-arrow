@@ -1,0 +1,270 @@
+use crate::ast::*;
+use crate::stdlib::{self, RuntimeSupport, SymbolKind};
+use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
+
+pub fn emit_module(module: &Module) -> Result<String, String> {
+    let node_names = collect_node_names(module);
+    let mut emitter = MermaidEmitter {
+        out: String::new(),
+        next_id: 0,
+        node_names,
+    };
+    emitter.line("flowchart TD");
+    for decl in &module.declarations {
+        match decl {
+            Decl::Node(callable) => emitter.emit_callable(callable, "node")?,
+            Decl::Program(callable) => emitter.emit_callable(callable, "program")?,
+            Decl::Import(_) => {}
+        }
+    }
+    Ok(emitter.out)
+}
+
+struct MermaidEmitter {
+    out: String,
+    next_id: usize,
+    node_names: HashSet<String>,
+}
+
+impl MermaidEmitter {
+    fn emit_callable(&mut self, callable: &Callable, kind: &str) -> Result<(), String> {
+        let subgraph_id = format!("callable_{}", sanitize_id(&callable.name));
+        self.line(&format!(
+            "  subgraph {subgraph_id}[\"{}\"]",
+            escape_label(&format!("{kind} {}", callable.name))
+        ));
+
+        let mut env = HashMap::new();
+        for port in &callable.inputs {
+            env.insert(port.name.clone(), Vec::new());
+        }
+
+        for chain in &callable.chains {
+            self.emit_chain(chain, &mut env)?;
+        }
+
+        self.line("  end");
+        Ok(())
+    }
+
+    fn emit_chain(
+        &mut self,
+        chain: &Chain,
+        env: &mut HashMap<String, Vec<String>>,
+    ) -> Result<(), String> {
+        let mut current = self.emit_endpoint(&chain.source, env)?;
+        for (index, stage) in chain.stages.iter().enumerate() {
+            let is_last = index + 1 == chain.stages.len();
+            match stage {
+                Stage::Endpoint(Endpoint::Name(name))
+                    if is_last && !self.node_names.contains(name) =>
+                {
+                    if env.insert(name.clone(), current.clone()).is_some() {
+                        return Err(format!("value `{name}` is bound more than once"));
+                    }
+                }
+                Stage::Endpoint(Endpoint::Name(name)) => {
+                    let operation = self.node(name, "    ");
+                    self.edges(&current, &operation, None, "    ");
+                    current = vec![operation];
+                }
+                Stage::Endpoint(_) => {
+                    return Err("non-name endpoints may only appear as source values".to_string());
+                }
+                Stage::Map(name) => {
+                    let operation = self.node(&format!("map {name}"), "    ");
+                    self.edges(&current, &operation, None, "    ");
+                    current = vec![operation];
+                }
+                Stage::Filter(name) => {
+                    let operation = self.node(&format!("filter {name}"), "    ");
+                    self.edges(&current, &operation, None, "    ");
+                    current = vec![operation];
+                }
+                Stage::Reduce { op, identity } => {
+                    let operation = self.node(
+                        &format!("reduce {op}\nidentity: {}", endpoint_label(identity)),
+                        "    ",
+                    );
+                    self.edges(&current, &operation, None, "    ");
+                    let identity = self.emit_endpoint(identity, env)?;
+                    self.edges(&identity, &operation, Some("identity"), "    ");
+                    current = vec![operation];
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_endpoint(
+        &mut self,
+        endpoint: &Endpoint,
+        env: &HashMap<String, Vec<String>>,
+    ) -> Result<Vec<String>, String> {
+        match endpoint {
+            Endpoint::Name(name) => env
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("unknown value `{name}`")),
+            Endpoint::Tuple(items) | Endpoint::Seq(items) => {
+                let mut sources = Vec::new();
+                for item in items {
+                    sources.extend(self.emit_endpoint(item, env)?);
+                }
+                Ok(sources)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn node(&mut self, label: &str, indent: &str) -> String {
+        let id = format!("n{}", self.next_id);
+        self.next_id += 1;
+        self.line(&format!("{indent}{id}[\"{}\"]", escape_label(label)));
+        id
+    }
+
+    fn edge(&mut self, from: &str, to: &str, label: Option<&str>, indent: &str) {
+        match label {
+            Some(label) => self.line(&format!(
+                "{indent}{from} -- \"{}\" --> {to}",
+                escape_label(label)
+            )),
+            None => self.line(&format!("{indent}{from} --> {to}")),
+        }
+    }
+
+    fn edges(&mut self, from: &[String], to: &str, label: Option<&str>, indent: &str) {
+        for source in from {
+            self.edge(source, to, label, indent);
+        }
+    }
+
+    fn line(&mut self, line: &str) {
+        self.out.push_str(line);
+        self.out.push('\n');
+    }
+}
+
+fn collect_node_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for symbol in stdlib::module_symbols(stdlib::INTRINSIC_MODULE) {
+        if symbol.kind == SymbolKind::Node && symbol.runtime != RuntimeSupport::Unsupported {
+            names.insert(symbol.name.to_string());
+        }
+    }
+    for decl in &module.declarations {
+        match decl {
+            Decl::Node(callable) => {
+                names.insert(callable.name.clone());
+            }
+            Decl::Program(_) => {}
+            Decl::Import(import) => collect_import_node_names(import, &mut names),
+        }
+    }
+    names
+}
+
+fn collect_import_node_names(import: &Import, names: &mut HashSet<String>) {
+    let ImportSource::Module(module) = &import.source else {
+        return;
+    };
+    match &import.clause {
+        ImportClause::Alias(alias) => {
+            for symbol in stdlib::module_symbols(module) {
+                if symbol.kind == SymbolKind::Node && symbol.runtime != RuntimeSupport::Unsupported
+                {
+                    names.insert(format!("{alias}.{}", symbol.name));
+                }
+            }
+        }
+        ImportClause::Items(items) => {
+            for item in items {
+                let Some(symbol) = stdlib::find_export(module, &item.name) else {
+                    continue;
+                };
+                if symbol.kind == SymbolKind::Node && symbol.runtime != RuntimeSupport::Unsupported
+                {
+                    names.insert(item.alias.as_deref().unwrap_or(&item.name).to_string());
+                }
+            }
+        }
+    }
+}
+
+fn endpoint_label(endpoint: &Endpoint) -> String {
+    match endpoint {
+        Endpoint::Name(name) => name.clone(),
+        Endpoint::Int(value) => value.to_string(),
+        Endpoint::Real(value) => {
+            let mut text = value.to_string();
+            if !text.contains('.') && !text.contains('e') && !text.contains('E') {
+                text.push_str(".0");
+            }
+            text
+        }
+        Endpoint::Bool(value) => value.to_string(),
+        Endpoint::String(value) => {
+            let mut out = String::from("\"");
+            for ch in value.chars() {
+                match ch {
+                    '\\' => out.push_str("\\\\"),
+                    '"' => out.push_str("\\\""),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    other => out.push(other),
+                }
+            }
+            out.push('"');
+            out
+        }
+        Endpoint::Unit => "()".to_string(),
+        Endpoint::Tuple(items) => endpoint_list_label(items, "(", ")"),
+        Endpoint::Seq(items) => endpoint_list_label(items, "[", "]"),
+    }
+}
+
+fn endpoint_list_label(items: &[Endpoint], open: &str, close: &str) -> String {
+    let mut out = String::from(open);
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&endpoint_label(item));
+    }
+    out.push_str(close);
+    out
+}
+
+fn escape_label(label: &str) -> String {
+    let mut escaped = String::new();
+    for ch in label.chars() {
+        match ch {
+            '"' => escaped.push_str("&quot;"),
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\n' => escaped.push_str("<br/>"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn sanitize_id(name: &str) -> String {
+    let mut out = String::new();
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            out.push(ch);
+        } else {
+            let _ = write!(out, "_{:x}", ch as u32);
+        }
+    }
+    if out.is_empty() {
+        "anonymous".to_string()
+    } else {
+        out
+    }
+}

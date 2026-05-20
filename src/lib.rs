@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 mod ast;
 mod codegen;
 mod lexer;
+mod mermaid;
 mod parser;
 mod runtime;
 mod stdlib;
@@ -82,6 +83,14 @@ pub fn typecheck_file(path: &Path) -> Result<(), String> {
     typecheck::check_module(&module)
 }
 
+pub fn mermaid_file(path: &Path) -> Result<String, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+    let module = parser::parse(&source)?;
+    typecheck::check_module(&module)?;
+    mermaid::emit_module(&module)
+}
+
 #[derive(Debug, Clone)]
 pub struct BuildOutput {
     pub build_dir: PathBuf,
@@ -149,6 +158,25 @@ mod tests {
     #[test]
     fn typechecks_example_without_llvm_codegen() {
         typecheck_file(Path::new("examples/add-numbers-from-stdin/main.flow")).expect("typecheck");
+    }
+
+    #[test]
+    fn emits_mermaid_execution_graph() {
+        let graph = mermaid_file(Path::new("examples/add-numbers-from-stdin/main.flow"))
+            .expect("mermaid graph");
+        assert!(graph.starts_with("flowchart TD\n"));
+        assert!(graph.contains("subgraph callable_main[\"program main\"]"));
+        assert!(graph.contains("[\"read_stdin\"]"));
+        assert!(graph.contains("[\"filter not_empty\"]"));
+        assert!(graph.contains("[\"map parse_real\"]"));
+        assert!(graph.contains("[\"reduce add<br/>identity: 0.0\"]"));
+        assert!(graph.contains("[\"write_stdout\"]"));
+        assert!(graph.contains("[\"read_stdin\"]\n    n1[\"split_lines\"]\n    n0 --> n1"));
+        assert!(!graph.contains("[\"args: Args\"]"));
+        assert!(!graph.contains("[\"input\"]"));
+        assert!(!graph.contains("[\"raw_lines\"]"));
+        assert!(!graph.contains("[\"0.0\"]"));
+        assert!(!graph.contains("[\"exit_code\"]"));
     }
 
     #[test]
