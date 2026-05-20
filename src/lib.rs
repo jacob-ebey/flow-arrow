@@ -12,8 +12,17 @@ mod stdlib;
 mod typecheck;
 
 pub fn run_file(path: &Path) -> Result<u8, String> {
+    run_file_with_args(path, std::iter::empty::<String>())
+}
+
+pub fn run_file_with_args<I, S>(path: &Path, args: I) -> Result<u8, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
     let build = build_file(path, None)?;
     let status = Command::new(&build.executable)
+        .args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -195,18 +204,18 @@ mod tests {
     }
 
     #[test]
-    fn typecheck_rejects_unimplemented_stdlib_export() {
+    fn typecheck_accepts_argv() {
         let source = r#"
             import std.cli { Args }
             import std.cli { argv }
 
             program main(args: Args) -> exit_code: Int {
+                args -> argv -> raw_args
                 0 -> exit_code
             }
         "#;
         let module = parser::parse(source).expect("parse");
-        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
-        assert!(error.contains("is not implemented by this compiler backend yet"));
+        typecheck::check_module(&module).expect("typecheck");
     }
 
     #[test]
@@ -355,6 +364,23 @@ mod tests {
             String::from_utf8(fault_output.stderr).expect("utf8"),
             "line 2: expected Real, got \"wat\"\n"
         );
+    }
+
+    #[test]
+    fn llvm_backend_runs_add_numbers_from_args() {
+        let build =
+            build_file(Path::new("examples/add-numbers-from-args/main.flow"), None).expect("build");
+        let output = Command::new(&build.executable)
+            .args(["1.5", "2.5", "3"])
+            .output()
+            .expect("run");
+        assert!(
+            output.status.success(),
+            "program failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "7\n");
+        assert_eq!(String::from_utf8(output.stderr).expect("utf8"), "");
     }
 
     #[test]

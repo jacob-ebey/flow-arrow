@@ -102,6 +102,7 @@ impl<'a> Codegen<'a> {
         self.line("declare ptr @fa_real(double)");
         self.line("declare ptr @fa_bool(i1)");
         self.line("declare ptr @fa_cstr(ptr)");
+        self.line("declare ptr @fa_args(i32, ptr)");
         self.line("declare ptr @fa_seq_new(i64)");
         self.line("declare void @fa_seq_set(ptr, i64, ptr)");
         self.line("declare ptr @fa_seq_get(ptr, i64)");
@@ -349,7 +350,9 @@ impl<'a> Codegen<'a> {
     fn emit_entrypoint(&mut self) {
         self.line("define i32 @main(i32 %argc, ptr %argv) {");
         let args = self.next_temp();
-        self.line(&format!("  {args} = call ptr @fa_unit()"));
+        self.line(&format!(
+            "  {args} = call ptr @fa_args(i32 %argc, ptr %argv)"
+        ));
         let value = self.next_temp();
         self.line(&format!(
             "  {value} = call ptr @flow_program_main(ptr {args})"

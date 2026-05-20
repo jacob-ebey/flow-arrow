@@ -7,7 +7,7 @@ The initial stdlib surface is documented in [`docs/std/`](../docs/std/):
 
 ```flow
 import std.bytes { split_lines, concat_bytes, join_bytes }
-import std.cli { Args }
+import std.cli { Args, argv }
 import std.io { read_stdin, write_stdout }
 import std.real { parse_real, format_real }
 import std.int { parse_int, format_int }
@@ -28,6 +28,7 @@ join_bytes        : (Seq[Bytes], Bytes) -> Bytes     # joins with separator
 
 # Boundary I/O
 Args              # CLI argument/flag input type
+argv              : Args -> Seq[Bytes]      # excludes executable name
 read_stdin        : ()    -> Bytes
 write_stdout      : Bytes -> Int
 write_stderr      : Bytes -> Int
@@ -75,6 +76,7 @@ Mermaid `flowchart TD` diagram.
 | Example                       | What it shows                                          |
 | ----------------------------- | ------------------------------------------------------ |
 | `add-numbers-from-stdin/`     | Boundary I/O, dynamic-size sequences, parallel reduce. |
+| `add-numbers-from-args/`      | Command-line argument parsing and parallel reduce.     |
 | `parse-and-sum-lines/`        | Minimal pressure test for parse faults and graph-visible fault semantics. |
 | `99-bottles/`                 | Pure string generation via `range_step` + `map` + concat reduce. |
 | `fibonacci/`                  | Stdin integer parsing and FlowArrow Fibonacci iteration. |

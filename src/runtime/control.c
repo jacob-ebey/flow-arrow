@@ -1,4 +1,5 @@
 FaValue *fa_builtin(const char *name, FaValue *input) {
+    if (strcmp(name, "argv") == 0) return fa_argv(input);
     if (strcmp(name, "read_stdin") == 0) return fa_read_stdin(input);
     if (strcmp(name, "split_lines") == 0) return fa_split_lines(input);
     if (strcmp(name, "range_step") == 0) return fa_range_step(input);

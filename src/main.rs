@@ -18,11 +18,8 @@ fn run_cli() -> Result<u8, String> {
         Some("run") => {
             let path = args
                 .next()
-                .ok_or_else(|| "usage: flowarrow run <path.flow>".to_string())?;
-            if args.next().is_some() {
-                return Err("usage: flowarrow run <path.flow>".to_string());
-            }
-            flowarrow::run_file(PathBuf::from(path).as_path())
+                .ok_or_else(|| "usage: flowarrow run <path.flow> [args...]".to_string())?;
+            flowarrow::run_file_with_args(PathBuf::from(path).as_path(), args)
         }
         Some("build") => {
             let path = args.next().ok_or_else(|| {
