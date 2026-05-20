@@ -25,7 +25,7 @@ Reads all bytes from standard input.
 - The read is explicit in the dependency graph:
 
   ```flow
-  () -> read_stdin -> input
+  () -> read_stdin -> $input
   ```
 
 - The node has no FlowArrow data input because stdin is supplied by the
@@ -57,8 +57,8 @@ import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 
 program main(args: Args) -> exit_code: Int {
-    () -> read_stdin -> input
-    input -> transform -> output
-    output -> write_stdout -> exit_code
+    () -> read_stdin -> $input
+    $input -> transform -> $output
+    $output -> write_stdout -> $exit_code
 }
 ```

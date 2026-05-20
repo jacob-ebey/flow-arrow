@@ -63,8 +63,8 @@ Returns a flag's value as bytes.
 import std.cli { Args, argv, flag_present }
 
 program main(args: Args) -> exit_code: Int {
-    args -> argv -> positional
-    (args, "--verbose") -> flag_present -> verbose
-    0 -> id -> exit_code
+    $args -> argv -> $positional
+    ($args, "--verbose") -> flag_present -> $verbose
+    0 -> id -> $exit_code
 }
 ```

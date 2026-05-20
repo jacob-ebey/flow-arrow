@@ -1,0 +1,103 @@
+# json-parser
+#
+# Reads a single JSON array of numbers from stdin, parses it, and writes
+# a JSON summary object to stdout.
+#
+# Demonstrates:
+#   - real byte-level parsing of a structured boundary format
+#   - parallel parsing with `fault map parse_real`
+#   - bracket framing via `strip_prefix` / `strip_suffix` (faultable)
+#   - comma-separated tokenisation via `split_on`
+#   - whitespace tolerance via `map trim` followed by `filter not_empty`
+#     (the `filter` makes the empty array `[]` parse to zero elements
+#     without a phantom empty token)
+#   - graph-visible fault routing to stderr without hidden control flow
+#
+# Dataflow shape:
+#
+#   ()  -> read_stdin -> trim -> $framed
+#   ($framed, "[")  -> strip_prefix -> $after_open
+#   ($after_open, "]") -> strip_suffix -> $inner
+#   ($inner, ",") -> split_on -> $raw_tokens
+#   $raw_tokens -> map trim -> $tokens
+#   $tokens -> filter not_empty -> $nonempty
+#   $nonempty -> fault map parse_real { ok -> $numbers, fault -> $faults }
+#
+#   $numbers -> map one -> $ones
+#   $ones -> reduce add(identity: 0) -> $count
+#   $numbers -> reduce add(identity: 0.0) -> $sum
+#   ($count, $sum) -> render_summary -> $success_output
+#
+#   faults -> { has_faults, format_faults } -> stderr branch
+#   select picks success vs. fault output -> $exit_code
+#
+# Input  (stdin):
+#
+#   [1, 2.5, 3]
+#
+# Output (stdout):
+#
+#   {"count":3,"sum":6.5}
+#
+# Faults are *single*, not a sequence: a missing `[` framing prefix
+# produces one diagnostic and a non-zero exit, exactly like
+# `parse-and-sum-lines`. Recursion-free FlowArrow cannot parse arbitrary
+# nested JSON, but a flat numeric array is enough to exercise byte-level
+# parsing, framing, tokenisation, and fault routing in one program.
+
+import std.bytes { split_on, concat_bytes, strip_prefix, strip_suffix, trim }
+import std.cli { Args }
+import std.fault { has_faults, format_faults }
+import std.io { read_stdin, write_stdout, write_stderr }
+import std.int { format_int }
+import std.math { add, max }
+import std.predicates { not_empty }
+import std.real { parse_real, format_real }
+
+program main(args: Args) -> exit_code: Int {
+    () -> read_stdin                                  -> $input
+    $input -> trim                                     -> $framed
+    ($framed, "[")     -> strip_prefix                 -> $after_open
+    ($after_open, "]") -> strip_suffix                 -> $inner
+    ($inner, ",")      -> split_on                     -> $raw_tokens
+    $raw_tokens -> map trim                            -> $tokens
+    $tokens -> filter not_empty                        -> $nonempty
+    $nonempty -> fault map parse_real { ok -> $numbers, fault -> $faults }
+
+    $numbers -> map one                            -> $ones
+    $ones     -> reduce add(identity: 0)           -> $count
+    $numbers  -> reduce add(identity: 0.0)         -> $sum
+    ($count, $sum) -> render_summary                -> $success_output
+
+    $faults -> has_faults              -> $invalid_input
+    $faults -> format_faults           -> $fault_output
+    ($invalid_input, "",           $success_output) -> select -> $stdout_output
+    ($invalid_input, $fault_output, "")             -> select -> $stderr_output
+
+    $stdout_output -> write_stdout     -> $stdout_status
+    $stderr_output -> write_stderr     -> $stderr_status
+    ($invalid_input, 65, $stdout_status) -> select -> $data_status
+    ($data_status, $stderr_status)       -> max    -> $exit_code
+}
+
+# Assemble a JSON summary object from the two aggregates.
+#
+# Output bytes (no whitespace, deterministic key order):
+#
+#   {"count":<count>,"sum":<sum>}\n
+#
+# Pure: no I/O, no mutation, no branching. Only `format_int`,
+# `format_real`, and a fixed-arity `concat_bytes`.
+node render_summary(count: Int, sum: Real) -> output: Bytes {
+    $count -> format_int  -> $count_str
+    $sum   -> format_real -> $sum_str
+    ["{\"count\":", $count_str, ",\"sum\":", $sum_str, "}\n"]
+        -> concat_bytes -> $output
+}
+
+# Map a Real to the integer 1. Used to count elements by reducing a
+# sequence of ones; `length` is in the spec but not yet implemented in
+# the compiler, so this is the portable way to compute a count today.
+node one(x: Real) -> n: Int {
+    1 -> $n
+}

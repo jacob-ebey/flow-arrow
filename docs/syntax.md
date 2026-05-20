@@ -73,10 +73,12 @@ escape     ::= "\\" ("\"" | "\\" | "n" | "t" | "r")
 ### 1.4 Punctuation and operators
 
 ```text
-->   .   ,   :   (   )   {   }   <   >
+->   $   .   ,   :   (   )   {   }   <   >
 ```
 
-The only multi-character token is `->` (the **flow arrow**).
+The only multi-character token is `->` (the **flow arrow**). A `$`
+immediately before an identifier marks a dataflow variable reference or
+binding.
 
 ---
 
@@ -206,13 +208,14 @@ block          ::= "{" chain* "}"
 
 chain          ::= endpoint ("->" stage)+
 
-stage          ::= endpoint
+stage          ::= node_ref
+                 | variable_ref
                  | combinator
 ```
 
 Each `chain` declares a path through the dependency graph. Successive
-`->` operators are left-associative: `a -> b -> c` is read as the two
-edges `a -> b` and `b -> c`. Chains within a block may appear in any
+`->` operators are left-associative: `$a -> f -> $b` is read as the two
+edges `$a -> f` and `f -> $b`. Chains within a block may appear in any
 order; ordering carries no semantic meaning.
 
 A chain must terminate at an endpoint that **binds** a name (see §7).
@@ -222,24 +225,25 @@ A chain must terminate at an endpoint that **binds** a name (see §7).
 ## 5. Endpoints
 
 ```ebnf
-endpoint       ::= name_ref
+endpoint       ::= variable_ref
                  | tuple
                  | fanout
                  | seq_literal
                  | literal
 
-name_ref       ::= IDENT ("." IDENT)?
+variable_ref   ::= "$" IDENT
+node_ref       ::= IDENT ("." IDENT)*
 ```
 
-- `IDENT` — a value name.
-- `IDENT "." IDENT` — a **named port** on a node (`op.port`).
+- `variable_ref` — a value name. Variables are always written with `$`.
+- `node_ref` — a node name, including imported aliases such as `math.add`.
 - `tuple` — a join of multiple values (§5.1).
 - `fanout` — a fan-out from a single value (§5.2).
 - `seq_literal` — a fixed-arity sequence value (§5.3).
 - `literal` — a constant value used as an input.
 
-A bare `IDENT` used as the **target** of a `->` denotes either an
-existing node application or the name being bound (§7).
+A bare `IDENT` used as the **target** of a `->` denotes a node
+application. A `$IDENT` target binds or references a value (§7).
 
 ### 5.1 Tuples (joins)
 
@@ -248,7 +252,7 @@ tuple          ::= "(" endpoint "," endpoint ("," endpoint)* ")"
 ```
 
 A tuple of arity ≥ 2 represents the multi-input edge into the next
-stage. `(a, b) -> h -> y` means `h` waits for both `a` and `b`.
+stage. `($a, $b) -> h -> $y` means `h` waits for both `$a` and `$b`.
 
 ### 5.2 Fanouts
 
@@ -262,7 +266,7 @@ A fanout duplicates its upstream value into multiple parallel arms.
 Each arm is itself a (sub)chain that must terminate in a binding.
 
 ```text
-x -> { f -> a, g -> b }
+$x -> { f -> $a, g -> $b }
 ```
 
 declares two independent edges from `x`.
@@ -281,7 +285,7 @@ ordinary `Seq[T]` and is indistinguishable from one produced by
 `range`, `filter`, or `map`.
 
 ```flow
-[a, b, c] -> concat_bytes -> out
+[$a, $b, $c] -> concat_bytes -> $out
 ```
 
 is equivalent to constructing a length-3 sequence and passing it to
@@ -310,16 +314,16 @@ combinator     ::= map_comb
 map_comb       ::= "map" IDENT
 
 fault_map_comb ::= "fault" "map" IDENT "{"
-                   "ok" "->" IDENT ","
-                   "fault" "->" IDENT
+                   "ok" "->" variable_ref ","
+                   "fault" "->" variable_ref
                    "}"
 
-reduce_comb    ::= "reduce" IDENT "(" "identity" ":" literal ")"
+reduce_comb    ::= "reduce" IDENT "(" "identity" ":" endpoint ")"
 
-scan_comb      ::= "scan"   IDENT "(" "identity" ":" literal ")"
+scan_comb      ::= "scan"   IDENT "(" "identity" ":" endpoint ")"
 
 repeat_comb    ::= "repeat" "<" repeat_count ">" IDENT
-repeat_count   ::= INT | IDENT
+repeat_count   ::= INT | variable_ref
 
 select_comb    ::= "select"
 
@@ -346,12 +350,12 @@ Notes:
 
 - `reduce` and `scan` require their `IDENT` operator to be associative
   (a semantic check, not a syntactic one).
-- `fault map f { ok -> xs, fault -> fs }` applies a faultable node to
-  each element. Successful values bind to `xs`; graph-visible faults bind
-  to `fs : Seq[Fault]`. Handling faults is optional: unhandled faults
+- `fault map f { ok -> $xs, fault -> $fs }` applies a faultable node to
+  each element. Successful values bind to `$xs`; graph-visible faults bind
+  to `$fs : Seq[Fault]`. Handling faults is optional: unhandled faults
   propagate through the type as `Faultable[T]`, and any declaration that
   returns them must say so in its output type.
-- `repeat<N>` accepts either an integer literal **or** a `name_ref` of
+- `repeat<$n>` accepts either an integer literal **or** a `variable_ref` of
   type `Int`. When `N` is a runtime value, the iteration count varies
   per invocation but the body graph is still static.
 - `select` is invoked as `(predicate, when_true, when_false) -> select`.
@@ -403,7 +407,7 @@ arguments using angle brackets:
 indexed_port   ::= IDENT "." IDENT "<" grid_dim ">"
 ```
 
-These are parsed where a `name_ref` is expected.
+These are parsed where a node reference is expected.
 
 ---
 
@@ -411,13 +415,12 @@ These are parsed where a `name_ref` is expected.
 
 Within a single `node_decl` or `program_decl`:
 
-1. Each `IDENT` appearing as the **rightmost endpoint** of a chain or
-   fanout arm is a **binding occurrence**: it introduces a new name.
+1. Each `$IDENT` appearing as the **rightmost stage** of a chain or
+   fanout arm is a **binding occurrence**: it introduces a new value.
 2. A name may be bound **exactly once** (single static assignment).
-3. Every other occurrence of an `IDENT` or imported qualified name
-   (`alias.name`) is a **use**: it must resolve either to an input port
-   of the enclosing node, a name bound elsewhere in the same block, or
-   an imported top-level declaration.
+3. Every other `$IDENT` is a value use: it must resolve either to an
+   input port of the enclosing node or a name bound elsewhere in the same
+   block. Bare `IDENT` and `alias.name` references are node uses.
 4. The set of bindings and uses forms the data-dependency graph; it
    must be acyclic. Cycles are syntactically expressible but
    semantically rejected.
@@ -479,10 +482,11 @@ type_arg       ::= type | INT | IDENT
 
 block          ::= "{" chain* "}"
 chain          ::= endpoint ("->" stage)+
-stage          ::= endpoint | combinator
+stage          ::= node_ref | variable_ref | combinator
 
-endpoint       ::= name_ref | tuple | fanout | seq_literal | literal
-name_ref       ::= IDENT ("." IDENT)?
+endpoint       ::= variable_ref | tuple | fanout | seq_literal | literal
+variable_ref   ::= "$" IDENT
+node_ref       ::= IDENT ("." IDENT)*
 tuple          ::= "(" endpoint "," endpoint ("," endpoint)* ")"
 fanout         ::= "{" fanout_arm ("," fanout_arm)* "}"
 fanout_arm     ::= stage ("->" stage)*
@@ -495,13 +499,13 @@ combinator     ::= map_comb | fault_map_comb | reduce_comb | scan_comb
 
 map_comb       ::= "map" IDENT
 fault_map_comb ::= "fault" "map" IDENT "{"
-                   "ok" "->" IDENT ","
-                   "fault" "->" IDENT
+                   "ok" "->" variable_ref ","
+                   "fault" "->" variable_ref
                    "}"
-reduce_comb    ::= "reduce" IDENT "(" "identity" ":" literal ")"
-scan_comb      ::= "scan"   IDENT "(" "identity" ":" literal ")"
+reduce_comb    ::= "reduce" IDENT "(" "identity" ":" endpoint ")"
+scan_comb      ::= "scan"   IDENT "(" "identity" ":" endpoint ")"
 repeat_comb    ::= "repeat" "<" repeat_count ">" IDENT
-repeat_count   ::= INT | IDENT
+repeat_count   ::= INT | variable_ref
 select_comb    ::= "select"
 stencil_comb   ::= "stencil2d" "radius" "<" INT ">" IDENT
 grid_comb      ::= "grid" "<" grid_dim ("," grid_dim)* ">" grid_body

@@ -136,16 +136,16 @@ Returns the larger of two numeric values. Integer with integer returns
 import std.math { add, eq, mul, rem, lt }
 
 node is_sum_one(x: Real, y: Real, n: Int) -> out: Bool {
-    (x, y) -> add -> sum
-    (n, 1) -> eq -> out
+    ($x, $y) -> add -> $sum
+    ($n, 1) -> eq -> $out
 }
 
 node is_divisible(n: Int, d: Int) -> out: Bool {
-    (n, d) -> rem -> r
-    (r, 0) -> eq -> out
+    ($n, $d) -> rem -> $r
+    ($r, 0) -> eq -> $out
 }
 
 node is_positive(n: Int) -> out: Bool {
-    (n, 0) -> gt -> out
+    ($n, 0) -> gt -> $out
 }
 ```

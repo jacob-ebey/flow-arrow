@@ -9,11 +9,11 @@ fn std_fault_nodes_run() {
         import std.real { parse_real }
 
         program main(args: Args) -> exit_code: Int {
-            ["1", "bad"] -> fault map parse_real { ok -> numbers, fault -> faults }
-            faults -> has_faults -> invalid
-            faults -> format_faults -> message
-            message -> write_stderr -> stderr_status
-            (invalid, stderr_status, 1) -> select -> exit_code
+            ["1", "bad"] -> fault map parse_real { ok -> $numbers, fault -> $faults }
+            $faults -> has_faults -> $invalid
+            $faults -> format_faults -> $message
+            $message -> write_stderr -> $stderr_status
+            ($invalid, $stderr_status, 1) -> select -> $exit_code
         }
     "#;
 

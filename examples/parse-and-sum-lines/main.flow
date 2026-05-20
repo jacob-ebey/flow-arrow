@@ -23,22 +23,22 @@ import std.math { add, max }
 import std.predicates { not_empty }
 
 program main(args: Args) -> exit_code: Int {
-    () -> read_stdin                  -> input
-    input -> split_lines              -> raw_lines
-    raw_lines -> filter not_empty     -> lines
-    lines -> fault map parse_real { ok -> numbers, fault -> faults }
+    () -> read_stdin                  -> $input
+    $input -> split_lines              -> $raw_lines
+    $raw_lines -> filter not_empty     -> $lines
+    $lines -> fault map parse_real { ok -> $numbers, fault -> $faults }
 
-    numbers -> reduce add(identity: 0.0) -> total
-    total -> format_real              -> total_bytes
-    [total_bytes, "\n"] -> concat_bytes -> success_output
+    $numbers -> reduce add(identity: 0.0) -> $total
+    $total -> format_real              -> $total_bytes
+    [$total_bytes, "\n"] -> concat_bytes -> $success_output
 
-    faults -> has_faults              -> invalid_input
-    faults -> format_faults           -> fault_output
-    (invalid_input, "", success_output) -> select -> stdout_output
-    (invalid_input, fault_output, "") -> select -> stderr_output
+    $faults -> has_faults              -> $invalid_input
+    $faults -> format_faults           -> $fault_output
+    ($invalid_input, "", $success_output) -> select -> $stdout_output
+    ($invalid_input, $fault_output, "") -> select -> $stderr_output
 
-    stdout_output -> write_stdout     -> stdout_status
-    stderr_output -> write_stderr     -> stderr_status
-    (invalid_input, 65, stdout_status) -> select -> data_status
-    (data_status, stderr_status) -> max -> exit_code
+    $stdout_output -> write_stdout     -> $stdout_status
+    $stderr_output -> write_stderr     -> $stderr_status
+    ($invalid_input, 65, $stdout_status) -> select -> $data_status
+    ($data_status, $stderr_status) -> max -> $exit_code
 }

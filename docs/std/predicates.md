@@ -76,24 +76,24 @@ import std.bytes { split_lines }
 import std.predicates { not_empty, is_empty, and, or, xor, not, all, any }
 
 node non_empty_lines(input: Bytes) -> lines: Seq[Bytes] {
-    input -> split_lines -> raw_lines
-    raw_lines -> filter not_empty -> lines
+    $input -> split_lines -> $raw_lines
+    $raw_lines -> filter not_empty -> $lines
 }
 
 node either_flag(a: Bool, b: Bool) -> out: Bool {
-    (a, b) -> or -> out
+    ($a, $b) -> or -> $out
 }
 
 node both_flags(a: Bool, b: Bool) -> out: Bool {
-    (a, b) -> and -> out
+    ($a, $b) -> and -> $out
 }
 
 node exactly_one_flag(a: Bool, b: Bool) -> out: Bool {
-    (a, b) -> xor -> out
+    ($a, $b) -> xor -> $out
 }
 
 node sequence_checks(values: Seq[Bool]) -> (all_ok: Bool, any_ok: Bool) {
-    values -> all -> all_ok
-    values -> any -> any_ok
+    $values -> all -> $all_ok
+    $values -> any -> $any_ok
 }
 ```

@@ -1,14 +1,11 @@
 use crate::ast::*;
-use crate::stdlib::{self, RuntimeSupport, SymbolKind};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 
 pub fn emit_module(module: &Module) -> Result<String, String> {
-    let node_names = collect_node_names(module);
     let mut emitter = MermaidEmitter {
         out: String::new(),
         next_id: 0,
-        node_names,
     };
     emitter.line("flowchart TD");
     for decl in &module.declarations {
@@ -24,7 +21,6 @@ pub fn emit_module(module: &Module) -> Result<String, String> {
 struct MermaidEmitter {
     out: String,
     next_id: usize,
-    node_names: HashSet<String>,
 }
 
 impl MermaidEmitter {
@@ -57,9 +53,7 @@ impl MermaidEmitter {
         for (index, stage) in chain.stages.iter().enumerate() {
             let is_last = index + 1 == chain.stages.len();
             match stage {
-                Stage::Endpoint(Endpoint::Name(name))
-                    if is_last && !self.node_names.contains(name) =>
-                {
+                Stage::Endpoint(Endpoint::Variable(name)) if is_last => {
                     if env.insert(name.clone(), current.clone()).is_some() {
                         return Err(format!("value `{name}` is bound more than once"));
                     }
@@ -68,6 +62,11 @@ impl MermaidEmitter {
                     let operation = self.node(name, "    ");
                     self.edges(&current, &operation, None, "    ");
                     current = vec![operation];
+                }
+                Stage::Endpoint(Endpoint::Variable(_)) => {
+                    return Err(
+                        "variables may only appear as source values or final bindings".to_string(),
+                    );
                 }
                 Stage::Endpoint(_) => {
                     return Err("non-name endpoints may only appear as source values".to_string());
@@ -118,6 +117,16 @@ impl MermaidEmitter {
                     self.edges(&identity, &operation, Some("identity"), "    ");
                     current = vec![operation];
                 }
+                Stage::Scan { op, identity } => {
+                    let operation = self.node(
+                        &format!("scan {op}\nidentity: {}", endpoint_label(identity)),
+                        "    ",
+                    );
+                    self.edges(&current, &operation, None, "    ");
+                    let identity = self.emit_endpoint(identity, env)?;
+                    self.edges(&identity, &operation, Some("identity"), "    ");
+                    current = vec![operation];
+                }
             }
         }
         Ok(())
@@ -129,10 +138,11 @@ impl MermaidEmitter {
         env: &HashMap<String, Vec<String>>,
     ) -> Result<Vec<String>, String> {
         match endpoint {
-            Endpoint::Name(name) => env
+            Endpoint::Variable(name) => env
                 .get(name)
                 .cloned()
                 .ok_or_else(|| format!("unknown value `{name}`")),
+            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
             Endpoint::Tuple(items) | Endpoint::Seq(items) => {
                 let mut sources = Vec::new();
                 for item in items {
@@ -173,54 +183,9 @@ impl MermaidEmitter {
     }
 }
 
-fn collect_node_names(module: &Module) -> HashSet<String> {
-    let mut names = HashSet::new();
-    for symbol in stdlib::module_symbols(stdlib::INTRINSIC_MODULE) {
-        if symbol.kind == SymbolKind::Node && symbol.runtime != RuntimeSupport::Unsupported {
-            names.insert(symbol.name.to_string());
-        }
-    }
-    for decl in &module.declarations {
-        match decl {
-            Decl::Node(callable) => {
-                names.insert(callable.name.clone());
-            }
-            Decl::Program(_) => {}
-            Decl::Import(import) => collect_import_node_names(import, &mut names),
-        }
-    }
-    names
-}
-
-fn collect_import_node_names(import: &Import, names: &mut HashSet<String>) {
-    let ImportSource::Module(module) = &import.source else {
-        return;
-    };
-    match &import.clause {
-        ImportClause::Alias(alias) => {
-            for symbol in stdlib::module_symbols(module) {
-                if symbol.kind == SymbolKind::Node && symbol.runtime != RuntimeSupport::Unsupported
-                {
-                    names.insert(format!("{alias}.{}", symbol.name));
-                }
-            }
-        }
-        ImportClause::Items(items) => {
-            for item in items {
-                let Some(symbol) = stdlib::find_export(module, &item.name) else {
-                    continue;
-                };
-                if symbol.kind == SymbolKind::Node && symbol.runtime != RuntimeSupport::Unsupported
-                {
-                    names.insert(item.alias.as_deref().unwrap_or(&item.name).to_string());
-                }
-            }
-        }
-    }
-}
-
 fn endpoint_label(endpoint: &Endpoint) -> String {
     match endpoint {
+        Endpoint::Variable(name) => format!("${name}"),
         Endpoint::Name(name) => name.clone(),
         Endpoint::Int(value) => value.to_string(),
         Endpoint::Real(value) => {

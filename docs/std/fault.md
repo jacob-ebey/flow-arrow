@@ -38,7 +38,7 @@ A stable structured diagnostic model is still an open design question.
 import std.fault { has_faults, format_faults }
 
 node summarize_faults(faults: Seq[Fault]) -> (diagnostics: Bytes, invalid: Bool) {
-    faults -> has_faults -> invalid
-    faults -> format_faults -> diagnostics
+    $faults -> has_faults -> $invalid
+    $faults -> format_faults -> $diagnostics
 }
 ```

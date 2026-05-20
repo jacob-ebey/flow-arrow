@@ -141,6 +141,23 @@ define i32 @main(i32 %argc, ptr %argv) {\n\
             "argv",
             "read_stdin",
             "split_lines",
+            "trim",
+            "split_on",
+            "strip_prefix",
+            "strip_suffix",
+            "bytes_to_codes",
+            "codes_to_bytes",
+            "byte_length",
+            "length",
+            "group_by_id",
+            "zip",
+            "shift_right",
+            "head",
+            "bit_and",
+            "bit_or",
+            "bit_xor",
+            "bit_shl",
+            "bit_shr",
             "range_step",
             "format_int",
             "parse_int",
@@ -264,16 +281,19 @@ define i32 @main(i32 %argc, ptr %argv) {\n\
         for (index, stage) in chain.stages.iter().enumerate() {
             let is_last = index + 1 == chain.stages.len();
             match stage {
-                Stage::Endpoint(Endpoint::Name(name)) if is_last => {
-                    let canonical_name = self.canonical_name(name);
-                    if self.callables.contains_key(name) || is_builtin(&canonical_name) {
-                        value = self.emit_call(out, name, &value);
-                    } else if env.insert(name.clone(), value.clone()).is_some() {
+                Stage::Endpoint(Endpoint::Variable(name)) if is_last => {
+                    if env.insert(name.clone(), value.clone()).is_some() {
                         return Err(format!("value `{name}` is bound more than once"));
                     }
                 }
                 Stage::Endpoint(endpoint) => match endpoint {
                     Endpoint::Name(name) => value = self.emit_call(out, name, &value),
+                    Endpoint::Variable(_) => {
+                        return Err(
+                            "variables may only appear as source values or final bindings"
+                                .to_string(),
+                        );
+                    }
                     _ => return Err("non-name endpoints may only appear as values".to_string()),
                 },
                 Stage::Map(node) => {
@@ -329,6 +349,15 @@ define i32 @main(i32 %argc, ptr %argv) {\n\
                     ));
                     value = tmp;
                 }
+                Stage::Scan { op, identity } => {
+                    let identity_value = self.emit_endpoint_value(out, identity, env)?;
+                    let function = self.function_for(op)?;
+                    let tmp = self.next_temp();
+                    out.push_str(&format!(
+                        "  FaValue {tmp} = fa_scan({value}, {function}, {identity_value});\n"
+                    ));
+                    value = tmp;
+                }
             }
         }
         Ok(())
@@ -352,10 +381,11 @@ define i32 @main(i32 %argc, ptr %argv) {\n\
         env: &HashMap<String, String>,
     ) -> Result<String, String> {
         match endpoint {
-            Endpoint::Name(name) => env
+            Endpoint::Variable(name) => env
                 .get(name)
                 .cloned()
                 .ok_or_else(|| format!("unknown value `{name}`")),
+            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
             Endpoint::Int(value) => {
                 let tmp = self.next_temp();
                 out.push_str(&format!("  FaValue {tmp} = fa_int({value});\n"));
@@ -430,6 +460,23 @@ fn is_builtin(name: &str) -> bool {
         "argv"
             | "read_stdin"
             | "split_lines"
+            | "trim"
+            | "split_on"
+            | "strip_prefix"
+            | "strip_suffix"
+            | "bytes_to_codes"
+            | "codes_to_bytes"
+            | "byte_length"
+            | "length"
+            | "group_by_id"
+            | "zip"
+            | "shift_right"
+            | "head"
+            | "bit_and"
+            | "bit_or"
+            | "bit_xor"
+            | "bit_shl"
+            | "bit_shr"
             | "range_step"
             | "format_int"
             | "parse_int"
@@ -526,7 +573,7 @@ mod tests {
                 import std.cli { Args }
 
                 program main(args: Args) -> exit_code: Int {
-                    0 -> exit_code
+                    0 -> $exit_code
                 }
             "#,
         );
@@ -555,8 +602,8 @@ define i32 @main(i32 %argc, ptr %argv) {\n\
                 import std.io { read_stdin, write_stdout }
 
                 program main(args: Args) -> exit_code: Faultable[Int] {
-                    () -> read_stdin -> split_lines -> filter not_empty -> map parse_real -> reduce add(identity: 0.0) -> total
-                    total -> format_real -> write_stdout -> exit_code
+                    () -> read_stdin -> split_lines -> filter not_empty -> map parse_real -> reduce add(identity: 0.0) -> $total
+                    $total -> format_real -> write_stdout -> $exit_code
                 }
             "#,
         );

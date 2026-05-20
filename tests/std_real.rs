@@ -10,11 +10,11 @@ fn std_real_nodes_run() {
         import std.real { parse_real, format_real }
 
         program main(args: Args) -> exit_code: Faultable[Int] {
-            "2.5" -> parse_real -> parsed
-            (parsed, 0.5) -> add -> value
-            value -> format_real -> text
-            [text, "\n"] -> concat_bytes -> output
-            output -> write_stdout -> exit_code
+            "2.5" -> parse_real -> $parsed
+            ($parsed, 0.5) -> add -> $value
+            $value -> format_real -> $text
+            [$text, "\n"] -> concat_bytes -> $output
+            $output -> write_stdout -> $exit_code
         }
     "#;
 

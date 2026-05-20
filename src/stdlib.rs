@@ -7,6 +7,7 @@ mod io;
 mod math;
 mod predicates;
 mod real;
+mod seq;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
@@ -48,6 +49,13 @@ pub const SYMBOLS: &[StdSymbol] = &[
     bytes::SPLIT_LINES,
     bytes::CONCAT_BYTES,
     bytes::JOIN_BYTES,
+    bytes::TRIM,
+    bytes::SPLIT_ON,
+    bytes::STRIP_PREFIX,
+    bytes::STRIP_SUFFIX,
+    bytes::BYTES_TO_CODES,
+    bytes::CODES_TO_BYTES,
+    bytes::BYTE_LENGTH,
     cli::ARGV,
     cli::FLAG_PRESENT,
     cli::FLAG_VALUE,
@@ -58,6 +66,11 @@ pub const SYMBOLS: &[StdSymbol] = &[
     real::FORMAT_REAL,
     int::PARSE_INT,
     int::FORMAT_INT,
+    int::BIT_AND,
+    int::BIT_OR,
+    int::BIT_XOR,
+    int::BIT_SHL,
+    int::BIT_SHR,
     math::ADD,
     math::SUB,
     math::MUL,
@@ -81,6 +94,11 @@ pub const SYMBOLS: &[StdSymbol] = &[
     fault::FORMAT_FAULTS,
     intrinsic::RANGE_STEP,
     intrinsic::SELECT,
+    seq::LENGTH,
+    seq::GROUP_BY_ID,
+    seq::ZIP,
+    seq::SHIFT_RIGHT,
+    seq::HEAD,
 ];
 
 pub fn module_symbols(module: &str) -> impl Iterator<Item = &'static StdSymbol> + '_ {
@@ -96,7 +114,31 @@ pub fn find_export(module: &str, name: &str) -> Option<&'static StdSymbol> {
 pub fn supports_higher_order_call(name: &str) -> bool {
     matches!(
         name,
-        "parse_real" | "parse_int" | "not_empty" | "format_int" | "format_real" | "not"
+        "parse_real"
+            | "parse_int"
+            | "not_empty"
+            | "format_int"
+            | "format_real"
+            | "not"
+            | "trim"
+            | "bytes_to_codes"
+            | "codes_to_bytes"
+            | "byte_length"
+            | "length"
+            | "add"
+            | "sub"
+            | "mul"
+            | "max"
+            | "eq"
+            | "lt"
+            | "gt"
+            | "le"
+            | "ge"
+            | "bit_and"
+            | "bit_or"
+            | "bit_xor"
+            | "bit_shl"
+            | "bit_shr"
     )
 }
 

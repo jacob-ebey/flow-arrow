@@ -10,11 +10,11 @@ fn std_int_nodes_run() {
         import std.math { add }
 
         program main(args: Args) -> exit_code: Faultable[Int] {
-            "41" -> parse_int -> parsed
-            (parsed, 1) -> add -> value
-            value -> format_int -> text
-            [text, "\n"] -> concat_bytes -> output
-            output -> write_stdout -> exit_code
+            "41" -> parse_int -> $parsed
+            ($parsed, 1) -> add -> $value
+            $value -> format_int -> $text
+            [$text, "\n"] -> concat_bytes -> $output
+            $output -> write_stdout -> $exit_code
         }
     "#;
 

@@ -220,11 +220,11 @@ impl Parser {
                 self.expect(Token::LBrace)?;
                 self.expect_keyword("ok")?;
                 self.expect(Token::Arrow)?;
-                let ok = self.expect_ident()?;
+                let ok = self.expect_variable()?;
                 self.expect(Token::Comma)?;
                 self.expect_keyword("fault")?;
                 self.expect(Token::Arrow)?;
-                let fault = self.expect_ident()?;
+                let fault = self.expect_variable()?;
                 self.expect(Token::RBrace)?;
                 Ok(Stage::FaultMap { node, ok, fault })
             }
@@ -236,7 +236,7 @@ impl Parser {
                 self.bump();
                 self.expect(Token::Less)?;
                 let count = match self.peek().clone() {
-                    Token::Ident(_) | Token::Int(_) => self.parse_endpoint()?,
+                    Token::Variable(_) | Token::Int(_) => self.parse_endpoint()?,
                     other => return Err(format!("expected repeat count, found {other:?}")),
                 };
                 self.expect(Token::Greater)?;
@@ -253,20 +253,28 @@ impl Parser {
                 self.expect(Token::RParen)?;
                 Ok(Stage::Reduce { op, identity })
             }
+            Some("scan") => {
+                self.bump();
+                let op = self.expect_ident()?;
+                self.expect(Token::LParen)?;
+                self.expect_keyword("identity")?;
+                self.expect(Token::Colon)?;
+                let identity = self.parse_endpoint()?;
+                self.expect(Token::RParen)?;
+                Ok(Stage::Scan { op, identity })
+            }
+            Some(_) => Ok(Stage::Endpoint(Endpoint::Name(
+                self.parse_qualified_ident()?,
+            ))),
             _ => Ok(Stage::Endpoint(self.parse_endpoint()?)),
         }
     }
 
     fn parse_endpoint(&mut self) -> Result<Endpoint, String> {
         match self.peek().clone() {
-            Token::Ident(name) => {
+            Token::Variable(name) => {
                 self.bump();
-                if self.eat(Token::Dot) {
-                    let member = self.expect_ident()?;
-                    Ok(Endpoint::Name(format!("{name}.{member}")))
-                } else {
-                    Ok(Endpoint::Name(name))
-                }
+                Ok(Endpoint::Variable(name))
             }
             Token::Int(value) => {
                 self.bump();
@@ -286,6 +294,7 @@ impl Parser {
             }
             Token::LParen => self.parse_tuple_or_unit(),
             Token::LBracket => self.parse_seq(),
+            Token::Ident(name) => Err(format!("expected variable `$` prefix for value `{name}`")),
             other => Err(format!("expected endpoint, found {other:?}")),
         }
     }
@@ -354,6 +363,17 @@ impl Parser {
                 Ok(name)
             }
             other => Err(format!("expected identifier, found {other:?}")),
+        }
+    }
+
+    fn expect_variable(&mut self) -> Result<String, String> {
+        match self.peek().clone() {
+            Token::Variable(name) => {
+                self.bump();
+                Ok(name)
+            }
+            Token::Ident(name) => Err(format!("expected variable `$` prefix for `{name}`")),
+            other => Err(format!("expected variable, found {other:?}")),
         }
     }
 

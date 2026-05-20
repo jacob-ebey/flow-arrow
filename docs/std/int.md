@@ -34,7 +34,7 @@ Formats an `Int` as deterministic ASCII decimal bytes.
 import std.int { parse_int, format_int }
 
 node parse_then_format(input: Bytes) -> output: Faultable[Bytes] {
-    input -> parse_int -> n
-    n -> format_int -> output
+    $input -> parse_int -> $n
+    $n -> format_int -> $output
 }
 ```

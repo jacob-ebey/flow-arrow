@@ -7,10 +7,10 @@ fn intrinsic_nodes_run() {
         import std.math { add, eq }
 
         program main(args: Args) -> exit_code: Int {
-            (0, 5, 2) -> range_step -> values
-            values -> reduce add(identity: 0) -> sum
-            (sum, 6) -> eq -> ok
-            (ok, 0, 1) -> select -> exit_code
+            (0, 5, 2) -> range_step -> $values
+            $values -> reduce add(identity: 0) -> $sum
+            ($sum, 6) -> eq -> $ok
+            ($ok, 0, 1) -> select -> $exit_code
         }
     "#;
 

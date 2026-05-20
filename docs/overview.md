@@ -15,9 +15,9 @@ FlowArrow defines “optimal” as:
 
 ```flow
 node name(input1: Type, input2: Type) -> output: Type {
-    input1 -> opA -> a
-    input2 -> opB -> b
-    (a, b) -> opC -> output
+    $input1 -> opA -> $a
+    $input2 -> opB -> $b
+    ($a, $b) -> opC -> $output
 }
 ```
 
@@ -26,17 +26,17 @@ A block is **not sequential**. Lines merely declare graph edges.
 This:
 
 ```flow
-x -> f -> a
-x -> g -> b
-(a, b) -> h -> y
+$x -> f -> $a
+$x -> g -> $b
+($a, $b) -> h -> $y
 ```
 
 means:
 
 ```text
-        ┌─> f ─> a ─┐
-x ──────┤           ├─> h ─> y
-        └─> g ─> b ─┘
+         ┌─> f ─> $a ─┐
+$x ──────┤            ├─> h ─> $y
+         └─> g ─> $b ─┘
 ```
 
 `f` and `g` must execute in parallel if resources exist.
@@ -46,16 +46,16 @@ x ──────┤           ├─> h ─> y
 # 2. Values are single-assignment
 
 ```flow
-x -> square -> sx
+$x -> square -> $sx
 ```
 
-binds `sx` exactly once.
+binds `$sx` exactly once.
 
 Illegal:
 
 ```flow
-x -> square -> y
-z -> sqrt -> y       # illegal: y already defined
+$x -> square -> $y
+$z -> sqrt -> $y       # illegal: y already defined
 ```
 
 There is no reassignment.
@@ -65,14 +65,14 @@ There is no reassignment.
 # 3. Fan-out
 
 ```flow
-x -> {
-    normalize -> n,
-    histogram -> h,
-    edges     -> e
+$x -> {
+    normalize -> $n,
+    histogram -> $h,
+    edges     -> $e
 }
 ```
 
-Equivalent to three independent outgoing edges from `x`.
+Equivalent to three independent outgoing edges from `$x`.
 
 No branch is ordered before another.
 
@@ -81,10 +81,10 @@ No branch is ordered before another.
 # 4. Join
 
 ```flow
-(a, b, c) -> combine -> result
+($a, $b, $c) -> combine -> $result
 ```
 
-`combine` waits only for `a`, `b`, and `c`.
+`combine` waits only for `$a`, `$b`, and `$c`.
 
 No other dependency exists.
 
@@ -95,15 +95,15 @@ No other dependency exists.
 For multi-input operations, ports may be explicit:
 
 ```flow
-image  -> convolve.image
-kernel -> convolve.kernel
-convolve.out -> blurred
+$image  -> convolve.image
+$kernel -> convolve.kernel
+convolve.out -> $blurred
 ```
 
 Equivalent shorthand:
 
 ```flow
-(image, kernel) -> convolve -> blurred
+($image, $kernel) -> convolve -> $blurred
 ```
 
 Named ports are useful when order would be unclear.
@@ -114,9 +114,9 @@ Named ports are useful when order would be unclear.
 
 ```flow
 node hypot(x: Real, y: Real) -> r: Real {
-    x -> square -> xx
-    y -> square -> yy
-    (xx, yy) -> add -> sqrt -> r
+    $x -> square -> $xx
+    $y -> square -> $yy
+    ($xx, $yy) -> add -> sqrt -> $r
 }
 ```
 
@@ -149,9 +149,9 @@ because ordinary branching hides scheduling choices.
 Instead, it has pure data selection:
 
 ```flow
-x -> neg -> nx
-x -> is_positive -> p
-(p, x, nx) -> select -> absx
+$x -> neg -> $nx
+$x -> is_positive -> $p
+($p, $x, $nx) -> select -> $absx
 ```
 
 `select` is a pure dataflow node:
@@ -171,7 +171,7 @@ Collections are first-class, but only through parallel-safe combinators.
 ## `map`
 
 ```flow
-xs -> map square -> ys
+$xs -> map square -> $ys
 ```
 
 Means each element is independent:
@@ -187,8 +187,8 @@ No element may observe or mutate another.
 ## `zip`
 
 ```flow
-(xs, ys) -> zip -> pairs
-pairs -> map multiply_pair -> products
+($xs, $ys) -> zip -> $pairs
+$pairs -> map multiply_pair -> $products
 ```
 
 ---
@@ -199,10 +199,10 @@ Reductions require an associative operation and identity.
 
 ```flow
 node dot(xs: Vec[N, Real], ys: Vec[N, Real]) -> s: Real {
-    (xs, ys) -> zip
+    ($xs, $ys) -> zip
              -> map multiply_pair
              -> reduce add(identity: 0)
-             -> s
+             -> $s
 }
 ```
 
@@ -211,7 +211,7 @@ node dot(xs: Vec[N, Real], ys: Vec[N, Real]) -> s: Real {
 Illegal:
 
 ```flow
-xs -> reduce subtract(identity: 0) -> y
+$xs -> reduce subtract(identity: 0) -> $y
 ```
 
 because subtraction is not associative.
@@ -223,7 +223,7 @@ because subtraction is not associative.
 Prefix operations are allowed only for associative operators:
 
 ```flow
-xs -> scan add(identity: 0) -> prefix_sums
+$xs -> scan add(identity: 0) -> $prefix_sums
 ```
 
 The compiler emits a parallel prefix tree.
@@ -238,9 +238,9 @@ graph stays static; only the *width* of parallel regions varies.
 `range` produces a sequence of integers from a runtime length:
 
 ```flow
-n -> range -> idxs                    # idxs : Seq[Int], length = n
-idxs -> map compute_pixel -> pixels
-pixels -> reduce add(identity: 0) -> total
+$n -> range -> $idxs                    # $idxs : Seq[Int], length = $n
+$idxs -> map compute_pixel -> $pixels
+$pixels -> reduce add(identity: 0) -> $total
 ```
 
 `range_between` and `range_step` produce sequences from `(start, stop)`
@@ -251,13 +251,13 @@ compiled as a parallel predicate evaluation followed by a parallel
 prefix-sum compaction — topology stays static:
 
 ```flow
-xs -> filter is_positive -> positives
+$xs -> filter is_positive -> $positives
 ```
 
 `length` reports the runtime length of a sequence:
 
 ```flow
-xs -> length -> n
+$xs -> length -> $n
 ```
 
 `grid<...>` dimensions and `repeat<...>` counts may also be runtime
@@ -271,11 +271,11 @@ or how they are connected:
 
 ```flow
 # illegal — operator is chosen at runtime
-op_name -> lookup_op -> op
-xs -> map op -> ys
+$op_name -> lookup_op -> $op
+$xs -> map $op -> $ys
 
 # illegal — sequential element-to-element dependency
-xs -> take_while is_positive -> prefix
+$xs -> take_while is_positive -> $prefix
 ```
 
 The full forbidden list lives in `syntax.md` §8.
@@ -290,14 +290,14 @@ Allowed with a compile-time count (the body unrolls into a fixed
 dataflow chain):
 
 ```flow
-state -> repeat<10> step -> final
+$state -> repeat<10> step -> $final
 ```
 
 Allowed with a runtime count (the body is a single static graph; the
 runtime executes it `n` times):
 
 ```flow
-(state, n) -> repeat<n> step -> final
+($state, $n) -> repeat<$n> step -> $final
 ```
 
 In both cases the *graph shape* is static. Only the *number of
@@ -307,7 +307,7 @@ Illegal:
 
 ```flow
 while not_done {
-    state -> step -> state
+    $state -> step -> $state
 }
 ```
 
@@ -323,8 +323,8 @@ Illegal:
 ```flow
 node fib(n: Int) -> r: Int {
     ...
-    n1 -> fib -> a
-    n2 -> fib -> b
+    $n1 -> fib -> $a
+    $n2 -> fib -> $b
     ...
 }
 ```
@@ -341,7 +341,7 @@ Every node is pure.
 
 ```flow
 node blur(img: Image[H, W], kernel: Kernel[3, 3]) -> out: Image[H, W] {
-    (img, kernel) -> stencil2d radius<1> convolve_pixel -> out
+    ($img, $kernel) -> stencil2d radius<1> convolve_pixel -> $out
 }
 ```
 
@@ -360,13 +360,13 @@ A node may not:
 Randomness must be explicit:
 
 ```flow
-(seed, index) -> random_uniform -> value
+($seed, $index) -> random_uniform -> $value
 ```
 
 Time must be explicit:
 
 ```flow
-timestamp -> compute_deadline -> deadline
+$timestamp -> compute_deadline -> $deadline
 ```
 
 ---
@@ -381,9 +381,9 @@ import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 
 program main(args: Args) -> exit_code: Int {
-    () -> read_stdin -> input
-    input -> parse -> transform -> encode -> output
-    output -> write_stdout -> exit_code
+    () -> read_stdin -> $input
+    $input -> parse -> transform -> encode -> $output
+    $output -> write_stdout -> $exit_code
 }
 ```
 
@@ -439,13 +439,13 @@ Selective imports make imported declarations available as ordinary
 names:
 
 ```flow
-input -> split_lines -> lines
+$input -> split_lines -> $lines
 ```
 
 Qualified imports require the alias:
 
 ```flow
-(x, y) -> math.add -> sum
+($x, $y) -> math.add -> $sum
 ```
 
 The `math.add` reference is still a statically resolved computation
@@ -458,8 +458,8 @@ Local imports work the same way:
 import "./image/filters.flow" as filters
 
 node enhance(img: Image[H, W, RGB]) -> out: Image[H, W, RGB] {
-    img -> filters.normalize -> n
-    n -> filters.sharpen -> out
+    $img -> filters.normalize -> $n
+    $n -> filters.sharpen -> $out
 }
 ```
 
@@ -492,23 +492,23 @@ The initial standard-library module surface is documented in
 
 ```flow
 node detect_edges(img: Image[H, W, RGB]) -> edges: Image[H, W, Gray] {
-    img -> {
-        grayscale -> gray,
-        histogram -> hist
+    $img -> {
+        grayscale -> $gray,
+        histogram -> $hist
     }
 
-    (gray, hist) -> equalize -> eq
-    eq -> gaussian_blur radius<2> -> smooth
-    smooth -> sobel -> edges
+    ($gray, $hist) -> equalize -> $eq
+    $eq -> gaussian_blur radius<2> -> $smooth
+    $smooth -> sobel -> $edges
 }
 ```
 
 The compiler sees:
 
 ```text
-             ┌─> grayscale ─> gray ─┐
-img ─────────┤                       ├─> equalize ─> gaussian_blur ─> sobel ─> edges
-             └─> histogram ─> hist ──┘
+              ┌─> grayscale ─> $gray ─┐
+$img ─────────┤                        ├─> equalize ─> gaussian_blur ─> sobel ─> $edges
+              └─> histogram ─> $hist ──┘
 ```
 
 `grayscale` and `histogram` are independent.
@@ -523,13 +523,13 @@ node matmul(
     b: Matrix[K, N, Real]
 ) -> c: Matrix[M, N, Real] {
 
-    (a, b) -> grid<M, N> {
+    ($a, $b) -> grid<M, N> {
         cell(i, j) {
-            a.row<i> -> ar
-            b.col<j> -> bc
-            (ar, bc) -> dot -> out
+            a.row<i> -> $ar
+            b.col<j> -> $bc
+            ($ar, $bc) -> dot -> $out
         }
-    } -> c
+    } -> $c
 }
 ```
 
@@ -581,38 +581,38 @@ import std.math as math
 import "./filters.flow" { blur, sobel as detect_edges }
 
 # pipeline
-x -> f -> y
+$x -> f -> $y
 
 # fan-out
-x -> { f -> a, g -> b }
+$x -> { f -> $a, g -> $b }
 
 # join
-(a, b) -> h -> y
+($a, $b) -> h -> $y
 
 # named input ports
-x -> op.left
-y -> op.right
-op.out -> z
+$x -> op.left
+$y -> op.right
+op.out -> $z
 
 # map
-xs -> map f -> ys
+$xs -> map f -> $ys
 
 # reduce
-xs -> reduce associative_op(identity: e) -> y
+$xs -> reduce associative_op(identity: $e) -> $y
 
 # scan
-xs -> scan associative_op(identity: e) -> ys
+$xs -> scan associative_op(identity: $e) -> $ys
 
 # fixed or runtime repeat
-x -> repeat<N> step -> y         # N may be a literal or a runtime Int
+$x -> repeat<$n> step -> $y      # repeat count may be a literal or runtime Int
 
 # pure selection
-(predicate, true_value, false_value) -> select -> y
+($predicate, $true_value, $false_value) -> select -> $y
 
 # dynamic-size sequences
-n -> range -> idxs
-xs -> filter pred -> ys
-xs -> length -> n
+$n -> range -> $idxs
+$xs -> filter pred -> $ys
+$xs -> length -> $n
 ```
 
 ---

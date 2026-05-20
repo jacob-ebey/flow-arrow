@@ -37,7 +37,7 @@ Formats a `Real` as deterministic ASCII bytes.
 import std.real { parse_real, format_real }
 
 node parse_then_format(input: Bytes) -> output: Faultable[Bytes] {
-    input -> parse_real -> n
-    n -> format_real -> output
+    $input -> parse_real -> $n
+    $n -> format_real -> $output
 }
 ```

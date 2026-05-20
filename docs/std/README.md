@@ -30,10 +30,10 @@ import std.math { add }
 import std.predicates { not_empty }
 
 program main(args: Args) -> exit_code: Int {
-    () -> read_stdin -> input
-    input -> split_lines -> lines
-    lines -> transform -> output
-    output -> write_stdout -> exit_code
+    () -> read_stdin -> $input
+    $input -> split_lines -> $lines
+    $lines -> transform -> $output
+    $output -> write_stdout -> $exit_code
 }
 ```
 

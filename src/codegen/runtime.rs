@@ -5,6 +5,7 @@ mod core;
 mod int_real;
 mod io;
 mod math;
+mod seq;
 
 const PARTS: &[&str] = &[
     core::C,
@@ -13,6 +14,7 @@ const PARTS: &[&str] = &[
     bytes::C,
     int_real::C,
     math::C,
+    seq::C,
     control::C,
 ];
 

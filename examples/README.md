@@ -6,7 +6,7 @@ Every example imports the small set of standard-library nodes it uses.
 The initial stdlib surface is documented in [`docs/std/`](../docs/std/):
 
 ```flow
-import std.bytes { split_lines, concat_bytes, join_bytes }
+import std.bytes { split_lines, concat_bytes, join_bytes, trim, split_on, strip_prefix, strip_suffix }
 import std.cli { Args, argv }
 import std.io { read_stdin, write_stdout }
 import std.real { parse_real, format_real }
@@ -25,6 +25,10 @@ format_int        : Int   -> Bytes                 # propagates Faultable[Int] -
 format_real       : Real  -> Bytes                 # propagates Faultable[Real] -> Faultable[Bytes]
 concat_bytes      : Seq[Bytes] -> Bytes              # associative; identity: ""
 join_bytes        : (Seq[Bytes], Bytes) -> Bytes     # joins with separator
+trim              : Bytes -> Bytes                   # strips leading/trailing ASCII whitespace
+split_on          : (Bytes, Bytes) -> Seq[Bytes]     # splits on a non-empty byte separator
+strip_prefix      : (Bytes, Bytes) -> Faultable[Bytes] # faults if input does not start with prefix
+strip_suffix      : (Bytes, Bytes) -> Faultable[Bytes] # faults if input does not end with suffix
 
 # Boundary I/O
 Args              # CLI argument/flag input type
@@ -80,3 +84,4 @@ Mermaid `flowchart TD` diagram.
 | `parse-and-sum-lines/`        | Minimal pressure test for parse faults and graph-visible fault semantics. |
 | `99-bottles/`                 | Pure string generation via `range_step` + `map` + concat reduce. |
 | `fibonacci/`                  | Stdin integer parsing and FlowArrow Fibonacci iteration. |
+| `json-parser/`                | Flat JSON array of numbers → JSON summary object, with bracket framing and fault routing. |

@@ -66,3 +66,50 @@ static FaValue fa_builtin_format_real(FaValue input) {
   return fa_bytes_from_slice(buf, strlen(buf));
 }
 
+
+static FaValue fa_builtin_bit_and(FaValue input) {
+  if (input.kind == FA_FAULT) return input;
+  FaValue pair = fa_expect_seq(input, "bit_and");
+  if (pair.seq.count != 2) fa_die_usage("flowarrow runtime: bit_and expected (Int, Int)");
+  int64_t a = fa_expect_int(pair.seq.items[0], "bit_and");
+  int64_t b = fa_expect_int(pair.seq.items[1], "bit_and");
+  return fa_int(a & b);
+}
+
+static FaValue fa_builtin_bit_or(FaValue input) {
+  if (input.kind == FA_FAULT) return input;
+  FaValue pair = fa_expect_seq(input, "bit_or");
+  if (pair.seq.count != 2) fa_die_usage("flowarrow runtime: bit_or expected (Int, Int)");
+  int64_t a = fa_expect_int(pair.seq.items[0], "bit_or");
+  int64_t b = fa_expect_int(pair.seq.items[1], "bit_or");
+  return fa_int(a | b);
+}
+
+static FaValue fa_builtin_bit_xor(FaValue input) {
+  if (input.kind == FA_FAULT) return input;
+  FaValue pair = fa_expect_seq(input, "bit_xor");
+  if (pair.seq.count != 2) fa_die_usage("flowarrow runtime: bit_xor expected (Int, Int)");
+  int64_t a = fa_expect_int(pair.seq.items[0], "bit_xor");
+  int64_t b = fa_expect_int(pair.seq.items[1], "bit_xor");
+  return fa_int(a ^ b);
+}
+
+static FaValue fa_builtin_bit_shl(FaValue input) {
+  if (input.kind == FA_FAULT) return input;
+  FaValue pair = fa_expect_seq(input, "bit_shl");
+  if (pair.seq.count != 2) fa_die_usage("flowarrow runtime: bit_shl expected (Int, Int)");
+  int64_t a = fa_expect_int(pair.seq.items[0], "bit_shl");
+  int64_t b = fa_expect_int(pair.seq.items[1], "bit_shl");
+  if (b < 0 || b >= 64) return fa_fault_from_cstr("bit_shl: shift out of 0..63");
+  return fa_int((int64_t)((uint64_t)a << b));
+}
+
+static FaValue fa_builtin_bit_shr(FaValue input) {
+  if (input.kind == FA_FAULT) return input;
+  FaValue pair = fa_expect_seq(input, "bit_shr");
+  if (pair.seq.count != 2) fa_die_usage("flowarrow runtime: bit_shr expected (Int, Int)");
+  int64_t a = fa_expect_int(pair.seq.items[0], "bit_shr");
+  int64_t b = fa_expect_int(pair.seq.items[1], "bit_shr");
+  if (b < 0 || b >= 64) return fa_fault_from_cstr("bit_shr: shift out of 0..63");
+  return fa_int((int64_t)((uint64_t)a >> b));
+}

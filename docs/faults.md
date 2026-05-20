@@ -51,7 +51,7 @@ operation, the faultability propagates through its output type:
 
 ```flow
 program main(args: Args) -> exit_code: Faultable[Int] {
-    () -> read_stdin -> parse_int -> exit_code
+    () -> read_stdin -> parse_int -> $exit_code
 }
 ```
 
@@ -60,21 +60,21 @@ If a definition handles the fault path, it may return a non-faultable
 type:
 
 ```flow
-lines -> fault map parse_real { ok -> numbers, fault -> faults }
+$lines -> fault map parse_real { ok -> $numbers, fault -> $faults }
 ```
 
-`fault map` partitions a `Seq[Faultable[T]]` into `numbers : Seq[T]` and
-`faults : Seq[Fault]`. The fault path is ordinary dataflow: it can be
+`fault map` partitions a `Seq[Faultable[T]]` into `$numbers : Seq[T]` and
+`$faults : Seq[Fault]`. The fault path is ordinary dataflow: it can be
 formatted, routed to `write_stderr`, and used to derive the final
-`exit_code`.
+`$exit_code`.
 
 ## Seed example
 
 `examples/parse-and-sum-lines/` is the minimal design case:
 
 ```flow
-lines -> fault map parse_real { ok -> numbers, fault -> faults }
-numbers -> reduce add(identity: 0.0) -> total
+$lines -> fault map parse_real { ok -> $numbers, fault -> $faults }
+$numbers -> reduce add(identity: 0.0) -> $total
 ```
 
 The design question this example now exercises is how `parse_real`

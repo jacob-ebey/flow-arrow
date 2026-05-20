@@ -9,7 +9,7 @@ fn std_cli_args_type_runs() {
         import std.cli { Args }
 
         program main(args: Args) -> exit_code: Int {
-            0 -> exit_code
+            0 -> $exit_code
         }
     "#;
 
@@ -29,9 +29,9 @@ fn std_cli_argv_runs() {
         import std.io { write_stdout }
 
         program main(args: Args) -> exit_code: Int {
-            args -> argv -> raw_args
-            raw_args -> concat_bytes -> output
-            output -> write_stdout -> exit_code
+            $args -> argv -> $raw_args
+            $raw_args -> concat_bytes -> $output
+            $output -> write_stdout -> $exit_code
         }
     "#;
 
@@ -54,16 +54,16 @@ fn std_cli_argv_runs() {
 #[test]
 fn std_cli_unsupported_flag_nodes_are_rejected() {
     for (name, input) in [
-        ("flag_present", r#"(args, "--verbose")"#),
-        ("flag_value", r#"(args, "--name")"#),
+        ("flag_present", r#"($args, "--verbose")"#),
+        ("flag_value", r#"($args, "--name")"#),
     ] {
         let source = format!(
             r#"
                 import std.cli {{ Args, {name} }}
 
                 program main(args: Args) -> exit_code: Int {{
-                    {input} -> {name} -> unused
-                    0 -> exit_code
+                    {input} -> {name} -> $unused
+                    0 -> $exit_code
                 }}
             "#
         );

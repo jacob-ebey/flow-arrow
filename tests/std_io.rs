@@ -8,10 +8,10 @@ fn std_io_nodes_run() {
         import std.math { add }
 
         program main(args: Args) -> exit_code: Int {
-            () -> read_stdin -> input
-            input -> write_stdout -> stdout_status
-            "err\n" -> write_stderr -> stderr_status
-            (stdout_status, stderr_status) -> add -> exit_code
+            () -> read_stdin -> $input
+            $input -> write_stdout -> $stdout_status
+            "err\n" -> write_stderr -> $stderr_status
+            ($stdout_status, $stderr_status) -> add -> $exit_code
         }
     "#;
 

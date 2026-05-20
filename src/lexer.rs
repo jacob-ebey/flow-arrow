@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Ident(String),
+    Variable(String),
     Int(i64),
     Real(f64),
     Bool(bool),
@@ -52,6 +53,7 @@ impl Lexer {
                 }
                 '-' | '0'..='9' => self.lex_number()?,
                 '"' => self.lex_string()?,
+                '$' => self.lex_variable()?,
                 '(' => self.push_one(Token::LParen),
                 ')' => self.push_one(Token::RParen),
                 '{' => self.push_one(Token::LBrace),
@@ -171,6 +173,24 @@ impl Lexer {
             "false" => self.tokens.push(Token::Bool(false)),
             _ => self.tokens.push(Token::Ident(text)),
         }
+    }
+
+    fn lex_variable(&mut self) -> Result<(), String> {
+        self.pos += 1;
+        let start = self.pos;
+        match self.peek() {
+            Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {}
+            Some(other) => {
+                return Err(format!("expected variable name after `$`, found `{other}`"));
+            }
+            None => return Err("expected variable name after `$`".to_string()),
+        }
+        while matches!(self.peek(), Some(ch) if ch.is_ascii_alphanumeric() || ch == '_') {
+            self.pos += 1;
+        }
+        let text: String = self.chars[start..self.pos].iter().collect();
+        self.tokens.push(Token::Variable(text));
+        Ok(())
     }
 
     fn peek(&self) -> Option<char> {

@@ -9,6 +9,13 @@ static FaValue fa_map(FaValue input, FaFunction fn) {
 }
 
 static FaFaultMapResult fa_fault_map(FaValue input, FaFunction fn) {
+  if (input.kind == FA_FAULT) {
+    FaFaultMapResult pair;
+    pair.ok = fa_seq_new(0);
+    pair.faults = fa_seq_new(1);
+    fa_seq_set(&pair.faults, 0, input);
+    return pair;
+  }
   FaValue seq = fa_expect_seq(input, "fault map");
   FaValue ok = fa_seq_new(seq.seq.count);
   FaValue faults = fa_seq_new(seq.seq.count);
@@ -83,6 +90,21 @@ static FaValue fa_reduce(FaValue input, FaReduceOp op, FaValue identity) {
   }
   fa_die_usage("flowarrow runtime: unsupported reduce op");
   return fa_unit();
+}
+
+static FaValue fa_scan(FaValue input, FaFunction op, FaValue identity) {
+  if (input.kind == FA_FAULT) return input;
+  FaValue seq = fa_expect_seq(input, "scan");
+  FaValue out = fa_seq_new(seq.seq.count);
+  FaValue state = identity;
+  for (size_t i = 0; i < seq.seq.count; i++) {
+    FaValue pair = fa_seq_new(2);
+    fa_seq_set(&pair, 0, state);
+    fa_seq_set(&pair, 1, seq.seq.items[i]);
+    state = op(pair);
+    fa_seq_set(&out, i, state);
+  }
+  return out;
 }
 
 static int fa_value_to_exit_code(FaValue value) {

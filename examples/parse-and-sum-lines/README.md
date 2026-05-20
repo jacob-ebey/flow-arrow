@@ -39,7 +39,7 @@ program should not use the fault mechanism as a substitute for `select`,
 This example uses the proposed partitioning syntax:
 
 ```flow
-lines -> fault map parse_real { ok -> numbers, fault -> faults }
+$lines -> fault map parse_real { ok -> $numbers, fault -> $faults }
 ```
 
 The `ok` output is a `Seq[Real]` containing successfully parsed values.
@@ -72,7 +72,7 @@ add(identity: 0.0)` can still lower to a balanced reduction tree.
 This example deliberately needs only one faultable operation:
 
 ```flow
-lines -> fault map parse_real { ok -> numbers, fault -> faults }
+$lines -> fault map parse_real { ok -> $numbers, fault -> $faults }
 ```
 
 That keeps the design focused on the semantics of faultable pure nodes,

@@ -16,10 +16,10 @@ import std.real { parse_real, format_real }
 import std.math { add }
 
 program main(args: Args) -> exit_code: Faultable[Int] {
-    args -> argv -> raw_args
-    raw_args -> map parse_real -> numbers
-    numbers -> reduce add(identity: 0.0) -> total
-    total -> format_real -> total_bytes
-    [total_bytes, "\n"] -> concat_bytes -> output
-    output -> write_stdout -> exit_code
+    $args -> argv -> $raw_args
+    $raw_args -> map parse_real -> $numbers
+    $numbers -> reduce add(identity: 0.0) -> $total
+    $total -> format_real -> $total_bytes
+    [$total_bytes, "\n"] -> concat_bytes -> $output
+    $output -> write_stdout -> $exit_code
 }

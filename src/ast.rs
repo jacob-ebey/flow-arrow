@@ -56,6 +56,7 @@ pub struct Chain {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Endpoint {
+    Variable(String),
     Name(String),
     Int(i64),
     Real(f64),
@@ -81,6 +82,10 @@ pub enum Stage {
         node: String,
     },
     Reduce {
+        op: String,
+        identity: Endpoint,
+    },
+    Scan {
         op: String,
         identity: Endpoint,
     },
