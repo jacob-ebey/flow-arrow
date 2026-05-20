@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::stdlib::{self, RuntimeSupport};
 use std::collections::{BTreeSet, HashMap};
 
 pub fn emit_module(module: &Module) -> Result<String, String> {
@@ -8,14 +9,16 @@ pub fn emit_module(module: &Module) -> Result<String, String> {
         string_id: 0,
         strings: Vec::new(),
         callables: HashMap::new(),
+        stdlib_names: HashMap::new(),
     };
+    generator.collect_imports(module)?;
     generator.collect_callables(module)?;
     generator.emit_prelude();
     for decl in &module.declarations {
         match decl {
             Decl::Node(callable) => generator.emit_callable(callable, false)?,
             Decl::Program(callable) => generator.emit_callable(callable, true)?,
-            Decl::Import => {}
+            Decl::Import(_) => {}
         }
     }
     generator.emit_entrypoint();
@@ -29,9 +32,49 @@ struct Codegen<'a> {
     string_id: usize,
     strings: Vec<(String, Vec<u8>)>,
     callables: HashMap<String, &'a Callable>,
+    stdlib_names: HashMap<String, String>,
 }
 
 impl<'a> Codegen<'a> {
+    fn collect_imports(&mut self, module: &Module) -> Result<(), String> {
+        for decl in &module.declarations {
+            let Decl::Import(import) = decl else {
+                continue;
+            };
+            let ImportSource::Module(module) = &import.source else {
+                continue;
+            };
+            match &import.clause {
+                ImportClause::Alias(alias) => {
+                    for symbol in stdlib::module_symbols(module) {
+                        if symbol.kind != stdlib::SymbolKind::Node
+                            || symbol.runtime == RuntimeSupport::Unsupported
+                        {
+                            continue;
+                        }
+                        self.stdlib_names
+                            .insert(format!("{alias}.{}", symbol.name), symbol.name.to_string());
+                    }
+                }
+                ImportClause::Items(items) => {
+                    for item in items {
+                        if let Some(symbol) = stdlib::find_export(module, &item.name) {
+                            if symbol.kind == stdlib::SymbolKind::Node
+                                && symbol.runtime != RuntimeSupport::Unsupported
+                            {
+                                self.stdlib_names.insert(
+                                    item.alias.as_deref().unwrap_or(&item.name).to_string(),
+                                    symbol.name.to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn collect_callables(&mut self, module: &'a Module) -> Result<(), String> {
         for decl in &module.declarations {
             match decl {
@@ -44,7 +87,7 @@ impl<'a> Codegen<'a> {
                         return Err(format!("duplicate declaration `{}`", callable.name));
                     }
                 }
-                Decl::Import => {}
+                Decl::Import(_) => {}
             }
         }
         if !self.callables.contains_key("main") {
@@ -117,7 +160,10 @@ impl<'a> Codegen<'a> {
             let is_last = index + 1 == chain.stages.len();
             match stage {
                 Stage::Endpoint(Endpoint::Name(name)) if is_last => {
-                    if self.callables.contains_key(name) || is_builtin_name(name) {
+                    let canonical_name = self.canonical_name(name);
+                    if self.callables.contains_key(name)
+                        || stdlib::direct_builtin(&canonical_name).is_some()
+                    {
                         value = self.emit_call(name, value)?;
                     } else if env.insert(name.clone(), value.clone()).is_some() {
                         return Err(format!("value `{name}` is bound more than once"));
@@ -144,7 +190,8 @@ impl<'a> Codegen<'a> {
                     value = tmp;
                 }
                 Stage::Reduce { op, identity } => {
-                    let op_name = self.emit_string_ptr(op);
+                    let canonical_op = self.canonical_name(op);
+                    let op_name = self.emit_string_ptr(&canonical_op);
                     let identity_value = self.emit_endpoint_value(identity, env)?;
                     let tmp = self.next_temp();
                     self.line(&format!(
@@ -166,7 +213,8 @@ impl<'a> Codegen<'a> {
             ));
             return Ok(tmp);
         }
-        let name_ptr = self.emit_string_ptr(name);
+        let canonical_name = self.canonical_name(name);
+        let name_ptr = self.emit_string_ptr(&canonical_name);
         let tmp = self.next_temp();
         self.line(&format!(
             "  {tmp} = call ptr @fa_builtin(ptr {name_ptr}, ptr {input})"
@@ -252,13 +300,10 @@ impl<'a> Codegen<'a> {
         if self.callables.contains_key(name) {
             return Ok(format!("@flow_node_{}", sanitize_symbol(name)));
         }
-        match name {
-            "parse_real" => Ok("@fa_parse_real".to_string()),
-            "not_empty" => Ok("@fa_not_empty".to_string()),
-            _ => Err(format!(
-                "`{name}` cannot be used as a map/filter function yet"
-            )),
-        }
+        let canonical_name = self.canonical_name(name);
+        stdlib::function_pointer(&canonical_name)
+            .map(ToString::to_string)
+            .ok_or_else(|| format!("`{name}` cannot be used as a map/filter function yet"))
     }
 
     fn emit_string_ptr(&mut self, value: &str) -> String {
@@ -299,6 +344,13 @@ impl<'a> Codegen<'a> {
         self.out.push_str(line);
         self.out.push('\n');
     }
+
+    fn canonical_name(&self, name: &str) -> String {
+        self.stdlib_names
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
 }
 
 fn sanitize_symbol(name: &str) -> String {
@@ -315,28 +367,6 @@ fn sanitize_symbol(name: &str) -> String {
 
 fn sanitize_local(name: &str) -> String {
     sanitize_symbol(name)
-}
-
-fn is_builtin_name(name: &str) -> bool {
-    matches!(
-        name,
-        "range_step"
-            | "range"
-            | "range_between"
-            | "read_stdin"
-            | "split_lines"
-            | "parse_real"
-            | "format_real"
-            | "add"
-            | "format_int"
-            | "sub_int"
-            | "eq_int"
-            | "select"
-            | "concat_bytes"
-            | "not_empty"
-            | "write_stdout"
-            | "write_stderr"
-    )
 }
 
 fn llvm_bytes(bytes: &[u8]) -> String {

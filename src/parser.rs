@@ -27,8 +27,7 @@ impl Parser {
         match self.peek_ident() {
             Some("import") => {
                 self.bump();
-                self.parse_import()?;
-                Ok(Decl::Import)
+                Ok(Decl::Import(self.parse_import()?))
             }
             Some("node") => {
                 self.bump();
@@ -42,29 +41,32 @@ impl Parser {
         }
     }
 
-    fn parse_import(&mut self) -> Result<(), String> {
-        match self.peek() {
-            Token::String(_) => {
+    fn parse_import(&mut self) -> Result<Import, String> {
+        let source = match self.peek().clone() {
+            Token::String(path) => {
                 self.bump();
+                ImportSource::Local(path)
             }
-            Token::Ident(_) => {
-                self.parse_qualified_ident()?;
-            }
+            Token::Ident(_) => ImportSource::Module(self.parse_qualified_ident()?),
             other => return Err(format!("expected import source, found {other:?}")),
-        }
-        match self.peek_ident() {
+        };
+        let clause = match self.peek_ident() {
             Some("as") => {
                 self.bump();
-                self.expect_ident()?;
+                ImportClause::Alias(self.expect_ident()?)
             }
             _ => {
                 self.expect(Token::LBrace)?;
+                let mut items = Vec::new();
                 loop {
-                    self.expect_ident()?;
-                    if self.peek_ident() == Some("as") {
+                    let name = self.expect_ident()?;
+                    let alias = if self.peek_ident() == Some("as") {
                         self.bump();
-                        self.expect_ident()?;
-                    }
+                        Some(self.expect_ident()?)
+                    } else {
+                        None
+                    };
+                    items.push(ImportItem { name, alias });
                     if self.eat(Token::Comma) {
                         if self.eat(Token::RBrace) {
                             break;
@@ -74,9 +76,10 @@ impl Parser {
                         break;
                     }
                 }
+                ImportClause::Items(items)
             }
-        }
-        Ok(())
+        };
+        Ok(Import { source, clause })
     }
 
     fn parse_callable(&mut self) -> Result<Callable, String> {

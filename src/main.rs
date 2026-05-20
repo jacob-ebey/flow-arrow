@@ -43,6 +43,16 @@ fn run_cli() -> Result<u8, String> {
             flowarrow::build_file(PathBuf::from(path).as_path(), emit_llvm.as_deref())?;
             Ok(0)
         }
-        _ => Err("usage: flowarrow <run|build> ...".to_string()),
+        Some("typecheck") => {
+            let path = args
+                .next()
+                .ok_or_else(|| "usage: flowarrow typecheck <path.flow>".to_string())?;
+            if args.next().is_some() {
+                return Err("usage: flowarrow typecheck <path.flow>".to_string());
+            }
+            flowarrow::typecheck_file(PathBuf::from(path).as_path())?;
+            Ok(0)
+        }
+        _ => Err("usage: flowarrow <run|build|typecheck> ...".to_string()),
     }
 }

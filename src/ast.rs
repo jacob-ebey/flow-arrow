@@ -5,9 +5,33 @@ pub struct Module {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decl {
-    Import,
+    Import(Import),
     Node(Callable),
     Program(Callable),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Import {
+    pub source: ImportSource,
+    pub clause: ImportClause,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportSource {
+    Module(String),
+    Local(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportClause {
+    Alias(String),
+    Items(Vec<ImportItem>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportItem {
+    pub name: String,
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

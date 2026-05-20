@@ -7,6 +7,8 @@ mod codegen;
 mod lexer;
 mod parser;
 mod runtime;
+mod stdlib;
+mod typecheck;
 
 pub fn run_file(path: &Path) -> Result<u8, String> {
     let build = build_file(path, None)?;
@@ -23,6 +25,7 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
     let module = parser::parse(&source)?;
+    typecheck::check_module(&module)?;
     let llvm = codegen::emit_module(&module)?;
 
     if let Some(out) = emit_llvm {
@@ -72,6 +75,13 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
     })
 }
 
+pub fn typecheck_file(path: &Path) -> Result<(), String> {
+    let source = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+    let module = parser::parse(&source)?;
+    typecheck::check_module(&module)
+}
+
 #[derive(Debug, Clone)]
 pub struct BuildOutput {
     pub build_dir: PathBuf,
@@ -119,7 +129,7 @@ mod tests {
                 ast::Decl::Node(callable) | ast::Decl::Program(callable) => {
                     Some(callable.name.as_str())
                 }
-                ast::Decl::Import => None,
+                ast::Decl::Import(_) => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["main", "verse_for", "final_verse_node"]);
@@ -134,6 +144,72 @@ mod tests {
         assert!(llvm.contains("call ptr @fa_map"));
         assert!(llvm.contains("call ptr @fa_reduce"));
         assert!(llvm.contains("define i32 @main"));
+    }
+
+    #[test]
+    fn typechecks_example_without_llvm_codegen() {
+        typecheck_file(Path::new("examples/add-numbers-from-stdin/main.flow")).expect("typecheck");
+    }
+
+    #[test]
+    fn typecheck_rejects_unknown_stdlib_export() {
+        let source = r#"
+            import std.cli { Args }
+            import std.bytes { missing }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("does not export `missing`"));
+    }
+
+    #[test]
+    fn typecheck_rejects_unimplemented_stdlib_export() {
+        let source = r#"
+            import std.cli { Args }
+            import std.int { parse_int }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("is not implemented by this compiler backend yet"));
+    }
+
+    #[test]
+    fn typecheck_rejects_node_input_type_mismatch() {
+        let source = r#"
+            import std.cli { Args }
+            import std.int { format_int }
+
+            program main(args: Args) -> exit_code: Int {
+                "not an int" -> format_int -> exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("`format_int` input type mismatch"));
+    }
+
+    #[test]
+    fn typecheck_and_codegen_resolve_stdlib_aliases() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math as math
+
+            program main(args: Args) -> exit_code: Int {
+                (3, 1) -> math.sub_int -> exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+        let llvm = codegen::emit_module(&module).expect("llvm");
+        assert!(llvm.contains("sub_int\\00"));
     }
 
     #[test]
