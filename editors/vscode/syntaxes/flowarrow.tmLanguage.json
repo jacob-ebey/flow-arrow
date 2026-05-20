@@ -181,14 +181,14 @@
     "operators": {
       "patterns": [
         {
-          "name": "keyword.operator.flowarrow",
+          "name": "keyword.control.flowarrow",
           "match": "(-)(>)",
           "captures": {
             "1": {
-              "name": "keyword.operator.flowarrow"
+              "name": "keyword.control.flowarrow"
             },
             "2": {
-              "name": "keyword.operator.flowarrow"
+              "name": "keyword.control.flowarrow"
             }
           }
         },
