@@ -1,10 +1,12 @@
 use crate::ast::*;
+use crate::module_resolver;
 use crate::stdlib::{self, Effect, RuntimeSupport, SymbolKind};
 use std::collections::HashMap;
 use std::fmt;
 
 pub fn check_module(module: &Module) -> Result<(), String> {
-    Checker::new(module)?.check()
+    let expanded = module_resolver::expand_stdlib_sources(module)?;
+    Checker::new(&expanded)?.check()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

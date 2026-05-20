@@ -9,6 +9,9 @@ mod predicates;
 mod real;
 mod seq;
 
+const VECTOR_FLOW: &str = include_str!("stdlib/source/vector.flow");
+const VECTOR_EXPORTS: &[&str] = &["sum", "dot"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     Type,
@@ -109,6 +112,20 @@ pub fn find_export(module: &str, name: &str) -> Option<&'static StdSymbol> {
     SYMBOLS
         .iter()
         .find(|symbol| symbol.module == module && symbol.name == name)
+}
+
+pub fn flow_source(module: &str) -> Option<&'static str> {
+    match module {
+        "std.vector" => Some(VECTOR_FLOW),
+        _ => None,
+    }
+}
+
+pub fn flow_exports(module: &str) -> Option<&'static [&'static str]> {
+    match module {
+        "std.vector" => Some(VECTOR_EXPORTS),
+        _ => None,
+    }
 }
 
 pub fn supports_higher_order_call(name: &str) -> bool {

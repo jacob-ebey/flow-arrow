@@ -18,6 +18,7 @@ Initial modules:
 | [`std.math`](./math.md) | Arithmetic and comparisons |
 | [`std.predicates`](./predicates.md) | Reusable predicates |
 | [`std.fault`](./fault.md) | Fault diagnostics and fault-status helpers |
+| [`std.vector`](./vector.md) | Source-backed vector operations |
 
 Example:
 

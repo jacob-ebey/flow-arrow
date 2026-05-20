@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::module_resolver;
 use crate::stdlib::{self, RuntimeSupport};
 mod runtime;
 use std::collections::{BTreeSet, HashMap};
@@ -8,7 +9,8 @@ pub fn emit_module(module: &Module) -> Result<String, String> {
 }
 
 pub fn emit_runtime_c(module: &Module) -> Result<String, String> {
-    Codegen::new(module)?.emit_runtime_c()
+    let expanded = module_resolver::expand_stdlib_sources(module)?;
+    Codegen::new(&expanded)?.emit_runtime_c()
 }
 
 struct Codegen<'a> {

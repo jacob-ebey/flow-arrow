@@ -6,6 +6,7 @@ mod ast;
 mod codegen;
 mod lexer;
 mod mermaid;
+mod module_resolver;
 mod parser;
 mod stdlib;
 mod typecheck;

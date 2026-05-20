@@ -1,0 +1,14 @@
+import std.math { add, mul }
+import std.seq { zip }
+
+node sum(values: Seq[Real]) -> total: Real {
+    $values -> reduce add(identity: 0.0) -> $total
+}
+
+node _dot_pair(pair: (Real,Real)) -> product: Real {
+    $pair -> mul -> $product
+}
+
+node dot(inputs: (Seq[Real],Seq[Real])) -> total: Real {
+    $inputs -> zip -> map _dot_pair -> reduce add(identity: 0.0) -> $total
+}

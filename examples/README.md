@@ -69,7 +69,9 @@ format_faults     : Seq[Fault] -> Bytes
 ```
 
 These are the stdlib primitives currently backed by the compiler and
-runtime; adding more should start in the compiler's stdlib registry.
+runtime. Native primitives live in the compiler's stdlib registry;
+source-backed modules such as `std.vector` live as bundled `.flow`
+modules with an explicit export list.
 
 Use `flowarrow typecheck <path.flow>` to validate imports and graph
 types without emitting LLVM or invoking the native backend.
