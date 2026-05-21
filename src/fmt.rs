@@ -53,6 +53,7 @@ struct DeclComments {
 
 #[derive(Debug, Clone, Default)]
 struct ChainComments {
+    leading_blank: bool,
     leading: Vec<String>,
     trailing: Option<String>,
 }
@@ -77,6 +78,7 @@ impl CommentLayout {
 
         let mut pending_top = Vec::new();
         let mut pending_body = Vec::new();
+        let mut pending_body_blank = false;
         let mut decl_index = 0usize;
         let mut current_callable = None::<usize>;
         let mut current_chain = 0usize;
@@ -123,6 +125,8 @@ impl CommentLayout {
                     } else {
                         pending_top.push(comment);
                     }
+                } else if current_callable.is_some() {
+                    pending_body_blank = true;
                 }
                 continue;
             }
@@ -150,10 +154,12 @@ impl CommentLayout {
                         .get_mut(decl)
                         .and_then(|decl| decl.chains.get_mut(current_chain))
                     {
+                        chain_comments.leading_blank = pending_body_blank;
                         chain_comments.leading.append(&mut pending_body);
                         chain_comments.trailing = line_comment;
                     }
                 }
+                pending_body_blank = false;
                 current_chain += 1;
             }
 
@@ -161,6 +167,7 @@ impl CommentLayout {
             if current_callable.is_some() && brace_depth == 0 {
                 current_callable = None;
                 pending_body.clear();
+                pending_body_blank = false;
             }
         }
 
@@ -252,27 +259,45 @@ impl Formatter {
             callable.name,
             format_port_or_list(&callable.outputs)
         ));
+        let mut group = Vec::new();
         for (index, chain) in callable.chains.iter().enumerate() {
             let comments = self
                 .comments
                 .decls
                 .get(decl_index)
                 .and_then(|decl| decl.chains.get(index))
-                .cloned();
-            if let Some(comments) = comments.as_ref() {
-                if !comments.leading.is_empty() && index > 0 {
+                .cloned()
+                .unwrap_or_default();
+            if comments.leading_blank || !comments.leading.is_empty() {
+                self.flush_chain_group(&mut group);
+                if comments.leading_blank && index > 0 {
                     self.blank_line();
                 }
                 self.write_comments(INDENT, &comments.leading);
             }
-            let mut line = format!("{INDENT}{}", format_chain(chain));
-            if let Some(comment) = comments.and_then(|comments| comments.trailing) {
+            group.push(FormattedChain {
+                parts: format_chain_parts(chain),
+                trailing: comments.trailing,
+            });
+        }
+        self.flush_chain_group(&mut group);
+        self.line("}");
+    }
+
+    fn flush_chain_group(&mut self, group: &mut Vec<FormattedChain>) {
+        if group.is_empty() {
+            return;
+        }
+
+        let widths = chain_group_widths(group);
+        for chain in group.drain(..) {
+            let mut line = format!("{INDENT}{}", format_aligned_chain(&chain.parts, &widths));
+            if let Some(comment) = chain.trailing {
                 line.push_str("  ");
                 line.push_str(&comment);
             }
             self.line(line);
         }
-        self.line("}");
     }
 
     fn write_comments(&mut self, indent: &str, comments: &[String]) {
@@ -291,6 +316,11 @@ impl Formatter {
             self.output.push('\n');
         }
     }
+}
+
+struct FormattedChain {
+    parts: Vec<String>,
+    trailing: Option<String>,
 }
 
 fn format_import_item(item: &ImportItem) -> String {
@@ -348,11 +378,40 @@ fn format_type_name(ty: &str) -> String {
     output
 }
 
-fn format_chain(chain: &Chain) -> String {
+fn format_chain_parts(chain: &Chain) -> Vec<String> {
     let mut parts = Vec::with_capacity(chain.stages.len() + 1);
     parts.push(format_endpoint(&chain.source));
     parts.extend(chain.stages.iter().map(format_stage));
-    parts.join(" -> ")
+    parts
+}
+
+fn chain_group_widths(group: &[FormattedChain]) -> Vec<usize> {
+    let max_arrow_count = group
+        .iter()
+        .map(|chain| chain.parts.len().saturating_sub(1))
+        .max()
+        .unwrap_or(0);
+    let mut widths = vec![0; max_arrow_count];
+    for chain in group {
+        for (index, part) in chain.parts.iter().take(chain.parts.len() - 1).enumerate() {
+            widths[index] = widths[index].max(part.chars().count());
+        }
+    }
+    widths
+}
+
+fn format_aligned_chain(parts: &[String], widths: &[usize]) -> String {
+    let mut output = String::new();
+    for (index, part) in parts.iter().enumerate() {
+        output.push_str(part);
+        if index < parts.len() - 1 {
+            for _ in 0..widths[index].saturating_sub(part.chars().count()) {
+                output.push(' ');
+            }
+            output.push_str(" -> ");
+        }
+    }
+    output
 }
 
 fn format_stage(stage: &Stage) -> String {
@@ -544,7 +603,7 @@ type Pair = (Int, Real)
 
 program main(args: Args) -> exit_code: Int {
     (1, 2) -> add -> $sum
-    $sum -> $exit_code
+    $sum   -> $exit_code
 }
 "#,
         );
@@ -579,7 +638,7 @@ program main(args: Args) -> exit_code: Int {
 $value->wrap->$right}"#,
             r#"node split(input: (Seq[Real], Seq[Real]), value: Int | Real) -> (left: Seq[Real], right: Faultable[Int]) {
     $input -> first -> $left
-    $value -> wrap -> $right
+    $value -> wrap  -> $right
 }
 "#,
         );
@@ -603,8 +662,8 @@ $total->scan add(identity: 0.0)->repeat<$total> emit->$exit_code
 }"#,
             r#"program main(args: Args) -> exit_code: Int {
     ["1", "bad"] -> fault map parse_real { ok -> $numbers, fault -> $faults }
-    $numbers -> filter positive -> map abs -> reduce add(identity: 0.0) -> $total
-    $total -> scan add(identity: 0.0) -> repeat<$total> emit -> $exit_code
+    $numbers     -> filter positive         -> map abs             -> reduce add(identity: 0.0) -> $total
+    $total       -> scan add(identity: 0.0) -> repeat<$total> emit -> $exit_code
 }
 "#,
         );
@@ -655,6 +714,28 @@ program main(args: Args) -> exit_code: Int {
 
     # second line
     ["done", "\n"] -> concat -> $exit_code
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn blank_lines_reset_chain_alignment_groups() {
+        assert_formats(
+            r#"program main(args: Args) -> exit_code: Int {
+$a->first_long->$x
+$bb->f->$y
+
+$c->g->$z
+$longer->h->$exit_code
+}
+"#,
+            r#"program main(args: Args) -> exit_code: Int {
+    $a  -> first_long -> $x
+    $bb -> f          -> $y
+
+    $c      -> g -> $z
+    $longer -> h -> $exit_code
 }
 "#,
         );

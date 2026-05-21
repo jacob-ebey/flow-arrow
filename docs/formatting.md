@@ -127,14 +127,24 @@ node f(input: (Seq[Real], Seq[Real])) -> out: Int | Real {
 
 ### Chains
 
-Every chain is printed on its own line. Arrows use one space on both sides:
+Every chain is printed on its own line. Arrows use one space on both sides
+before alignment padding:
 
 ```flow
-$input -> split_lines -> filter not_empty -> map parse_real -> $numbers
+$input     -> split_lines      -> $raw_lines
+$raw_lines -> filter not_empty -> $lines
+$lines     -> map parse_real   -> $numbers
 ```
 
-The formatter does not align arrows into columns. Alignment based on the
-current longest line creates noisy diffs when nearby chains change.
+Adjacent chain lines are vertically aligned by arrow position. A blank line
+resets the alignment group:
+
+```flow
+$input -> split_lines -> $raw_lines
+
+$numbers -> reduce add(identity: 0.0) -> $total
+$total   -> format_real               -> $total_bytes
+```
 
 Tuple joins and sequence literals use tight delimiters with `, ` between
 items:
@@ -192,7 +202,8 @@ inside strings is never attempted.
 - Reprints declarations with canonical blank-line separation.
 - Normalizes imports, including multiline expansion for long selective imports.
 - Normalizes callable headers, port lists, output lists, and type punctuation.
-- Reprints each chain with canonical arrow spacing and stage spacing.
+- Reprints each chain with canonical arrow spacing and vertically aligned
+  connected chain groups.
 - Normalizes tuple, sequence, string, bool, int, and real literals.
 - Removes hand alignment of arrows and comments that depends on neighboring
   line widths.
