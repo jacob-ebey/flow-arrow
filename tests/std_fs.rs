@@ -113,3 +113,110 @@ fn std_fs_directory_and_batch_read_helpers_support_grep_shape() {
     assert!(stdout.contains("a.txt:needle one\n"), "{stdout}");
     assert!(stdout.contains("b.txt:needle two\n"), "{stdout}");
 }
+
+#[test]
+fn std_fs_path_helpers_and_sorted_directory_listing_run() {
+    let source = r#"
+        import std.bytes { concat_bytes, join_bytes }
+        import std.cli { Args, argv }
+        import std.fault { expect }
+        import std.fs { basename, dirname, join_path, list_dir }
+        import std.io { write_stdout }
+        import std.seq { head }
+
+        program main(args: Args) -> exit_code: Int {
+            $args -> argv -> head -> expect -> $dir
+            ($dir, "z.txt") -> join_path -> $path
+            $path -> basename -> $base
+            $path -> dirname -> $parent
+            $dir -> list_dir -> expect -> $entries
+            ($entries, ",") -> join_bytes -> $listing
+            [$base, "\n", $parent, "\n", $listing, "\n"] -> concat_bytes -> $output
+            $output -> write_stdout -> $exit_code
+        }
+    "#;
+
+    let build = support::build_source("fs-path-listing", source);
+    let dir = support::source_path("fs-path-listing-root").with_file_name("listing-root");
+    fs::create_dir_all(&dir).expect("create dir");
+    fs::write(dir.join("z.txt"), b"z").expect("write z");
+    fs::write(dir.join("a.txt"), b"a").expect("write a");
+    fs::create_dir(dir.join("subdir")).expect("create subdir");
+
+    let output = Command::new(&build.executable)
+        .arg(&dir)
+        .output()
+        .expect("run");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("utf8"),
+        format!("z.txt\n{}\na.txt,subdir,z.txt\n", dir.to_string_lossy())
+    );
+}
+
+#[test]
+fn std_fs_fault_paths_are_reported() {
+    let missing_path = support::source_path("fs-missing").with_file_name("missing.txt");
+    for (name, source, expected) in [
+        (
+            "fs-file-size-missing",
+            r#"
+                import std.cli { Args, argv }
+                import std.fs { file_size }
+                import std.seq { head }
+
+                program main(args: Args) -> exit_code: Faultable[Int] {
+                    $args -> argv -> head -> $path
+                    $path -> file_size -> $exit_code
+                }
+            "#,
+            "file_size",
+        ),
+        (
+            "fs-list-dir-missing",
+            r#"
+                import std.cli { Args, argv }
+                import std.fault { expect }
+                import std.fs { list_dir }
+                import std.seq { head }
+
+                program main(args: Args) -> exit_code: Int {
+                    $args -> argv -> head -> expect -> $path
+                    $path -> list_dir -> expect -> $entries
+                    0 -> $exit_code
+                }
+            "#,
+            "list_dir",
+        ),
+        (
+            "fs-read-files-missing",
+            r#"
+                import std.cli { Args, argv }
+                import std.fault { expect }
+                import std.fs { read_files }
+
+                program main(args: Args) -> exit_code: Int {
+                    $args -> argv -> read_files -> expect -> $files
+                    0 -> $exit_code
+                }
+            "#,
+            "read_file",
+        ),
+    ] {
+        let build = support::build_source(name, source);
+        let output = Command::new(&build.executable)
+            .arg(&missing_path)
+            .output()
+            .expect("run");
+        assert!(!output.status.success(), "{name} unexpectedly succeeded");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{name}: expected {expected:?}, stderr was: {stderr}"
+        );
+    }
+}

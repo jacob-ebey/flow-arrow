@@ -56,3 +56,30 @@ fn std_math_nodes_run() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn std_math_real_functions_and_usage_faults_run() {
+    let source = r#"
+        import std.cli { Args }
+        import std.math { cos, eq, exp, sin }
+
+        program main(args: Args) -> exit_code: Int {
+            0 -> sin -> $sin_zero
+            ($sin_zero, 0.0) -> eq -> $sin_ok
+            0 -> cos -> $cos_zero
+            ($cos_zero, 1.0) -> eq -> $cos_ok
+            0 -> exp -> $exp_zero
+            ($exp_zero, 1.0) -> eq -> $exp_ok
+            ($sin_ok, $cos_ok, false) -> select -> $s1
+            ($s1, $exp_ok, false) -> select -> $all_ok
+            ($all_ok, 0, 1) -> select -> $exit_code
+        }
+    "#;
+
+    let output = support::run_source("math-real-functions", source, b"");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

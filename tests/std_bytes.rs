@@ -132,3 +132,111 @@ fn std_bytes_expanded_text_helpers_run() {
         "HELLO FLOW FLOW\nSEH:6:11:flow:hello:flow flow:hello arrow arrow:hahaha\n"
     );
 }
+
+#[test]
+fn std_bytes_search_and_slice_edge_cases_run() {
+    let source = r#"
+        import std.bytes {
+            concat_bytes,
+            contains,
+            drop,
+            ends_with,
+            index_of,
+            join_bytes,
+            last_index_of,
+            repeat_bytes,
+            slice,
+            starts_with,
+            take,
+        }
+        import std.cli { Args }
+        import std.int { format_int }
+        import std.io { write_stdout }
+
+        program main(args: Args) -> exit_code: Int {
+            ("abc", "") -> starts_with -> $starts_empty
+            ("abc", "") -> ends_with -> $ends_empty
+            ("abc", "") -> contains -> $contains_empty
+            ("abc", "") -> index_of -> format_int -> $empty_first
+            ("abc", "") -> last_index_of -> format_int -> $empty_last
+            ("abc", "z") -> index_of -> format_int -> $missing_first
+            ("abc", "z") -> last_index_of -> format_int -> $missing_last
+            ("abc", 20) -> take -> $take_large
+            ("abc", 20) -> drop -> $drop_large
+            ("abc", 1, 1) -> slice -> $empty_slice
+            ("x", 0) -> repeat_bytes -> $repeat_zero
+            [$starts_empty, $ends_empty, $contains_empty] -> map bool_text -> $bools
+            ($bools, "") -> join_bytes -> $bool_text
+            [$bool_text, ":", $empty_first, ":", $empty_last, ":", $missing_first, ":", $missing_last, ":", $take_large, ":", $drop_large, ":", $empty_slice, ":", $repeat_zero, "\n"] -> concat_bytes -> $output
+            $output -> write_stdout -> $exit_code
+        }
+
+        node bool_text(value: Bool) -> out: Bytes {
+            ($value, "1", "0") -> select -> $out
+        }
+    "#;
+
+    let output = support::run_source("bytes-edges", source, b"");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("utf8"),
+        "111:0:3:-1:-1:abc:::\n"
+    );
+}
+
+#[test]
+fn std_bytes_invalid_ranges_and_empty_needles_fault() {
+    for (name, source, expected) in [
+        (
+            "bytes-slice-range-fault",
+            r#"
+                import std.bytes { slice }
+                import std.cli { Args }
+
+                program main(args: Args) -> exit_code: Int {
+                    ("abc", 2, 1) -> slice -> $bad
+                    0 -> $exit_code
+                }
+            "#,
+            "bytes.slice: index out of range",
+        ),
+        (
+            "bytes-split-empty-fault",
+            r#"
+                import std.bytes { split_on }
+                import std.cli { Args }
+
+                program main(args: Args) -> exit_code: Int {
+                    ("abc", "") -> split_on -> $bad
+                    0 -> $exit_code
+                }
+            "#,
+            "split_on: delimiter cannot be empty",
+        ),
+        (
+            "bytes-replace-empty-fault",
+            r#"
+                import std.bytes { replace }
+                import std.cli { Args }
+
+                program main(args: Args) -> exit_code: Int {
+                    ("abc", "", "x") -> replace -> $bad
+                    0 -> $exit_code
+                }
+            "#,
+            "replace: needle cannot be empty",
+        ),
+    ] {
+        let output = support::run_source(name, source, b"");
+        assert!(!output.status.success(), "{name} unexpectedly succeeded");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{name}: expected {expected:?}, stderr was: {stderr}"
+        );
+    }
+}
