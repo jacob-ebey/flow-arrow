@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-lint:
+    name: Build, Test, Lint
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Homebrew
+        id: set-up-homebrew
+        uses: Homebrew/actions/setup-homebrew@main
+
+      - name: Cache Homebrew setup dependencies
+        id: cache-homebrew-setup
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.set-up-homebrew.outputs.gems-path }}
+          key: ${{ runner.os }}-homebrew-setup-${{ steps.set-up-homebrew.outputs.gems-hash }}
+          restore-keys: ${{ runner.os }}-homebrew-setup-
+
+      - name: Install Homebrew setup dependencies
+        if: steps.cache-homebrew-setup.outputs.cache-hit != 'true'
+        run: brew install-bundler-gems
+
+      - name: Install system dependencies
+        run: brew install pkg-config jpeg-turbo libpng sqlite
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Build
+        run: cargo build --all-targets
+
+      - name: Test
+        run: cargo test
+
+      - name: Lint formatting
+        run: cargo fmt --check
+
+      - name: Lint Clippy
+        run: cargo clippy --all-targets -- -D warnings

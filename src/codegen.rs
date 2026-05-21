@@ -847,18 +847,17 @@ impl<'a> TypedCodegen<'a> {
                     continue;
                 }
             }
-            if let [Stage::Endpoint(Endpoint::Name(name))] = stages {
-                if self.is_add(name) {
-                    let Endpoint::Tuple(items) = &chain.source else {
-                        return Ok(false);
-                    };
-                    let [Endpoint::Variable(left), Endpoint::Variable(right)] = items.as_slice()
-                    else {
-                        return Ok(false);
-                    };
-                    additions.insert(binding.to_string(), (left.clone(), right.clone()));
-                    continue;
-                }
+            if let [Stage::Endpoint(Endpoint::Name(name))] = stages
+                && self.is_add(name)
+            {
+                let Endpoint::Tuple(items) = &chain.source else {
+                    return Ok(false);
+                };
+                let [Endpoint::Variable(left), Endpoint::Variable(right)] = items.as_slice() else {
+                    return Ok(false);
+                };
+                additions.insert(binding.to_string(), (left.clone(), right.clone()));
+                continue;
             }
             return Ok(false);
         }

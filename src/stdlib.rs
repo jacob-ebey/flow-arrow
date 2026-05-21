@@ -519,24 +519,6 @@ pub fn supports_higher_order_call(name: &str) -> bool {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn local_c_includes_are_stripped_from_runtime_fragments() {
-        let mut out = String::new();
-        push_c_fragment(
-            &mut out,
-            "#include \"runtime.h\"\n#include <stdio.h>\nstatic int value;\n",
-        );
-
-        assert!(!out.contains("#include \"runtime.h\""));
-        assert!(out.contains("#include <stdio.h>"));
-        assert!(out.contains("static int value;"));
-    }
-}
-
 const fn ty(module: &'static str, name: &'static str) -> StdSymbol {
     StdSymbol {
         module,
@@ -635,5 +617,23 @@ const fn reducible_node(
         reduce_output: Some(reduce_output),
         effect: Effect::Pure,
         runtime: RuntimeSupport::DirectBuiltin,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_c_includes_are_stripped_from_runtime_fragments() {
+        let mut out = String::new();
+        push_c_fragment(
+            &mut out,
+            "#include \"runtime.h\"\n#include <stdio.h>\nstatic int value;\n",
+        );
+
+        assert!(!out.contains("#include \"runtime.h\""));
+        assert!(out.contains("#include <stdio.h>"));
+        assert!(out.contains("static int value;"));
     }
 }

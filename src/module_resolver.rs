@@ -127,7 +127,7 @@ impl Resolver {
         let local_names = declaration_names(&parsed);
 
         for name in &local_names {
-            let internal = internal_name(module, &name);
+            let internal = internal_name(module, name);
             insert_reference(&mut references, name.clone(), internal.clone())?;
         }
 

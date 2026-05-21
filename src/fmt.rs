@@ -148,16 +148,15 @@ impl CommentLayout {
                 && !code_trimmed.starts_with("->")
                 && !code_trimmed.starts_with('}');
             if starts_chain {
-                if let Some(decl) = current_callable {
-                    if let Some(chain_comments) = layout
+                if let Some(decl) = current_callable
+                    && let Some(chain_comments) = layout
                         .decls
                         .get_mut(decl)
                         .and_then(|decl| decl.chains.get_mut(current_chain))
-                    {
-                        chain_comments.leading_blank = pending_body_blank;
-                        chain_comments.leading.append(&mut pending_body);
-                        chain_comments.trailing = line_comment;
-                    }
+                {
+                    chain_comments.leading_blank = pending_body_blank;
+                    chain_comments.leading.append(&mut pending_body);
+                    chain_comments.trailing = line_comment;
                 }
                 pending_body_blank = false;
                 current_chain += 1;

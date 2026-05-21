@@ -1,7 +1,7 @@
 use flowarrow::build_file;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -384,19 +384,13 @@ panic = "abort"
     )
 }
 
-fn make_rust_package_name(prefix: &str, root: &PathBuf) -> String {
+fn make_rust_package_name(prefix: &str, root: &Path) -> String {
     let suffix = root
         .file_name()
         .expect("bench temp dir name")
         .to_string_lossy()
         .chars()
-        .filter_map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' {
-                Some(ch)
-            } else {
-                None
-            }
-        })
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
         .collect::<String>();
     format!("{prefix}-{suffix}")
 }

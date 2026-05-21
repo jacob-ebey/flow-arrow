@@ -359,11 +359,11 @@ impl<'a> Checker<'a> {
                 {
                     continue;
                 }
-                if self.callable_uses_io(callable) {
-                    if let Some(info) = self.symbols.get_mut(&callable.name) {
-                        info.effect = Effect::Io;
-                        changed = true;
-                    }
+                if self.callable_uses_io(callable)
+                    && let Some(info) = self.symbols.get_mut(&callable.name)
+                {
+                    info.effect = Effect::Io;
+                    changed = true;
                 }
             }
             if !changed {
