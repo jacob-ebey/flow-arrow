@@ -24,8 +24,9 @@ Optional native dependencies:
 - H2O development headers and libraries for `std.http`
   - FlowArrow looks for `libh2o-evloop` first, then `libh2o`, through
     `pkg-config`.
-  - FlowArrow also adds `pkg-config` flags for `openssl` and `libuv`, because
-    H2O headers include those dependency headers on common installations.
+  - FlowArrow compiles the H2O runtime against H2O's evloop backend and adds
+    `pkg-config` flags for `openssl` and `libuv`, because H2O headers include
+    those dependency headers on common installations.
   - Without H2O installed, non-HTTP builds and tests still work. Building a
     program that imports `std.http` fails with a clear dependency diagnostic.
 
@@ -129,20 +130,22 @@ pkg-config --cflags --libs openssl
 pkg-config --cflags --libs libuv
 ```
 
-The HTTP example currently typechecks everywhere:
+The HTTP example typechecks everywhere:
 
 ```sh
 cargo run -- typecheck examples/http-server/main.flow
 ```
 
-It only builds when H2O is available through `pkg-config`:
+It only builds and runs when H2O is available through `pkg-config`:
 
 ```sh
 cargo run -- build examples/http-server/main.flow
+examples/http-server/build/<host-target>/main
 ```
 
-`std.http` currently exposes the API and H2O-backed runtime stubs. The full H2O
-serving callback/event-loop bridge is still under development.
+Use the matching directory under `examples/http-server/build/`. The server
+listens on `0.0.0.0:8080` and can be checked with
+`curl http://127.0.0.1:8080/health` or a browser.
 
 ## Repository Map
 

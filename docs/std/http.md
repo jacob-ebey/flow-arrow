@@ -47,15 +47,23 @@ the graph.
 request and response values. Response builders are immutable: each builder
 returns a new response value.
 
+`serve` expects a response stream produced from the listener's request stream,
+usually `$requests -> map handle_request -> $responses`. At runtime it casts the
+stream mapper to a request handler, registers an H2O path handler, and runs the
+H2O evloop accept loop.
+
+Plain TCP listeners serve HTTP/1.x. TLS listeners install the certificate and
+key on H2O's accept context; when `with_http2(true)` is set, the runtime
+registers H2O's NPN/ALPN HTTP/2 protocols when the installed H2O/OpenSSL build
+exposes them.
+
 `with_http3(true)` requires an H2O build with HTTP/3 support. If the local H2O
-installation does not provide that support, the program must fail with a clear
+installation does not provide that support, the program fails with a clear
 diagnostic.
 
-The current implementation registers and typechecks the API, emits H2O-backed
-runtime stubs, and links through system `pkg-config` packages `libh2o-evloop`
-or `libh2o` plus `openssl` and `libuv`. The full H2O serving callback bridge is
-not complete yet; `http.serve` currently returns a `Faultable[Int]` fault
-explaining that the serving loop is not implemented.
+The implementation links through system `pkg-config` packages `libh2o-evloop`
+or `libh2o` plus `openssl` and `libuv`, and compiles the generated runtime
+against H2O's evloop backend.
 
 ## Example
 

@@ -162,7 +162,8 @@ impl<'a> TypedCodegen<'a> {
             self.types.c_type(&Ty::HttpListener);
             self.types.c_type(&Ty::HttpRequest);
             self.types.c_type(&Ty::HttpResponse);
-            self.types.c_type(&Ty::Faultable(Box::new(Ty::HttpListener)));
+            self.types
+                .c_type(&Ty::Faultable(Box::new(Ty::HttpListener)));
             self.types.c_type(&Ty::Stream(Box::new(Ty::HttpRequest)));
             self.types.c_type(&Ty::Stream(Box::new(Ty::HttpResponse)));
         }
@@ -1021,7 +1022,14 @@ impl<'a> TypedCodegen<'a> {
                     } else {
                         out.push_str("  else {\n");
                     }
-                    self.emit_assign_call(out, &target, &output_ty, &arm.node, &subject.code, &subject.ty)?;
+                    self.emit_assign_call(
+                        out,
+                        &target,
+                        &output_ty,
+                        &arm.node,
+                        &subject.code,
+                        &subject.ty,
+                    )?;
                     out.push_str("  }\n");
                 }
                 MatchGuard::Call { node, args } => {
@@ -1030,7 +1038,8 @@ impl<'a> TypedCodegen<'a> {
                     } else {
                         out.push_str("  else {\n");
                     }
-                    let guard_input = self.emit_match_guard_input(out, subject.clone(), args, env)?;
+                    let guard_input =
+                        self.emit_match_guard_input(out, subject.clone(), args, env)?;
                     let guard_output_ty = self.call_output_type(node, &guard_input.ty)?;
                     if guard_output_ty != Ty::Bool {
                         return Err(format!(
@@ -1039,14 +1048,31 @@ impl<'a> TypedCodegen<'a> {
                     }
                     let guard = self.next_temp();
                     out.push_str(&format!("  bool {guard};\n"));
-                    self.emit_assign_call(out, &guard, &Ty::Bool, node, &guard_input.code, &guard_input.ty)?;
+                    self.emit_assign_call(
+                        out,
+                        &guard,
+                        &Ty::Bool,
+                        node,
+                        &guard_input.code,
+                        &guard_input.ty,
+                    )?;
                     out.push_str(&format!("  if ({guard}) {{\n"));
-                    self.emit_assign_call(out, &target, &output_ty, &arm.node, &subject.code, &subject.ty)?;
+                    self.emit_assign_call(
+                        out,
+                        &target,
+                        &output_ty,
+                        &arm.node,
+                        &subject.code,
+                        &subject.ty,
+                    )?;
                     out.push_str("  }\n");
                 }
             }
         }
-        for _ in arms.iter().filter(|arm| !matches!(arm.guard, MatchGuard::Fallback)) {
+        for _ in arms
+            .iter()
+            .filter(|arm| !matches!(arm.guard, MatchGuard::Fallback))
+        {
             out.push_str("  }\n");
         }
         Ok(Value {
@@ -1226,7 +1252,10 @@ impl<'a> TypedCodegen<'a> {
             let c_ty = self.types.c_type(&output_ty);
             let tmp = self.next_temp();
             out.push_str(&format!("  {c_ty} {tmp} = {input};\n", input = input.code));
-            out.push_str(&format!("  {tmp}.map_fn = (void *){};\n", user_fn_name(name)));
+            out.push_str(&format!(
+                "  {tmp}.map_fn = (void *){};\n",
+                user_fn_name(name)
+            ));
             return Ok(Value {
                 code: tmp,
                 ty: output_ty,
@@ -3458,10 +3487,7 @@ impl TypeRegistry {
                         "typedef struct {{ size_t count; {item_ty} *items; }} {name};\n"
                     ));
                 }
-                Ty::HttpServerConfig
-                | Ty::HttpListener
-                | Ty::HttpRequest
-                | Ty::HttpResponse => {}
+                Ty::HttpServerConfig | Ty::HttpListener | Ty::HttpRequest | Ty::HttpResponse => {}
                 Ty::Tuple(items) => {
                     out.push_str("typedef struct { ");
                     for (index, item) in items.iter().enumerate() {
@@ -3554,9 +3580,7 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "read_at" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "size" | "copy_to_file" | "close" => Ok(Ty::Faultable(Box::new(Ty::Int))),
         "default_config" => Ok(Ty::HttpServerConfig),
-        "with_tcp_listener" | "with_tls" | "with_http2" | "with_http3" => {
-            Ok(Ty::HttpServerConfig)
-        }
+        "with_tcp_listener" | "with_tls" | "with_http2" | "with_http3" => Ok(Ty::HttpServerConfig),
         "listen" => Ok(Ty::Faultable(Box::new(Ty::HttpListener))),
         "requests" => Ok(Ty::Stream(Box::new(Ty::HttpRequest))),
         "serve" => Ok(Ty::Faultable(Box::new(Ty::Int))),

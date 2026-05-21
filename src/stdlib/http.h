@@ -1,5 +1,14 @@
 #include <h2o.h>
 #include <h2o/http1.h>
+#include <h2o/http2.h>
+#include <arpa/inet.h>
+#include <limits.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include <signal.h>
+#include <sys/socket.h>
 
 typedef struct {
   FaBytes host;

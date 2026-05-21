@@ -40,12 +40,8 @@ pub const LISTEN: StdSymbol = io_node(
     "http.ServerConfig",
     "Faultable[http.Listener]",
 );
-pub const REQUESTS: StdSymbol = io_node(
-    MODULE,
-    "requests",
-    "http.Listener",
-    "Stream[http.Request]",
-);
+pub const REQUESTS: StdSymbol =
+    io_node(MODULE, "requests", "http.Listener", "Stream[http.Request]");
 pub const SERVE: StdSymbol = io_node(
     MODULE,
     "serve",

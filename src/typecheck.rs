@@ -704,11 +704,13 @@ impl<'a> Checker<'a> {
         let unwrapped = input.inner_faultable();
         let output = match &unwrapped {
             Type::Seq(item_type) => {
-                let output = self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
+                let output =
+                    self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
                 Type::Seq(Box::new(output))
             }
             Type::Stream(item_type) => {
-                let output = self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
+                let output =
+                    self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
                 Type::Stream(Box::new(output))
             }
             _ => {
@@ -880,7 +882,10 @@ impl<'a> Checker<'a> {
         if arms.is_empty() {
             return Err("`match` must contain at least one arm".to_string());
         }
-        if !matches!(arms.last().map(|arm| &arm.guard), Some(MatchGuard::Fallback)) {
+        if !matches!(
+            arms.last().map(|arm| &arm.guard),
+            Some(MatchGuard::Fallback)
+        ) {
             return Err("`match` must end with a `_` fallback arm".to_string());
         }
 

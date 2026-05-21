@@ -188,6 +188,13 @@ fn cv_compiler_flags(runtime_c: &str) -> Result<Vec<String>, String> {
 
 fn http_compiler_flags() -> Result<Vec<String>, String> {
     let mut flags = pkg_config_flags_any(&["libh2o-evloop", "libh2o"], "std.http", "HTTP/H2O")?;
+    if cfg!(target_os = "macos") {
+        flags.push("-DH2O_USE_KQUEUE=1".to_string());
+    } else if cfg!(target_os = "linux") {
+        flags.push("-DH2O_USE_EPOLL=1".to_string());
+    } else {
+        flags.push("-DH2O_USE_SELECT=1".to_string());
+    }
     flags.extend(pkg_config_flags_for("std.http", "openssl", "OpenSSL")?);
     flags.extend(pkg_config_flags_for("std.http", "libuv", "libuv")?);
     Ok(dedup_flags(flags))

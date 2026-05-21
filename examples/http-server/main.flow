@@ -1,8 +1,6 @@
 # http-server
 #
-# Draft API sketch for a future `std.http` module backed by H2O.
-# This example is intentionally not expected to typecheck until `std.http`
-# exists. It is here to make the proposed application shape concrete.
+# Example server for the `std.http` module backed by H2O.
 #
 # Design goals shown here:
 #   - server I/O is explicit boundary dataflow, like std.io and std.fs
@@ -11,7 +9,7 @@
 #   - routing uses a proposed general `match` construct, not HTTP-only syntax
 #   - responses carry enough request identity for multiplexed HTTP/2/3 replies
 #
-# Proposed std.http surface used by this sketch:
+# std.http surface used by this example:
 #
 #   http.default_config     : () -> http.ServerConfig
 #   http.with_tcp_listener  : (http.ServerConfig, Bytes, Int) -> http.ServerConfig
@@ -30,7 +28,7 @@
 #   http.json              : (http.Response, Bytes) -> http.Response
 #   http.not_found         : http.Request -> http.Response
 #
-# Proposed language surface used by this sketch:
+# Language surface used by this example:
 #
 #   $value -> match {
 #       guard_node(args...) -> selected_node
@@ -40,7 +38,7 @@
 # Match arms are statically visible to the compiler. Per input, guards are
 # evaluated in order and only the selected arm body is evaluated.
 #
-# Run shape, once implemented:
+# Run shape:
 #
 #   $ flowarrow run examples/http-server/main.flow
 #   $ curl -i http://127.0.0.1:8080/health

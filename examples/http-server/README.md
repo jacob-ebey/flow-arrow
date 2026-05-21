@@ -1,11 +1,10 @@
 # http-server
 
-Example for the `std.http` module backed by H2O. The API typechecks today and
-builds only when system H2O development files are available through pkg-config.
-The full H2O serving loop is still a runtime stub that returns a clear
-`Faultable[Int]` fault.
+Example for the `std.http` module backed by H2O. The API typechecks everywhere
+and builds/runs when system H2O development files are available through
+pkg-config.
 
-The sketch proposes this application shape:
+The example uses this application shape:
 
 ```flow
 $config                 -> http.listen        -> $listener
@@ -20,12 +19,13 @@ connection state, multiplexing, and response writes behind `http.listen`,
 `http.requests`, and `http.serve`. User code receives a stream of request values
 and produces a stream of response values.
 
-The route example assumes a proposed general-purpose `match` construct. This is
-not HTTP-specific syntax. It models static alternatives with runtime-selected
-evaluation: all arms are visible to the compiler, guards are pure, all arm bodies
-return the same type, and only the selected arm body runs for a given input.
+The route example uses the general-purpose `match` construct. This is not
+HTTP-specific syntax. It models static alternatives with runtime-selected
+evaluation: all arms are visible to the compiler, guards are pure, all arm
+bodies return the same type, and only the selected arm body runs for a given
+input.
 
-The proposed `std.http` surface used by `main.flow` is:
+The `std.http` surface used by `main.flow` is:
 
 ```text
 http.default_config     : () -> http.ServerConfig
@@ -73,4 +73,21 @@ $req                                                  -> http.response    -> $re
 ($response1, "Location", "/created/123")              -> http.with_header -> $response2
 ($response2, "X-FlowArrow-Example", "custom-headers") -> http.with_header -> $response3
 ($response3, "{\"id\":123,\"created\":true}\n")        -> http.json        -> $response
+```
+
+Build and run:
+
+```sh
+cargo run -- build examples/http-server/main.flow
+examples/http-server/build/<host-target>/main
+```
+
+Then open `http://127.0.0.1:8080/health` in a browser, or check the routes with:
+
+```sh
+curl -i http://127.0.0.1:8080/health
+curl -i http://127.0.0.1:8080/hello
+curl -i http://127.0.0.1:8080/created
+curl -i -X POST --data hello http://127.0.0.1:8080/echo
+curl -i http://127.0.0.1:8080/missing
 ```
