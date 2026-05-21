@@ -33,51 +33,56 @@
 #   8. Filter out whitespace tokens (kind == WS).
 #   9. scan add over per-token depth deltas -> depth at each token.
 #  10. Format kind+text+depth as lines and write to stdout.
-
 import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 import std.bytes { bytes_to_codes, codes_to_bytes, concat_bytes, join_bytes }
-import std.int { format_int, bit_and, bit_or, bit_shl, bit_shr }
+import std.int {
+    format_int,
+    bit_and,
+    bit_or,
+    bit_shl,
+    bit_shr,
+}
 import std.seq { group_by_id, zip, shift_right }
 import std.math { add, eq, ge, le }
 import std.predicates { not, and, or }
 
 program main(args: Args) -> exit_code: Int {
-    () -> read_stdin                              -> $input
-    $input -> bytes_to_codes                       -> $codes
+    ()     -> read_stdin     -> $input
+    $input -> bytes_to_codes -> $codes
 
-    $codes -> map byte_to_trans                    -> $trans
+    $codes -> map byte_to_trans -> $trans
     # 228 = identity transition: out[0]=0, out[1]=1, out[2]=2, out[3]=3
     # encoded as 0 | (1<<2) | (2<<4) | (3<<6) = 0 + 4 + 32 + 192 = 228.
-    $trans -> scan compose_trans(identity: 228)    -> $fused
-    $fused -> map trans_to_state                   -> $states_after
+    $trans -> scan compose_trans(identity: 228) -> $fused
+    $fused -> map trans_to_state                -> $states_after
 
-    ($states_after, 0) -> shift_right              -> $states_before
-    ($states_before, $codes) -> zip                 -> $sb_codes
+    ($states_after, 0)       -> shift_right -> $states_before
+    ($states_before, $codes) -> zip         -> $sb_codes
 
-    $sb_codes -> map kind_at                       -> $kinds_per_byte
-    $kinds_per_byte -> map kind_to_start_int       -> $starts
-    $starts -> scan add_int(identity: 0)           -> $token_ids
+    $sb_codes       -> map kind_at               -> $kinds_per_byte
+    $kinds_per_byte -> map kind_to_start_int     -> $starts
+    $starts         -> scan add_int(identity: 0) -> $token_ids
 
-    ($codes, $token_ids) -> group_by_id             -> $code_groups
-    $code_groups -> map codes_to_bytes             -> $texts_with_ws
-    $kinds_per_byte -> filter is_nonneg            -> $kinds_with_ws
+    ($codes, $token_ids) -> group_by_id        -> $code_groups
+    $code_groups         -> map codes_to_bytes -> $texts_with_ws
+    $kinds_per_byte      -> filter is_nonneg   -> $kinds_with_ws
 
     # Drop whitespace tokens (kind = 9).
-    ($kinds_with_ws, $texts_with_ws) -> zip         -> $kt_ws
-    $kt_ws -> filter kt_not_ws                     -> $kt
-    $kt -> map kt_kind                             -> $kinds
-    $kt -> map kt_text                             -> $texts
+    ($kinds_with_ws, $texts_with_ws) -> zip              -> $kt_ws
+    $kt_ws                           -> filter kt_not_ws -> $kt
+    $kt                              -> map kt_kind      -> $kinds
+    $kt                              -> map kt_text      -> $texts
 
-    $kinds -> map depth_delta                      -> $deltas
-    $deltas -> scan add_int(identity: 0)           -> $depths
+    $kinds  -> map depth_delta           -> $deltas
+    $deltas -> scan add_int(identity: 0) -> $depths
 
-    ($texts, $depths) -> zip                        -> $td
-    ($kinds, $td) -> zip                            -> $all_triples
-    $all_triples -> map format_token               -> $lines
-    ($lines, "") -> join_bytes                     -> $output
+    ($texts, $depths) -> zip              -> $td
+    ($kinds, $td)     -> zip              -> $all_triples
+    $all_triples      -> map format_token -> $lines
+    ($lines, "")      -> join_bytes       -> $output
 
-    $output -> write_stdout                        -> $exit_code
+    $output -> write_stdout -> $exit_code
 }
 
 # ---------------------------------------------------------------------------
@@ -93,28 +98,27 @@ program main(args: Args) -> exit_code: Int {
 #
 # Identity   -> 0b11_10_01_00 = 228 (each state maps to itself)
 # ---------------------------------------------------------------------------
-
 node byte_to_trans(b: Int) -> t: Int {
-    $b -> is_struct_byte           -> $is_struct
-    $b -> is_quote_byte            -> $is_quote
-    $b -> is_back_byte             -> $is_back
-    $b -> is_ws_byte               -> $is_ws
+    $b -> is_struct_byte -> $is_struct
+    $b -> is_quote_byte  -> $is_quote
+    $b -> is_back_byte   -> $is_back
+    $b -> is_ws_byte     -> $is_ws
 
     # Cascading select. STRUCT == WS in transition shape (both 20).
-    ($is_struct, $is_ws) -> or      -> $is_low
-    ($is_back, 219, 215)  -> select -> $t_after_back
+    ($is_struct, $is_ws)           -> or     -> $is_low
+    ($is_back, 219, 215)           -> select -> $t_after_back
     ($is_quote, 81, $t_after_back) -> select -> $t_after_quote
     ($is_low, 20, $t_after_quote)  -> select -> $t
 }
 
 # Each byte class is determined purely from the byte value.
 node is_struct_byte(b: Int) -> r: Bool {
-    ($b, 123) -> eq -> $e_lb        # {
-    ($b, 125) -> eq -> $e_rb        # }
-    ($b, 91)  -> eq -> $e_ls        # [
-    ($b, 93)  -> eq -> $e_rs        # ]
-    ($b, 44)  -> eq -> $e_co        # ,
-    ($b, 58)  -> eq -> $e_cl        # :
+    ($b, 123)      -> eq -> $e_lb  # {
+    ($b, 125)      -> eq -> $e_rb  # }
+    ($b, 91)       -> eq -> $e_ls  # [
+    ($b, 93)       -> eq -> $e_rs  # ]
+    ($b, 44)       -> eq -> $e_co  # ,
+    ($b, 58)       -> eq -> $e_cl  # :
     ($e_lb, $e_rb) -> or -> $s1
     ($s1, $e_ls)   -> or -> $s2
     ($s2, $e_rs)   -> or -> $s3
@@ -123,18 +127,18 @@ node is_struct_byte(b: Int) -> r: Bool {
 }
 
 node is_quote_byte(b: Int) -> r: Bool {
-    ($b, 34) -> eq -> $r            # "
+    ($b, 34) -> eq -> $r  # "
 }
 
 node is_back_byte(b: Int) -> r: Bool {
-    ($b, 92) -> eq -> $r            # \
+    ($b, 92) -> eq -> $r  # \
 }
 
 node is_ws_byte(b: Int) -> r: Bool {
-    ($b, 32) -> eq -> $e_sp         # space
-    ($b, 9)  -> eq -> $e_ht         # \t
-    ($b, 10) -> eq -> $e_lf         # \n
-    ($b, 13) -> eq -> $e_cr         # \r
+    ($b, 32)       -> eq -> $e_sp  # space
+    ($b, 9)        -> eq -> $e_ht  # \t
+    ($b, 10)       -> eq -> $e_lf  # \n
+    ($b, 13)       -> eq -> $e_cr  # \r
     ($e_sp, $e_ht) -> or -> $w1
     ($w1, $e_lf)   -> or -> $w2
     ($w2, $e_cr)   -> or -> $r
@@ -144,7 +148,6 @@ node is_ws_byte(b: Int) -> r: Bool {
 # compose_trans: function-compose two encoded transition tables.
 #   result[s] = b[a[s]]   for s in {0,1,2,3}
 # ---------------------------------------------------------------------------
-
 node compose_trans(a: Int, b: Int) -> c: Int {
     $a -> trans_apply_0 -> $as0
     $a -> trans_apply_1 -> $as1
@@ -165,19 +168,35 @@ node compose_trans(a: Int, b: Int) -> c: Int {
     ($p01, $p23)   -> bit_or -> $c
 }
 
-node trans_apply_0(t: Int) -> s: Int { ($t, 3) -> bit_and -> $s }
-node trans_apply_1(t: Int) -> s: Int { ($t, 2) -> bit_shr -> $r  ($r, 3) -> bit_and -> $s }
-node trans_apply_2(t: Int) -> s: Int { ($t, 4) -> bit_shr -> $r  ($r, 3) -> bit_and -> $s }
-node trans_apply_3(t: Int) -> s: Int { ($t, 6) -> bit_shr -> $r  ($r, 3) -> bit_and -> $s }
+node trans_apply_0(t: Int) -> s: Int {
+    ($t, 3) -> bit_and -> $s
+}
+
+node trans_apply_1(t: Int) -> s: Int {
+    ($t, 2) -> bit_shr -> $r
+    ($r, 3) -> bit_and -> $s
+}
+
+node trans_apply_2(t: Int) -> s: Int {
+    ($t, 4) -> bit_shr -> $r
+    ($r, 3) -> bit_and -> $s
+}
+
+node trans_apply_3(t: Int) -> s: Int {
+    ($t, 6) -> bit_shr -> $r
+    ($r, 3) -> bit_and -> $s
+}
 
 # trans_apply_at(t, s): apply transition t to state s.
 node trans_apply_at(t: Int, s: Int) -> r: Int {
-    ($s, 1) -> bit_shl -> $shift
+    ($s, 1)      -> bit_shl -> $shift
     ($t, $shift) -> bit_shr -> $raw
-    ($raw, 3) -> bit_and -> $r
+    ($raw, 3)    -> bit_and -> $r
 }
 
-node trans_to_state(t: Int) -> s: Int { ($t, 3) -> bit_and -> $s }
+node trans_to_state(t: Int) -> s: Int {
+    ($t, 3) -> bit_and -> $s
+}
 
 # ---------------------------------------------------------------------------
 # Per-byte token classification: given (state_before, byte) compute a kind
@@ -198,14 +217,13 @@ node trans_to_state(t: Int) -> s: Int { ($t, 3) -> bit_and -> $s }
 #     is_structural OR (state_before == OUT AND not is_ws)
 #                   OR (state_before == RUN AND is_quote)
 # ---------------------------------------------------------------------------
-
 node kind_at(state_before: Int, b: Int) -> k: Int {
-    ($b, 123) -> eq -> $e_lb
-    ($b, 125) -> eq -> $e_rb
-    ($b, 91)  -> eq -> $e_ls
-    ($b, 93)  -> eq -> $e_rs
-    ($b, 44)  -> eq -> $e_co
-    ($b, 58)  -> eq -> $e_cl
+    ($b, 123)      -> eq -> $e_lb
+    ($b, 125)      -> eq -> $e_rb
+    ($b, 91)       -> eq -> $e_ls
+    ($b, 93)       -> eq -> $e_rs
+    ($b, 44)       -> eq -> $e_co
+    ($b, 58)       -> eq -> $e_cl
     ($e_lb, $e_rb) -> or -> $s1
     ($s1, $e_ls)   -> or -> $s2
     ($s2, $e_rs)   -> or -> $s3
@@ -217,29 +235,29 @@ node kind_at(state_before: Int, b: Int) -> k: Int {
 
     ($state_before, 0) -> eq -> $in_out
     ($state_before, 3) -> eq -> $in_run
-    ($in_out, $in_run)  -> or -> $in_outrun
+    ($in_out, $in_run) -> or -> $in_outrun
 
     # Number opener: digit (48..57), sign (43, 45), or dot (46).
-    ($b, 48) -> ge -> $ge48
-    ($b, 57) -> le -> $le57
-    ($ge48, $le57) -> and -> $is_digit
-    ($b, 43) -> eq -> $e_plus
-    ($b, 45) -> eq -> $e_minus
-    ($b, 46) -> eq -> $e_dot
-    ($is_digit, $e_plus) -> or -> $n1
-    ($n1, $e_minus)      -> or -> $n2
-    ($n2, $e_dot)        -> or -> $is_numchar
+    ($b, 48)             -> ge  -> $ge48
+    ($b, 57)             -> le  -> $le57
+    ($ge48, $le57)       -> and -> $is_digit
+    ($b, 43)             -> eq  -> $e_plus
+    ($b, 45)             -> eq  -> $e_minus
+    ($b, 46)             -> eq  -> $e_dot
+    ($is_digit, $e_plus) -> or  -> $n1
+    ($n1, $e_minus)      -> or  -> $n2
+    ($n2, $e_dot)        -> or  -> $is_numchar
 
-    $is_ws -> not -> $not_ws
-    ($in_out, $not_ws) -> and -> $out_open_any
+    $is_ws                  -> not -> $not_ws
+    ($in_out, $not_ws)      -> and -> $out_open_any
     ($in_outrun, $is_quote) -> and -> $opens_string
 
     # opens_ident: state_before==OUT and not (ws | struct | quote | numchar)
-    ($is_struct, $is_quote) -> or -> $sq
-    ($sq, $is_numchar)      -> or -> $sqn
-    ($sqn, $is_ws)          -> or -> $not_ident_byte_flag
-    $not_ident_byte_flag -> not -> $ident_byte
-    ($in_out, $ident_byte) -> and -> $opens_ident
+    ($is_struct, $is_quote) -> or  -> $sq
+    ($sq, $is_numchar)      -> or  -> $sqn
+    ($sqn, $is_ws)          -> or  -> $not_ident_byte_flag
+    $not_ident_byte_flag    -> not -> $ident_byte
+    ($in_out, $ident_byte)  -> and -> $opens_ident
 
     # opens_number: state_before==OUT and is_numchar
     ($in_out, $is_numchar) -> and -> $opens_number
@@ -248,24 +266,24 @@ node kind_at(state_before: Int, b: Int) -> k: Int {
     ($in_out, $is_ws) -> and -> $opens_ws
 
     # Decode structural kind from byte
-    ($e_cl, 5, -1)    -> select -> $ks5
-    ($e_co, 4, $ks5)   -> select -> $ks4
-    ($e_rs, 3, $ks4)   -> select -> $ks3
-    ($e_ls, 2, $ks3)   -> select -> $ks2
-    ($e_rb, 1, $ks2)   -> select -> $ks1
-    ($e_lb, 0, $ks1)   -> select -> $k_struct
+    ($e_cl, 5, -1)   -> select -> $ks5
+    ($e_co, 4, $ks5) -> select -> $ks4
+    ($e_rs, 3, $ks4) -> select -> $ks3
+    ($e_ls, 2, $ks3) -> select -> $ks2
+    ($e_rb, 1, $ks2) -> select -> $ks1
+    ($e_lb, 0, $ks1) -> select -> $k_struct
 
     # Cascading selection of final kind. Order doesn't really matter because
     # the categories are mutually exclusive given the state_before.
-    ($opens_ws, 9, -1)             -> select -> $k0
-    ($opens_ident, 8, $k0)          -> select -> $k1
-    ($opens_number, 7, $k1)         -> select -> $k2
-    ($opens_string, 6, $k2)         -> select -> $k3
-    ($is_struct, $k_struct, $k3)     -> select -> $k
+    ($opens_ws, 9, -1)           -> select -> $k0
+    ($opens_ident, 8, $k0)       -> select -> $k1
+    ($opens_number, 7, $k1)      -> select -> $k2
+    ($opens_string, 6, $k2)      -> select -> $k3
+    ($is_struct, $k_struct, $k3) -> select -> $k
 }
 
 node kind_to_start_int(k: Int) -> n: Int {
-    ($k, 0) -> ge -> $b
+    ($k, 0)    -> ge     -> $b
     ($b, 1, 0) -> select -> $n
 }
 
@@ -280,34 +298,36 @@ node add_int(a: Int, b: Int) -> r: Int {
 # ---------------------------------------------------------------------------
 # Filtering and projection on (kind, text) pairs.
 # ---------------------------------------------------------------------------
-
 node kt_not_ws(k: Int, t: Bytes) -> b: Bool {
-    ($k, 9) -> eq -> $is_ws
-    $is_ws -> not -> $b
+    ($k, 9) -> eq  -> $is_ws
+    $is_ws  -> not -> $b
 }
 
-node kt_kind(k: Int, t: Bytes) -> r: Int { $k -> $r }
-node kt_text(k: Int, t: Bytes) -> r: Bytes { $t -> $r }
+node kt_kind(k: Int, t: Bytes) -> r: Int {
+    $k -> $r
+}
+
+node kt_text(k: Int, t: Bytes) -> r: Bytes {
+    $t -> $r
+}
 
 # ---------------------------------------------------------------------------
 # Depth tracking.
 # ---------------------------------------------------------------------------
-
 node depth_delta(k: Int) -> d: Int {
-    ($k, 0) -> eq -> $is_obs
-    ($k, 2) -> eq -> $is_ars
-    ($k, 1) -> eq -> $is_obe
-    ($k, 3) -> eq -> $is_are
-    ($is_obs, $is_ars) -> or -> $is_open
-    ($is_obe, $is_are) -> or -> $is_close
-    ($is_open, 1, 0)  -> select -> $a
+    ($k, 0)             -> eq     -> $is_obs
+    ($k, 2)             -> eq     -> $is_ars
+    ($k, 1)             -> eq     -> $is_obe
+    ($k, 3)             -> eq     -> $is_are
+    ($is_obs, $is_ars)  -> or     -> $is_open
+    ($is_obe, $is_are)  -> or     -> $is_close
+    ($is_open, 1, 0)    -> select -> $a
     ($is_close, -1, $a) -> select -> $d
 }
 
 # ---------------------------------------------------------------------------
 # Output formatting.
 # ---------------------------------------------------------------------------
-
 node kind_name(k: Int) -> name: Bytes {
     ($k, 0) -> eq -> $e0
     ($k, 1) -> eq -> $e1
@@ -319,28 +339,33 @@ node kind_name(k: Int) -> name: Bytes {
     ($k, 7) -> eq -> $e7
     ($k, 8) -> eq -> $e8
 
-    ($e8, "IDENT", "?")                -> select -> $n8
-    ($e7, "NUMBER", $n8)                -> select -> $n7
-    ($e6, "STRING", $n7)                -> select -> $n6
-    ($e5, "COLON", $n6)                 -> select -> $n5
-    ($e4, "COMMA", $n5)                 -> select -> $n4
-    ($e3, "ARRAY_END", $n4)             -> select -> $n3
-    ($e2, "ARRAY_START", $n3)           -> select -> $n2
-    ($e1, "OBJECT_END", $n2)            -> select -> $n1
-    ($e0, "OBJECT_START", $n1)          -> select -> $name
+    ($e8, "IDENT", "?")        -> select -> $n8
+    ($e7, "NUMBER", $n8)       -> select -> $n7
+    ($e6, "STRING", $n7)       -> select -> $n6
+    ($e5, "COLON", $n6)        -> select -> $n5
+    ($e4, "COMMA", $n5)        -> select -> $n4
+    ($e3, "ARRAY_END", $n4)    -> select -> $n3
+    ($e2, "ARRAY_START", $n3)  -> select -> $n2
+    ($e1, "OBJECT_END", $n2)   -> select -> $n1
+    ($e0, "OBJECT_START", $n1) -> select -> $name
 }
 
 # format_token gets a nested-tuple ((Bytes, (Int, Int)) packaging that arose
 # from zip(zip(...)).  We destructure step by step.
 node format_token(k: Int, td: (Bytes, Int)) -> line: Bytes {
-    $k  -> kind_name   -> $name
-    $k  -> format_int  -> $kindnum
-    $td -> td_text     -> $text
-    $td -> td_depth    -> $depth
+    $k     -> kind_name  -> $name
+    $k     -> format_int -> $kindnum
+    $td    -> td_text    -> $text
+    $td    -> td_depth   -> $depth
     $depth -> format_int -> $depth_str
 
     [$depth_str, " ", $name, " ", $text, "\n"] -> concat_bytes -> $line
 }
 
-node td_text(t: Bytes, d: Int)  -> r: Bytes { $t -> $r }
-node td_depth(t: Bytes, d: Int) -> r: Int   { $d -> $r }
+node td_text(t: Bytes, d: Int) -> r: Bytes {
+    $t -> $r
+}
+
+node td_depth(t: Bytes, d: Int) -> r: Int {
+    $d -> $r
+}

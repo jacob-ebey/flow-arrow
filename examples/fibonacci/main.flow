@@ -13,7 +13,6 @@
 #
 #   () -> read_stdin -> parse_int -> fib_result -> format_int
 #       -> append_newline -> write_stdout
-
 import std.bytes { concat_bytes }
 import std.cli { Args }
 import std.io { read_stdin, write_stdout }
@@ -21,19 +20,19 @@ import std.int { parse_int, format_int }
 import std.math { add }
 
 program main(args: Args) -> exit_code: Faultable[Int] {
-    () -> read_stdin -> parse_int -> $depth
-    $depth -> fib_result -> format_int -> $result
+    ()              -> read_stdin   -> parse_int  -> $depth
+    $depth          -> fib_result   -> format_int -> $result
     [$result, "\n"] -> concat_bytes -> $output
-    $output -> write_stdout -> $exit_code
+    $output         -> write_stdout -> $exit_code
 }
 
 node fib_result(depth: Int) -> result: Int {
-    (1, 0) -> repeat<$depth> fib_step -> $final_pair
-    $final_pair -> first_int -> $result
+    (1, 0)      -> repeat<$depth> fib_step -> $final_pair
+    $final_pair -> first_int               -> $result
 }
 
 node fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
-    $b -> $next_a
+    $b       -> $next_a
     ($a, $b) -> add -> $next_b
 }
 

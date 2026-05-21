@@ -7,15 +7,14 @@
 # Example:
 #
 #   $ flowarrow run main.flow input.jpg output.jpg
-
 import std.cli { Args, argv }
 import std.cv { load, grayscale, save_jpeg }
 import std.seq { head, tail }
 
 program main(args: Args) -> exit_code: Faultable[Int] {
-    $args -> argv -> $paths
-    $paths -> head -> $input_path
-    $paths -> tail -> head -> $output_path
-    $input_path -> load -> grayscale -> $gray
+    $args                 -> argv      -> $paths
+    $paths                -> head      -> $input_path
+    $paths                -> tail      -> head      -> $output_path
+    $input_path           -> load      -> grayscale -> $gray
     ($output_path, $gray) -> save_jpeg -> $exit_code
 }

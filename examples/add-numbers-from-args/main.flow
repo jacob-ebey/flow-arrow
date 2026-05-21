@@ -8,7 +8,6 @@
 #   $ flowarrow build main.flow
 #   $ build/<target>/main 1.5 2.5 3
 #   7
-
 import std.bytes { concat_bytes }
 import std.cli { Args, argv }
 import std.io { write_stdout }
@@ -16,10 +15,10 @@ import std.real { parse_real, format_real }
 import std.math { add }
 
 program main(args: Args) -> exit_code: Faultable[Int] {
-    $args -> argv -> $raw_args
-    $raw_args -> map parse_real -> $numbers
-    $numbers -> reduce add(identity: 0.0) -> $total
-    $total -> format_real -> $total_bytes
-    [$total_bytes, "\n"] -> concat_bytes -> $output
-    $output -> write_stdout -> $exit_code
+    $args                -> argv                      -> $raw_args
+    $raw_args            -> map parse_real            -> $numbers
+    $numbers             -> reduce add(identity: 0.0) -> $total
+    $total               -> format_real               -> $total_bytes
+    [$total_bytes, "\n"] -> concat_bytes              -> $output
+    $output              -> write_stdout              -> $exit_code
 }
