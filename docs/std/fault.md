@@ -17,6 +17,9 @@ Faultable[T]
 ```text
 has_faults    : Seq[Fault] -> Bool
 format_faults : Seq[Fault] -> Bytes
+ok            : V -> Faultable[V]
+expect        : Faultable[V] -> V
+collect       : Seq[Faultable[V]] -> Faultable[Seq[V]]
 ```
 
 ## Semantics
@@ -31,6 +34,20 @@ Formats fault diagnostics as bytes suitable for `write_stderr`.
 
 The initial diagnostic format is intentionally simple and human-readable.
 A stable structured diagnostic model is still an open design question.
+
+### `ok`
+
+Wraps a value as a successful `Faultable[V]`.
+
+### `expect`
+
+Unwraps a successful `Faultable[V]`. If the input is a fault, the runtime emits
+the fault diagnostic and exits non-zero.
+
+### `collect`
+
+Converts `Seq[Faultable[V]]` into `Faultable[Seq[V]]`. The result is successful
+when every item is successful; otherwise the first fault is propagated.
 
 ## Example
 

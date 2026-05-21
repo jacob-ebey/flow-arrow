@@ -70,8 +70,10 @@ relative components, or platform-specific aliases.
 and `..`. Entries are sorted by byte value so output is deterministic.
 
 `walk_files(path)` returns sorted regular-file paths under `path`. If `path` is
-itself a regular file, the result is a one-item sequence. Symlinks and other
-non-regular, non-directory filesystem objects are skipped.
+itself a regular file, the result is a one-item sequence. If `path` contains
+glob metacharacters (`*`, `?`, or `[`), matching paths are expanded first and
+then walked. Symlinks and other non-regular, non-directory filesystem objects
+are skipped. A glob pattern with no matches returns a fault.
 
 `read_files(paths)` reads a sequence of paths at the boundary and returns
 `Seq[(path, contents)]`. This is the batch form needed by dataflow programs that

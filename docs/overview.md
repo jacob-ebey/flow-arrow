@@ -415,13 +415,17 @@ program main(args: Args) -> exit_code: Int {
 }
 ```
 
-Standard input, standard output, standard error, and file I/O are
-accessed through explicit boundary nodes such as `std.io` and `std.fs`,
-not through `main`'s parameters or return value. These nodes are visible
-in the dependency graph. A reusable `node` that calls a boundary node is
-effectful by composition, so it can be called from a program but cannot
-be used as a `map`, `filter`, `reduce`, or similar higher-order
-function.
+Standard input, standard output, standard error, and file I/O are accessed
+through explicit boundary nodes such as `std.io` and `std.fs`, not through
+`main`'s parameters or return value. These nodes are visible in the dependency
+graph. A reusable `node` that calls a boundary node is effectful by
+composition.
+
+Effectful nodes may be used with `map` and `fault map`. Pure maps may run in
+parallel; effectful maps run in deterministic input order so filesystem,
+network, database, and other boundary observations are sequenced by the input
+sequence. `filter`, `reduce`, `scan`, guards, and other control-shaping
+higher-order uses still require pure nodes.
 
 Runtime invalid states are **faults**, not exceptions and not ordinary
 control flow. Faults are reserved for unintended invalid states such as

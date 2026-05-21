@@ -690,7 +690,7 @@ impl<'a> Checker<'a> {
                 }
                 Stage::Endpoint(Endpoint::Name(name)) => (
                     name.clone(),
-                    self.apply_node(callable, kind, name, &value_type, false)?,
+                    self.apply_node(callable, kind, name, &value_type, false, false)?,
                 ),
                 Stage::Endpoint(Endpoint::Variable(_)) => {
                     return Err(
@@ -795,7 +795,8 @@ impl<'a> Checker<'a> {
                     }
                 }
                 Stage::Endpoint(Endpoint::Name(name)) => {
-                    value_type = self.apply_node(callable, kind, name, &value_type, false)?;
+                    value_type =
+                        self.apply_node(callable, kind, name, &value_type, false, false)?;
                 }
                 Stage::Endpoint(Endpoint::Variable(_)) => {
                     return Err(
@@ -914,6 +915,7 @@ impl<'a> Checker<'a> {
                         name,
                         &value_type,
                         false,
+                        false,
                     )?;
                 }
                 Stage::Endpoint(Endpoint::Variable(_)) => {
@@ -973,6 +975,7 @@ impl<'a> Checker<'a> {
         name: &str,
         input: &Type,
         as_function: bool,
+        allow_effectful_function: bool,
     ) -> Result<Type, String> {
         let node = self
             .symbols
@@ -984,7 +987,7 @@ impl<'a> Checker<'a> {
         if as_function && !self.supports_higher_order_call(node) {
             return Err(format!("`{name}` cannot be used as a map/filter function"));
         }
-        if as_function && node.effect != Effect::Pure {
+        if as_function && node.effect != Effect::Pure && !allow_effectful_function {
             return Err(format!("`{name}` cannot be used as a map/filter function"));
         }
         if !as_function && node.runtime == RuntimeSupport::ReduceOnly {
@@ -1057,12 +1060,12 @@ impl<'a> Checker<'a> {
         let output = match &unwrapped {
             Type::Seq(item_type) => {
                 let output =
-                    self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
+                    self.apply_node(callable, CallableKind::Node, name, item_type, true, true)?;
                 Type::Seq(Box::new(output))
             }
             Type::Stream(item_type) => {
                 let output =
-                    self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
+                    self.apply_node(callable, CallableKind::Node, name, item_type, true, true)?;
                 Type::Stream(Box::new(output))
             }
             _ => {
@@ -1090,7 +1093,7 @@ impl<'a> Checker<'a> {
                 "`fault map {name}` expected Seq input, found `{input}`"
             ));
         };
-        let output = self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
+        let output = self.apply_node(callable, CallableKind::Node, name, item_type, true, true)?;
         let Type::Faultable(ok) = output else {
             return Err(format!(
                 "`fault map {name}` expected a faultable node, found output `{output}`"
@@ -1107,7 +1110,7 @@ impl<'a> Checker<'a> {
                 "`filter {name}` expected Seq input, found `{input}`"
             ));
         };
-        let output = self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
+        let output = self.apply_node(callable, CallableKind::Node, name, item_type, true, false)?;
         self.expect_type(&format!("filter `{name}` result"), &output, &Type::Bool)?;
         Ok(if input_faultable {
             Type::Faultable(Box::new(unwrapped))
@@ -1117,7 +1120,7 @@ impl<'a> Checker<'a> {
     }
 
     fn apply_repeat(&self, callable: &Callable, name: &str, input: &Type) -> Result<Type, String> {
-        let output = self.apply_node(callable, CallableKind::Node, name, input, true)?;
+        let output = self.apply_node(callable, CallableKind::Node, name, input, true, false)?;
         self.expect_type(&format!("repeat `{name}` result"), &output, input)?;
         Ok(output)
     }
@@ -1210,7 +1213,7 @@ impl<'a> Checker<'a> {
             &plain_item_type,
         )?;
         let pair = Type::Tuple(vec![plain_item_type.clone(), plain_item_type.clone()]);
-        let result = self.apply_node(callable, CallableKind::Node, name, &pair, true)?;
+        let result = self.apply_node(callable, CallableKind::Node, name, &pair, true, false)?;
         self.expect_type(&format!("scan `{name}` result"), &result, &plain_item_type)?;
         if callable.name.is_empty() {
             return Err("internal error: empty callable name".to_string());
@@ -1265,7 +1268,7 @@ impl<'a> Checker<'a> {
                     }
                     let guard_input = single_or_tuple(input_items);
                     let guard_output =
-                        self.apply_node(callable, kind, node, &guard_input, false)?;
+                        self.apply_node(callable, kind, node, &guard_input, false, false)?;
                     self.expect_type(
                         &format!("match guard `{node}` result"),
                         &guard_output,
@@ -1275,7 +1278,9 @@ impl<'a> Checker<'a> {
             }
 
             let arm_output = match &arm.target {
-                MatchTarget::Node(node) => self.apply_node(callable, kind, node, input, false)?,
+                MatchTarget::Node(node) => {
+                    self.apply_node(callable, kind, node, input, false, false)?
+                }
                 MatchTarget::Value(endpoint) => self.endpoint_type(endpoint, env)?,
             };
             if let Some(expected) = &result {

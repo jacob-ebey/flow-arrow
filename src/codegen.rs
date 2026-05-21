@@ -986,7 +986,9 @@ impl<'a> TypedCodegen<'a> {
                             continue;
                         }
                     }
-                    if let Some(Stage::Map(map_name)) = chain.stages.get(index + 1) {
+                    if let Some(Stage::Map(map_name)) = chain.stages.get(index + 1)
+                        && !contains_faultable_ty(&value.ty)
+                    {
                         match self.canonical_name(name).as_str() {
                             "broadcast_left" => {
                                 value = self.emit_broadcast_map(

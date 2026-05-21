@@ -14,8 +14,9 @@ import std.real { parse_real, format_real, from_int }
 import std.int { parse_int, format_int }
 import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, min, max }
 import std.predicates { not_empty, is_empty, and, or, xor, not, all, any }
-import std.fault { Fault, has_faults, format_faults }
-import std.seq { head, tail }
+import std.fault { Fault, has_faults, format_faults, collect, expect }
+import std.seq { head, tail, length }
+import std.fs { walk_files, read_files }
 import std.cv { load, save_jpeg, grayscale }
 import std.sqlite as sqlite
 import std.stream as stream
@@ -49,6 +50,8 @@ sqlite.open       : Bytes -> Faultable[sqlite.Connection]
 sqlite.exec       : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, Int)]
 sqlite.query      : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, Stream[sqlite.Row])]
 stream.to_seq     : Stream[V] -> Faultable[Seq[V]]
+walk_files        : Bytes -> Faultable[Seq[Bytes]]
+read_files        : Seq[Bytes] -> Faultable[Seq[(Bytes,Bytes)]]
 
 # Arithmetic
 add               : (Int|Real, Int|Real) -> Int|Real # associative
@@ -83,6 +86,8 @@ any               : Seq[Bool] -> Bool
 Fault
 has_faults        : Seq[Fault] -> Bool
 format_faults     : Seq[Fault] -> Bytes
+collect           : Seq[Faultable[V]] -> Faultable[Seq[V]]
+expect            : Faultable[V] -> V
 ```
 
 These are the stdlib primitives currently backed by the compiler and
@@ -108,6 +113,7 @@ intermediate bindings into edge labels for a denser operation-first view.
 | `99-bottles/`                 | Pure string generation via `range_step` + `map` + concat reduce. |
 | `fibonacci/`                  | Stdin integer parsing and FlowArrow Fibonacci iteration. |
 | `json-parser/`                | Flat JSON array of numbers → JSON summary object, with bracket framing and fault routing. |
+| `grep/`                       | Literal byte search over multiple file, directory, or glob targets. |
 | `grayscale-image/`            | Filepath arguments plus `std.cv` image auto-detect, grayscale conversion, and JPEG encode. |
 
 ## Boundary API sketches

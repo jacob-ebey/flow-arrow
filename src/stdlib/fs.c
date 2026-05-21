@@ -1,4 +1,5 @@
 #include "runtime.h"
+#include <glob.h>
 
 static FaFault fa_io_fault(FaBytes path, const char *operation) {
   FaBytes prefix = fa_bytes_literal(operation, strlen(operation));
@@ -257,12 +258,46 @@ static int fa_walk_files_into(FaBytes path, FaBytesVec *files, FaFault *fault) {
   return 0;
 }
 
+static bool fa_path_has_glob(FaBytes path) {
+  for (size_t i = 0; i < path.len; i++) {
+    if (path.bytes[i] == '*' || path.bytes[i] == '?' || path.bytes[i] == '[') return true;
+  }
+  return false;
+}
+
 static FaFaultable_Seq_Bytes fa_walk_files(FaBytes path) {
   FaBytesVec files = {0};
   FaFault fault;
-  if (fa_walk_files_into(path, &files, &fault) != 0) {
-    free(files.items);
-    return FaFaultable_Seq_Bytes_fault(fault);
+  if (fa_path_has_glob(path)) {
+    if (memchr(path.bytes, '\0', path.len)) {
+      return FaFaultable_Seq_Bytes_fault(fa_fault_cstr("walk_files: path contains NUL byte"));
+    }
+    char *pattern = fa_copy_bytes(path.bytes, path.len);
+    glob_t matches;
+    memset(&matches, 0, sizeof(matches));
+    int result = glob(pattern, 0, NULL, &matches);
+    free(pattern);
+    if (result != 0) {
+      globfree(&matches);
+      if (result == GLOB_NOMATCH) {
+        return FaFaultable_Seq_Bytes_fault(fa_fault_cstr("walk_files: glob pattern matched no paths"));
+      }
+      return FaFaultable_Seq_Bytes_fault(fa_fault_cstr("walk_files: glob expansion failed"));
+    }
+    for (size_t i = 0; i < matches.gl_pathc; i++) {
+      FaBytes match = fa_bytes_literal(matches.gl_pathv[i], strlen(matches.gl_pathv[i]));
+      if (fa_walk_files_into(match, &files, &fault) != 0) {
+        globfree(&matches);
+        free(files.items);
+        return FaFaultable_Seq_Bytes_fault(fault);
+      }
+    }
+    globfree(&matches);
+  } else {
+    if (fa_walk_files_into(path, &files, &fault) != 0) {
+      free(files.items);
+      return FaFaultable_Seq_Bytes_fault(fault);
+    }
   }
   return FaFaultable_Seq_Bytes_ok(fa_bytes_vec_finish(&files));
 }

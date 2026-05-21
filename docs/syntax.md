@@ -384,11 +384,15 @@ Notes:
 
 - `reduce` and `scan` require their `IDENT` operator to be associative
   (a semantic check, not a syntactic one).
+- `map f` applies `f` to each element. Pure `map` functions may run in
+  parallel. Effectful `map` functions are permitted and are evaluated in
+  deterministic input order.
 - `fault map f { ok -> $xs, fault -> $fs }` applies a faultable node to
   each element. Successful values bind to `$xs`; graph-visible faults bind
   to `$fs : Seq[Fault]`. Handling faults is optional: unhandled faults
   propagate through the type as `Faultable[T]`, and any declaration that
-  returns them must say so in its output type.
+  returns them must say so in its output type. Effectful fault maps use
+  the same deterministic input-order evaluation as effectful `map`.
 - `repeat<$n>` accepts either an integer literal **or** a `variable_ref` of
   type `Int`. When `N` is a runtime value, the iteration count varies
   per invocation but the body graph is still static.

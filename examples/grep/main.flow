@@ -1,0 +1,67 @@
+# grep
+#
+# Reads a search needle and one or more file, directory, or glob targets
+# from positional arguments, walks the targets, and prints every matching line
+# as:
+#
+#   filepath:line-number:line
+#
+# Example:
+#
+#   $ flowarrow run main.flow needle ./src "*.flow"
+import std.bytes { concat_bytes, contains, split_lines }
+import std.cli { Args, argv }
+import std.fault { collect }
+import std.fs { read_files, walk_files }
+import std.int { format_int }
+import std.io { write_stdout }
+import std.math { add }
+import std.seq {
+    broadcast_right,
+    flatten,
+    head,
+    length,
+    tail,
+    zip,
+}
+
+program main(args: Args) -> exit_code: Faultable[Int] {
+    $args     -> argv -> $raw_args
+    $raw_args -> head -> $needle
+    $raw_args -> tail -> $targets
+
+    $targets          -> map walk_files  -> collect       -> flatten -> $paths
+    $paths            -> read_files      -> $files
+    ($files, $needle) -> broadcast_right -> map grep_file -> flatten -> $lines
+    $paths            -> length          -> format_int    -> $walked_count
+    $files            -> length          -> format_int    -> $file_count
+    # summarize the walk and scan counts, and print the matches
+    ["files walked: ", $walked_count, "\n", "files scanned: ", $file_count, "\n"] -> concat_bytes -> $summary
+    $lines                                                                        -> concat_bytes -> $matches
+    [$matches, $summary]                                                          -> concat_bytes -> $output
+    $output                                                                       -> write_stdout -> $exit_code
+}
+
+node grep_file(input: ((Bytes, Bytes), Bytes)) -> out: Seq[Bytes] {
+    $input    -> (($path, $contents), $needle)
+    $contents -> split_lines -> $lines
+
+    $lines                  -> length     -> $line_count
+    ($line_count, 1)        -> add        -> $line_stop
+    (1, $line_stop, 1)      -> range_step -> $line_numbers
+    ($line_numbers, $lines) -> zip        -> $numbered_lines
+
+    ($numbered_lines, $needle) -> broadcast_right -> filter line_contains -> $matches
+    ($matches, $path)          -> broadcast_right -> map format_match     -> $out
+}
+
+node line_contains(input: ((Int, Bytes), Bytes)) -> keep: Bool {
+    $input           -> (($line_number, $line), $needle)
+    ($line, $needle) -> contains -> $keep
+}
+
+node format_match(input: (((Int, Bytes), Bytes), Bytes)) -> out: Bytes {
+    $input                                            -> ((($line_number, $line), $needle), $path)
+    $line_number                                      -> format_int   -> $line_number_text
+    [$path, ":", $line_number_text, ":", $line, "\n"] -> concat_bytes -> $out
+}

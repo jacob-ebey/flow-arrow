@@ -556,6 +556,19 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "as_real"
             | "as_text"
             | "as_blob"
+            | "read_file"
+            | "write_file"
+            | "exists"
+            | "is_file"
+            | "is_dir"
+            | "file_size"
+            | "list_dir"
+            | "walk_files"
+            | "read_files"
+            | "open_file"
+            | "size"
+            | "read_at"
+            | "copy_to_file"
     )
 }
 
