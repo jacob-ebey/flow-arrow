@@ -26,15 +26,16 @@ program main(args: Args) -> exit_code: Faultable[Int] {
     "write sqlite docs"                                         -> sqlite.text -> $title1
     "implement sqlite runtime"                                  -> sqlite.text -> $title2
     ($conn1, "INSERT INTO todos (title) VALUES (?)", [$title1]) -> sqlite.exec -> first -> $conn2
-    ($conn2, "INSERT INTO todos (title) VALUES (?)", [$title2]) -> sqlite.exec -> first -> $conn3
+    ($conn1, "INSERT INTO todos (title) VALUES (?)", [$title2]) -> sqlite.exec -> first -> $conn3
+    ($conn2, $conn3) -> first -> $conn4
 
-    ($conn3, "SELECT id, title FROM todos ORDER BY id", $no_params) -> sqlite.query -> $query
-    $query                                                          -> first        -> $conn4
+    ($conn4, "SELECT id, title FROM todos ORDER BY id", $no_params) -> sqlite.query -> $query
+    $query                                                          -> first        -> $conn5
     $query                                                          -> second       -> $rows
     $rows -> map todo_line -> stream.to_seq -> concat_bytes -> $output
 
     $output -> write_stdout -> $written
-    $conn4  -> sqlite.close -> $closed
+    $conn5  -> sqlite.close -> $closed
     $closed -> $exit_code
 }
 
