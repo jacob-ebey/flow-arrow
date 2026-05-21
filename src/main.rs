@@ -50,6 +50,34 @@ fn run_cli() -> Result<u8, String> {
             flowarrow::typecheck_file(PathBuf::from(path).as_path())?;
             Ok(0)
         }
+        Some("fmt") => {
+            let path = args
+                .next()
+                .ok_or_else(|| "usage: flowarrow fmt <path.flow> [--check|--stdout]".to_string())?;
+            let mut check = false;
+            let mut stdout = false;
+            for flag in args {
+                match flag.as_str() {
+                    "--check" => check = true,
+                    "--stdout" => stdout = true,
+                    other => return Err(format!("unknown fmt option `{other}`")),
+                }
+            }
+            if check && stdout {
+                return Err("flowarrow fmt accepts only one of --check or --stdout".to_string());
+            }
+            let path = PathBuf::from(path);
+            if check {
+                flowarrow::check_format_file(path.as_path())?;
+            } else if stdout {
+                let source = std::fs::read_to_string(&path)
+                    .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+                print!("{}", flowarrow::format_source(&source)?);
+            } else {
+                flowarrow::format_file(path.as_path())?;
+            }
+            Ok(0)
+        }
         Some("graph") => {
             let path = args
                 .next()
@@ -63,6 +91,6 @@ fn run_cli() -> Result<u8, String> {
             );
             Ok(0)
         }
-        _ => Err("usage: flowarrow <run|build|typecheck|graph> ...".to_string()),
+        _ => Err("usage: flowarrow <run|build|typecheck|fmt|graph> ...".to_string()),
     }
 }

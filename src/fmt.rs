@@ -1,0 +1,777 @@
+use crate::ast::*;
+use crate::parser;
+use std::fs;
+use std::path::Path;
+
+const INDENT: &str = "    ";
+const MULTILINE_IMPORT_ITEM_LIMIT: usize = 4;
+const MAX_INLINE_IMPORT_WIDTH: usize = 100;
+
+pub fn format_source(source: &str) -> Result<String, String> {
+    let module = parser::parse(source)?;
+    let comments = CommentLayout::collect(source, &module);
+    Ok(Formatter {
+        comments,
+        output: String::new(),
+    }
+    .format_module(&module))
+}
+
+pub fn format_file(path: &Path) -> Result<bool, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+    let formatted = format_source(&source)?;
+    if formatted == source {
+        return Ok(false);
+    }
+    fs::write(path, formatted)
+        .map_err(|error| format!("failed to write `{}`: {error}", path.display()))?;
+    Ok(true)
+}
+
+pub fn check_file(path: &Path) -> Result<(), String> {
+    let source = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+    let formatted = format_source(&source)?;
+    if formatted == source {
+        Ok(())
+    } else {
+        Err(format!("`{}` is not formatted", path.display()))
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct CommentLayout {
+    decls: Vec<DeclComments>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DeclComments {
+    leading: Vec<String>,
+    chains: Vec<ChainComments>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ChainComments {
+    leading: Vec<String>,
+    trailing: Option<String>,
+}
+
+impl CommentLayout {
+    fn collect(source: &str, module: &Module) -> Self {
+        let mut layout = CommentLayout {
+            decls: module
+                .declarations
+                .iter()
+                .map(|decl| DeclComments {
+                    leading: Vec::new(),
+                    chains: match decl {
+                        Decl::Node(callable) | Decl::Program(callable) => {
+                            vec![ChainComments::default(); callable.chains.len()]
+                        }
+                        Decl::TypeAlias(_) | Decl::Import(_) => Vec::new(),
+                    },
+                })
+                .collect(),
+        };
+
+        let mut pending_top = Vec::new();
+        let mut pending_body = Vec::new();
+        let mut decl_index = 0usize;
+        let mut current_callable = None::<usize>;
+        let mut current_chain = 0usize;
+        let mut brace_depth = 0i32;
+        let mut paren_depth = 0i32;
+        let mut bracket_depth = 0i32;
+        let mut block_comment = None::<Vec<String>>;
+
+        for line in source.lines() {
+            if let Some(lines) = &mut block_comment {
+                lines.push(line.trim_end().to_string());
+                if line.contains("*/") {
+                    let lines = block_comment.take().unwrap_or_default();
+                    if current_callable.is_some() {
+                        pending_body.extend(lines);
+                    } else {
+                        pending_top.extend(lines);
+                    }
+                }
+                continue;
+            }
+
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("/*") {
+                let comment = line.trim_end().trim_start().to_string();
+                if trimmed.contains("*/") {
+                    if current_callable.is_some() {
+                        pending_body.push(comment);
+                    } else {
+                        pending_top.push(comment);
+                    }
+                } else {
+                    block_comment = Some(vec![comment]);
+                }
+                continue;
+            }
+
+            let (code, line_comment) = split_line_comment(line);
+            let code_trimmed = code.trim();
+            if code_trimmed.is_empty() {
+                if let Some(comment) = line_comment {
+                    if current_callable.is_some() {
+                        pending_body.push(comment);
+                    } else {
+                        pending_top.push(comment);
+                    }
+                }
+                continue;
+            }
+
+            let starts_top_decl = brace_depth == 0 && starts_declaration(code_trimmed);
+            if starts_top_decl && decl_index < layout.decls.len() {
+                layout.decls[decl_index].leading.append(&mut pending_top);
+                if starts_callable(code_trimmed) {
+                    current_callable = Some(decl_index);
+                    current_chain = 0;
+                }
+                decl_index += 1;
+            }
+
+            let starts_chain = current_callable.is_some()
+                && brace_depth == 1
+                && paren_depth == 0
+                && bracket_depth == 0
+                && !code_trimmed.starts_with("->")
+                && !code_trimmed.starts_with('}');
+            if starts_chain {
+                if let Some(decl) = current_callable {
+                    if let Some(chain_comments) = layout
+                        .decls
+                        .get_mut(decl)
+                        .and_then(|decl| decl.chains.get_mut(current_chain))
+                    {
+                        chain_comments.leading.append(&mut pending_body);
+                        chain_comments.trailing = line_comment;
+                    }
+                }
+                current_chain += 1;
+            }
+
+            update_depths(code, &mut brace_depth, &mut paren_depth, &mut bracket_depth);
+            if current_callable.is_some() && brace_depth == 0 {
+                current_callable = None;
+                pending_body.clear();
+            }
+        }
+
+        if decl_index < layout.decls.len() {
+            layout.decls[decl_index].leading.append(&mut pending_top);
+        }
+
+        layout
+    }
+}
+
+struct Formatter {
+    comments: CommentLayout,
+    output: String,
+}
+
+impl Formatter {
+    fn format_module(mut self, module: &Module) -> String {
+        for (index, decl) in module.declarations.iter().enumerate() {
+            if index > 0 && needs_blank_between(&module.declarations[index - 1], decl) {
+                self.blank_line();
+            }
+            if let Some(comments) = self.comments.decls.get(index).cloned() {
+                self.write_comments("", &comments.leading);
+            }
+            self.format_decl(index, decl);
+        }
+        if !self.output.ends_with('\n') {
+            self.output.push('\n');
+        }
+        self.output
+    }
+
+    fn format_decl(&mut self, decl_index: usize, decl: &Decl) {
+        match decl {
+            Decl::TypeAlias(alias) => {
+                self.line(format!(
+                    "type {} = {}",
+                    alias.name,
+                    format_type_name(&alias.ty)
+                ));
+            }
+            Decl::Import(import) => self.format_import(import),
+            Decl::Node(callable) => self.format_callable(decl_index, "node", callable),
+            Decl::Program(callable) => self.format_callable(decl_index, "program", callable),
+        }
+    }
+
+    fn format_import(&mut self, import: &Import) {
+        let source = match &import.source {
+            ImportSource::Module(name) => name.clone(),
+            ImportSource::Local(path) => format_string(path),
+        };
+        match &import.clause {
+            ImportClause::Alias(alias) => self.line(format!("import {source} as {alias}")),
+            ImportClause::Items(items) => {
+                let inline = format!(
+                    "import {source} {{ {} }}",
+                    items
+                        .iter()
+                        .map(format_import_item)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                if items.len() <= MULTILINE_IMPORT_ITEM_LIMIT
+                    && inline.chars().count() <= MAX_INLINE_IMPORT_WIDTH
+                {
+                    self.line(inline);
+                } else {
+                    self.line(format!("import {source} {{"));
+                    for item in items {
+                        self.line(format!("{INDENT}{},", format_import_item(item)));
+                    }
+                    self.line("}");
+                }
+            }
+        }
+    }
+
+    fn format_callable(&mut self, decl_index: usize, kind: &str, callable: &Callable) {
+        let inputs = callable
+            .inputs
+            .iter()
+            .map(format_port)
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.line(format!(
+            "{kind} {}({inputs}) -> {} {{",
+            callable.name,
+            format_port_or_list(&callable.outputs)
+        ));
+        for (index, chain) in callable.chains.iter().enumerate() {
+            let comments = self
+                .comments
+                .decls
+                .get(decl_index)
+                .and_then(|decl| decl.chains.get(index))
+                .cloned();
+            if let Some(comments) = comments.as_ref() {
+                if !comments.leading.is_empty() && index > 0 {
+                    self.blank_line();
+                }
+                self.write_comments(INDENT, &comments.leading);
+            }
+            let mut line = format!("{INDENT}{}", format_chain(chain));
+            if let Some(comment) = comments.and_then(|comments| comments.trailing) {
+                line.push_str("  ");
+                line.push_str(&comment);
+            }
+            self.line(line);
+        }
+        self.line("}");
+    }
+
+    fn write_comments(&mut self, indent: &str, comments: &[String]) {
+        for comment in comments {
+            self.line(format!("{indent}{}", comment.trim_start()));
+        }
+    }
+
+    fn line(&mut self, text: impl AsRef<str>) {
+        self.output.push_str(text.as_ref());
+        self.output.push('\n');
+    }
+
+    fn blank_line(&mut self) {
+        if !self.output.ends_with("\n\n") {
+            self.output.push('\n');
+        }
+    }
+}
+
+fn format_import_item(item: &ImportItem) -> String {
+    match &item.alias {
+        Some(alias) => format!("{} as {alias}", item.name),
+        None => item.name.clone(),
+    }
+}
+
+fn needs_blank_between(left: &Decl, right: &Decl) -> bool {
+    !matches!(
+        (left, right),
+        (Decl::Import(_), Decl::Import(_)) | (Decl::TypeAlias(_), Decl::TypeAlias(_))
+    )
+}
+
+fn format_callable_port_list(ports: &[Port]) -> String {
+    ports.iter().map(format_port).collect::<Vec<_>>().join(", ")
+}
+
+fn format_port_or_list(ports: &[Port]) -> String {
+    match ports {
+        [port] => format_port(port),
+        ports => format!("({})", format_callable_port_list(ports)),
+    }
+}
+
+fn format_port(port: &Port) -> String {
+    format!("{}: {}", port.name, format_type_name(&port.ty))
+}
+
+fn format_type_name(ty: &str) -> String {
+    let mut output = String::new();
+    let mut chars = ty.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            ',' => {
+                output.push(',');
+                output.push(' ');
+                while chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+            }
+            '|' => {
+                trim_trailing_spaces(&mut output);
+                output.push_str(" | ");
+                while chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+            }
+            _ => output.push(ch),
+        }
+    }
+    trim_trailing_spaces(&mut output);
+    output
+}
+
+fn format_chain(chain: &Chain) -> String {
+    let mut parts = Vec::with_capacity(chain.stages.len() + 1);
+    parts.push(format_endpoint(&chain.source));
+    parts.extend(chain.stages.iter().map(format_stage));
+    parts.join(" -> ")
+}
+
+fn format_stage(stage: &Stage) -> String {
+    match stage {
+        Stage::Endpoint(endpoint) => format_endpoint(endpoint),
+        Stage::Map(name) => format!("map {name}"),
+        Stage::FaultMap { node, ok, fault } => {
+            format!("fault map {node} {{ ok -> ${ok}, fault -> ${fault} }}")
+        }
+        Stage::Filter(name) => format!("filter {name}"),
+        Stage::Repeat { count, node } => format!("repeat<{}> {node}", format_endpoint(count)),
+        Stage::Reduce { op, identity } => {
+            format!("reduce {op}(identity: {})", format_endpoint(identity))
+        }
+        Stage::Scan { op, identity } => {
+            format!("scan {op}(identity: {})", format_endpoint(identity))
+        }
+    }
+}
+
+fn format_endpoint(endpoint: &Endpoint) -> String {
+    match endpoint {
+        Endpoint::Variable(name) => format!("${name}"),
+        Endpoint::Name(name) => name.clone(),
+        Endpoint::Int(value) => value.to_string(),
+        Endpoint::Real(value) => format_real(*value),
+        Endpoint::Bool(value) => value.to_string(),
+        Endpoint::String(value) => format_string(value),
+        Endpoint::Unit => "()".to_string(),
+        Endpoint::Tuple(items) => format!(
+            "({})",
+            items
+                .iter()
+                .map(format_endpoint)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Endpoint::Seq(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(format_endpoint)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn format_real(value: f64) -> String {
+    let mut text = value.to_string();
+    if text.contains('e') || text.contains('E') {
+        text = format!("{value:.15}");
+        while text.contains('.') && text.ends_with('0') {
+            text.pop();
+        }
+    }
+    if !text.contains('.') {
+        text.push_str(".0");
+    }
+    text
+}
+
+fn format_string(value: &str) -> String {
+    let mut output = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\t' => output.push_str("\\t"),
+            '\r' => output.push_str("\\r"),
+            other => output.push(other),
+        }
+    }
+    output.push('"');
+    output
+}
+
+fn split_line_comment(line: &str) -> (&str, Option<String>) {
+    let mut escaped = false;
+    let mut in_string = false;
+    for (index, ch) in line.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+        } else if ch == '"' {
+            in_string = true;
+        } else if ch == '#' {
+            let code = &line[..index];
+            let comment = line[index..].trim_end().to_string();
+            return (code, Some(comment));
+        }
+    }
+    (line, None)
+}
+
+fn update_depths(
+    code: &str,
+    brace_depth: &mut i32,
+    paren_depth: &mut i32,
+    bracket_depth: &mut i32,
+) {
+    let mut escaped = false;
+    let mut in_string = false;
+    for ch in code.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => *brace_depth += 1,
+            '}' => *brace_depth -= 1,
+            '(' => *paren_depth += 1,
+            ')' => *paren_depth -= 1,
+            '[' => *bracket_depth += 1,
+            ']' => *bracket_depth -= 1,
+            _ => {}
+        }
+    }
+}
+
+fn starts_declaration(text: &str) -> bool {
+    starts_keyword(text, "import")
+        || starts_keyword(text, "type")
+        || starts_keyword(text, "node")
+        || starts_keyword(text, "program")
+}
+
+fn starts_callable(text: &str) -> bool {
+    starts_keyword(text, "node") || starts_keyword(text, "program")
+}
+
+fn starts_keyword(text: &str, keyword: &str) -> bool {
+    text == keyword
+        || text
+            .strip_prefix(keyword)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|ch| ch.is_whitespace())
+}
+
+fn trim_trailing_spaces(text: &mut String) {
+    while text.ends_with(' ') {
+        text.pop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_formats(input: &str, expected: &str) {
+        let formatted = format_source(input).expect("format");
+        assert_eq!(formatted, expected);
+        assert_eq!(
+            format_source(&formatted).expect("format twice"),
+            formatted,
+            "formatting should be idempotent"
+        );
+        assert_eq!(
+            parser::parse(input).expect("parse input"),
+            parser::parse(&formatted).expect("parse formatted"),
+            "formatting should preserve the parsed program"
+        );
+    }
+
+    #[test]
+    fn formats_dense_program_spacing() {
+        assert_formats(
+            r#"import   std.cli{Args}
+type Pair=(Int,Real)
+program   main( args:Args)->exit_code:Int{(1,2)->add->$sum
+$sum-> $exit_code}"#,
+            r#"import std.cli { Args }
+
+type Pair = (Int, Real)
+
+program main(args: Args) -> exit_code: Int {
+    (1, 2) -> add -> $sum
+    $sum -> $exit_code
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn formats_alias_and_multiline_imports() {
+        assert_formats(
+            r#"import std.math{add as plus,sub,mul,div,eq}
+import "./helpers.flow" as helper
+program main(args:Args)->exit_code:Int{0->$exit_code}"#,
+            r#"import std.math {
+    add as plus,
+    sub,
+    mul,
+    div,
+    eq,
+}
+import "./helpers.flow" as helper
+
+program main(args: Args) -> exit_code: Int {
+    0 -> $exit_code
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn formats_callable_ports_and_type_whitespace() {
+        assert_formats(
+            r#"node split(input:(Seq[Real],Seq[Real]),value:Int|Real)->(left:Seq[Real],right:Faultable[Int]){$input->first->$left
+$value->wrap->$right}"#,
+            r#"node split(input: (Seq[Real], Seq[Real]), value: Int | Real) -> (left: Seq[Real], right: Faultable[Int]) {
+    $input -> first -> $left
+    $value -> wrap -> $right
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn formats_literals_without_changing_real_kinds() {
+        assert_formats(
+            "program main(args: Args) -> exit_code: Int {\n    [0.0,\"a\\n\\\"b\",true,false,()] -> sink -> $exit_code\n}\n",
+            "program main(args: Args) -> exit_code: Int {\n    [0.0, \"a\\n\\\"b\", true, false, ()] -> sink -> $exit_code\n}\n",
+        );
+    }
+
+    #[test]
+    fn formats_combinator_stages() {
+        assert_formats(
+            r#"program main(args: Args) -> exit_code: Int {
+["1","bad"]->fault map parse_real{ok->$numbers,fault->$faults}
+$numbers->filter positive->map abs->reduce add(identity:0.0)->$total
+$total->scan add(identity: 0.0)->repeat<$total> emit->$exit_code
+}"#,
+            r#"program main(args: Args) -> exit_code: Int {
+    ["1", "bad"] -> fault map parse_real { ok -> $numbers, fault -> $faults }
+    $numbers -> filter positive -> map abs -> reduce add(identity: 0.0) -> $total
+    $total -> scan add(identity: 0.0) -> repeat<$total> emit -> $exit_code
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn preserves_standalone_and_trailing_line_comments() {
+        assert_formats(
+            r#"# module docs
+import std.cli { Args }
+
+# entry docs
+program main(args: Args) -> exit_code: Int {
+    # bind status
+    0 -> $exit_code # status code
+}
+"#,
+            r#"# module docs
+import std.cli { Args }
+
+# entry docs
+program main(args: Args) -> exit_code: Int {
+    # bind status
+    0 -> $exit_code  # status code
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn keeps_comments_before_multiline_chain_continuations_on_the_next_chain() {
+        assert_formats(
+            r#"program main(args: Args) -> exit_code: Int {
+    # first line
+    [$a,
+     $b]
+        -> concat -> $joined
+
+    # second line
+    ["done",
+     "\n"]
+        -> concat -> $exit_code
+}
+"#,
+            r#"program main(args: Args) -> exit_code: Int {
+    # first line
+    [$a, $b] -> concat -> $joined
+
+    # second line
+    ["done", "\n"] -> concat -> $exit_code
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn preserves_hashes_inside_strings() {
+        assert_formats(
+            r##"program main(args: Args) -> exit_code: Int {
+    "#not-comment" -> echo -> $exit_code # comment
+}
+"##,
+            r##"program main(args: Args) -> exit_code: Int {
+    "#not-comment" -> echo -> $exit_code  # comment
+}
+"##,
+        );
+    }
+
+    #[test]
+    fn preserves_standalone_block_comments() {
+        assert_formats(
+            r#"/* module */
+program main(args: Args) -> exit_code: Int {
+    /*
+     * body
+     */
+    0 -> $exit_code
+}
+"#,
+            r#"/* module */
+program main(args: Args) -> exit_code: Int {
+    /*
+    * body
+    */
+    0 -> $exit_code
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn wraps_long_imports_even_when_item_count_is_small() {
+        assert_formats(
+            r#"import std.very_long_module_name { incredibly_long_imported_name, another_extremely_long_imported_name }
+program main(args: Args) -> exit_code: Int { 0 -> $exit_code }"#,
+            r#"import std.very_long_module_name {
+    incredibly_long_imported_name,
+    another_extremely_long_imported_name,
+}
+
+program main(args: Args) -> exit_code: Int {
+    0 -> $exit_code
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn formats_checked_in_flow_sources_without_changing_the_ast() {
+        for (name, source) in [
+            (
+                "examples/99-bottles/main.flow",
+                include_str!("../examples/99-bottles/main.flow"),
+            ),
+            (
+                "examples/add-numbers-from-args/main.flow",
+                include_str!("../examples/add-numbers-from-args/main.flow"),
+            ),
+            (
+                "examples/add-numbers-from-stdin/main.flow",
+                include_str!("../examples/add-numbers-from-stdin/main.flow"),
+            ),
+            (
+                "examples/fibonacci/main.flow",
+                include_str!("../examples/fibonacci/main.flow"),
+            ),
+            (
+                "examples/grayscale-image/main.flow",
+                include_str!("../examples/grayscale-image/main.flow"),
+            ),
+            (
+                "examples/json-parser/main.flow",
+                include_str!("../examples/json-parser/main.flow"),
+            ),
+            (
+                "examples/json/main.flow",
+                include_str!("../examples/json/main.flow"),
+            ),
+            (
+                "examples/parse-and-sum-lines/main.flow",
+                include_str!("../examples/parse-and-sum-lines/main.flow"),
+            ),
+            (
+                "src/stdlib/source/cv.flow",
+                include_str!("stdlib/source/cv.flow"),
+            ),
+            (
+                "src/stdlib/source/matrix.flow",
+                include_str!("stdlib/source/matrix.flow"),
+            ),
+            (
+                "src/stdlib/source/vector.flow",
+                include_str!("stdlib/source/vector.flow"),
+            ),
+        ] {
+            let formatted = format_source(source).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                parser::parse(source).unwrap_or_else(|error| panic!("{name}: {error}")),
+                parser::parse(&formatted).unwrap_or_else(|error| panic!("{name}: {error}")),
+                "{name}"
+            );
+            assert_eq!(
+                format_source(&formatted).unwrap_or_else(|error| panic!("{name}: {error}")),
+                formatted,
+                "{name}"
+            );
+        }
+    }
+}
