@@ -14,6 +14,7 @@ mod stream;
 mod tuple;
 
 const RUNTIME_C: &str = include_str!("stdlib/runtime.c");
+const RUNTIME_H: &str = include_str!("stdlib/runtime.h");
 const VECTOR_FLOW: &str = include_str!("stdlib/source/vector.flow");
 const MATRIX_FLOW: &str = include_str!("stdlib/source/matrix.flow");
 const CV_FLOW: &str = include_str!("stdlib/source/cv.flow");
@@ -280,6 +281,20 @@ pub const SYMBOLS: &[StdSymbol] = &[
 ];
 
 pub fn emit_runtime_c(out: &mut String) {
+    let mut emitted_headers = Vec::new();
+    for headers in [
+        cli::H,
+        io::H,
+        fs::H,
+        int::H,
+        real::H,
+        fault::H,
+        bytes::H,
+        intrinsic::H,
+    ] {
+        push_c_headers(out, headers, &mut emitted_headers);
+    }
+
     for part in [
         RUNTIME_C,
         cli::C,
@@ -296,9 +311,30 @@ pub fn emit_runtime_c(out: &mut String) {
     }
 }
 
+pub fn emit_cv_type_h(out: &mut String) {
+    let mut emitted_headers = Vec::new();
+    push_c_headers(out, cv::TYPE_H, &mut emitted_headers);
+}
+
+pub fn emit_cv_runtime_h(out: &mut String) {
+    let mut emitted_headers = Vec::new();
+    push_c_headers(out, cv::H, &mut emitted_headers);
+}
+
 pub fn emit_cv_runtime_c(out: &mut String) {
     push_c_fragment(out, cv::C);
     out.push('\n');
+}
+
+fn push_c_headers(out: &mut String, headers: &[&'static str], emitted: &mut Vec<&'static str>) {
+    for header in headers {
+        if emitted.contains(header) {
+            continue;
+        }
+        emitted.push(header);
+        push_c_fragment(out, header);
+        out.push('\n');
+    }
 }
 
 fn push_c_fragment(out: &mut String, source: &str) {

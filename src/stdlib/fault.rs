@@ -1,6 +1,7 @@
 use super::*;
 
 const MODULE: &str = "std.fault";
+pub const H: &[&str] = &[super::RUNTIME_H];
 pub const C: &str = include_str!("fault.c");
 
 pub const FAULT: StdSymbol = ty(MODULE, "Fault");

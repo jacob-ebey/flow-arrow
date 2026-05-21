@@ -1,6 +1,7 @@
 use super::*;
 
 const MODULE: &str = "std.fs";
+pub const H: &[&str] = &[super::RUNTIME_H];
 pub const C: &str = include_str!("fs.c");
 
 pub const READ_FILE: StdSymbol = io_node(MODULE, "read_file", "Bytes", "Faultable[Bytes]");

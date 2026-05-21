@@ -1,6 +1,7 @@
 use super::*;
 
 const MODULE: &str = "std.bytes";
+pub const H: &[&str] = &[super::RUNTIME_H];
 pub const C: &str = include_str!("bytes.c");
 
 pub const SPLIT_LINES: StdSymbol = node(MODULE, "split_lines", "Bytes", "Seq[Bytes]");

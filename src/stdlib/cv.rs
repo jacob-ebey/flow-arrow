@@ -2,6 +2,10 @@ use super::*;
 
 const MODULE: &str = "std.cv.native";
 const IMAGE: &str = "((Int,Int),Seq[Seq[(Real,(Real,Real))]])";
+const CV_TYPES_H: &str = include_str!("cv.h");
+const CV_NATIVE_H: &str = include_str!("cv_native.h");
+pub const TYPE_H: &[&str] = &[CV_TYPES_H];
+pub const H: &[&str] = &[CV_NATIVE_H];
 pub const C: &str = include_str!("cv.c");
 
 pub const DECODE: StdSymbol = node(

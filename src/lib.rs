@@ -449,6 +449,7 @@ mod tests {
         let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
         assert!(runtime_c.contains("flow_node_process"));
         assert!(runtime_c.contains("flow_node___flow_std_cv_grayscale"));
+        assert!(runtime_c.contains("FaTuple_Real_Real"));
     }
 
     #[test]

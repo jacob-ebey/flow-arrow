@@ -1,11 +1,4 @@
-#include "runtime.h"
-#include <jpeglib.h>
-#include <png.h>
-#include <setjmp.h>
-
-typedef FaTuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real FaCvImage;
-typedef FaFaultable_Tuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real FaCvImageResult;
-typedef FaTuple_Real_Tuple_Real_Real FaCvPixel;
+#include "cv_native.h"
 
 typedef struct {
   struct jpeg_error_mgr pub;

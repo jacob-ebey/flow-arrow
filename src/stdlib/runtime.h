@@ -2,8 +2,8 @@
 #define FLOWARROW_STDLIB_RUNTIME_H
 
 /*
- * Editor-only declarations for stdlib C fragments. Local includes are
- * stripped before the compiler writes the generated runtime.c.
+ * Shared runtime declarations for generated runtime.c and for standalone
+ * editor analysis of stdlib C fragments.
  */
 
 #include <ctype.h>
@@ -34,53 +34,42 @@ typedef struct { bool is_fault; FaFault fault; FaSeq_Real value; } FaFaultable_S
 typedef struct { size_t count; FaFault *items; } FaSeq_Fault;
 typedef void (*FaParallelForFn)(void *ctx, size_t start, size_t end);
 
-typedef struct { double f0; double f1; } FaTuple_Real_Real;
-typedef struct { double f0; FaTuple_Real_Real f1; } FaTuple_Real_Tuple_Real_Real;
-typedef struct {
-  size_t count;
-  FaTuple_Real_Tuple_Real_Real *items;
-} FaSeq_Tuple_Real_Tuple_Real_Real;
-typedef struct {
-  size_t count;
-  FaSeq_Tuple_Real_Tuple_Real_Real *items;
-} FaSeq_Seq_Tuple_Real_Tuple_Real_Real;
-typedef struct { int64_t f0; int64_t f1; } FaTuple_Int_Int;
-typedef struct {
-  FaTuple_Int_Int f0;
-  FaSeq_Seq_Tuple_Real_Tuple_Real_Real f1;
-} FaTuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real;
-typedef struct {
-  bool is_fault;
-  FaFault fault;
-  FaTuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real value;
-} FaFaultable_Tuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real;
+#define FA_PARALLEL_FOR_GRAIN 64
+#define FA_PARALLEL_FOR_MAX_WORKERS 64
 
-void fa_die_usage(const char *message);
-void fa_die_alloc(void);
-void fa_parallel_for(size_t start, size_t end, size_t grain, FaParallelForFn fn, void *ctx);
-FaUnit fa_unit(void);
-char *fa_copy_bytes(const char *bytes, size_t len);
-FaBytes fa_bytes_owned(char *bytes, size_t len);
-FaBytes fa_bytes_literal(const char *bytes, size_t len);
-FaFault fa_fault_bytes(FaBytes message);
-FaFault fa_fault_cstr(const char *message);
-void fa_exit_fault(FaFault fault);
-FaSeq_Bytes FaSeq_Bytes_new(size_t count);
-FaSeq_Int FaSeq_Int_new(size_t count);
-FaSeq_Real FaSeq_Real_new(size_t count);
-FaSeq_Fault FaSeq_Fault_new(size_t count);
-FaSeq_Tuple_Real_Tuple_Real_Real FaSeq_Tuple_Real_Tuple_Real_Real_new(size_t count);
-FaSeq_Seq_Tuple_Real_Tuple_Real_Real FaSeq_Seq_Tuple_Real_Tuple_Real_Real_new(size_t count);
-FaFaultable_Int FaFaultable_Int_ok(int64_t value);
-FaFaultable_Int FaFaultable_Int_fault(FaFault fault);
-FaFaultable_Real FaFaultable_Real_ok(double value);
-FaFaultable_Real FaFaultable_Real_fault(FaFault fault);
-FaFaultable_Bytes FaFaultable_Bytes_ok(FaBytes value);
-FaFaultable_Bytes FaFaultable_Bytes_fault(FaFault fault);
-FaFaultable_Stream_Bytes FaFaultable_Stream_Bytes_ok(FaStream value);
-FaFaultable_Stream_Bytes FaFaultable_Stream_Bytes_fault(FaFault fault);
-FaFaultable_Seq_Real FaFaultable_Seq_Real_ok(FaSeq_Real value);
-FaFaultable_Seq_Real FaFaultable_Seq_Real_fault(FaFault fault);
-FaBytes fa_concat_raw(FaBytes a, FaBytes b);
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundefined-internal"
+#endif
+
+static void fa_die_usage(const char *message);
+static void fa_die_alloc(void);
+static void fa_parallel_for(size_t start, size_t end, size_t grain, FaParallelForFn fn, void *ctx);
+static FaUnit fa_unit(void);
+static char *fa_copy_bytes(const char *bytes, size_t len);
+static FaBytes fa_bytes_owned(char *bytes, size_t len);
+static FaBytes fa_bytes_literal(const char *bytes, size_t len);
+static FaFault fa_fault_bytes(FaBytes message);
+static FaFault fa_fault_cstr(const char *message);
+static void fa_exit_fault(FaFault fault);
+static FaSeq_Bytes FaSeq_Bytes_new(size_t count);
+static FaSeq_Int FaSeq_Int_new(size_t count);
+static FaSeq_Real FaSeq_Real_new(size_t count);
+static FaSeq_Fault FaSeq_Fault_new(size_t count);
+static FaFaultable_Int FaFaultable_Int_ok(int64_t value);
+static FaFaultable_Int FaFaultable_Int_fault(FaFault fault);
+static FaFaultable_Real FaFaultable_Real_ok(double value);
+static FaFaultable_Real FaFaultable_Real_fault(FaFault fault);
+static FaFaultable_Bytes FaFaultable_Bytes_ok(FaBytes value);
+static FaFaultable_Bytes FaFaultable_Bytes_fault(FaFault fault);
+static FaFaultable_Stream_Bytes FaFaultable_Stream_Bytes_ok(FaStream value);
+static FaFaultable_Stream_Bytes FaFaultable_Stream_Bytes_fault(FaFault fault);
+static FaFaultable_Seq_Real FaFaultable_Seq_Real_ok(FaSeq_Real value);
+static FaFaultable_Seq_Real FaFaultable_Seq_Real_fault(FaFault fault);
+static FaBytes fa_concat_raw(FaBytes a, FaBytes b);
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #endif

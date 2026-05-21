@@ -152,6 +152,7 @@ impl<'a> TypedCodegen<'a> {
             self.types.c_type(&Ty::Faultable(Box::new(image)));
             self.types.c_type(&Ty::Faultable(Box::new(Ty::Bytes)));
         }
+        self.types.set_use_cv_header(uses_cv_runtime);
 
         for decl in &self.module.declarations {
             match decl {
@@ -164,9 +165,13 @@ impl<'a> TypedCodegen<'a> {
 
         let mut out = String::new();
         emit_preamble(&mut out);
+        if self.types.uses_cv_header() {
+            stdlib::emit_cv_type_h(&mut out);
+        }
         out.push_str(&self.types.emit_typedefs());
         out.push_str(&self.types.emit_helpers());
         if uses_cv_runtime {
+            stdlib::emit_cv_runtime_h(&mut out);
             stdlib::emit_cv_runtime_c(&mut out);
         }
         for name in &names {
@@ -205,21 +210,44 @@ impl<'a> TypedCodegen<'a> {
     }
 
     fn uses_cv_runtime(&self) -> bool {
-        self.stdlib_names.values().any(|name| {
-            matches!(
-                name.as_str(),
-                "decode"
-                    | "decode_bmp"
-                    | "decode_jpeg"
-                    | "decode_png"
-                    | "decode_pnm"
-                    | "encode_bmp"
-                    | "encode_jpeg"
-                    | "encode_pgm"
-                    | "encode_png"
-                    | "encode_ppm"
-            )
+        self.module.declarations.iter().any(|decl| {
+            let (Decl::Node(callable) | Decl::Program(callable)) = decl else {
+                return false;
+            };
+            callable
+                .chains
+                .iter()
+                .flat_map(|chain| chain.stages.iter())
+                .any(|stage| self.stage_uses_cv_runtime(stage))
         })
+    }
+
+    fn stage_uses_cv_runtime(&self, stage: &Stage) -> bool {
+        match stage {
+            Stage::Endpoint(Endpoint::Name(name))
+            | Stage::Map(name)
+            | Stage::Filter(name)
+            | Stage::Repeat { node: name, .. }
+            | Stage::FaultMap { node: name, .. } => self.is_cv_runtime_name(name),
+            Stage::Reduce { op, .. } | Stage::Scan { op, .. } => self.is_cv_runtime_name(op),
+            Stage::Endpoint(_) => false,
+        }
+    }
+
+    fn is_cv_runtime_name(&self, name: &str) -> bool {
+        matches!(
+            self.canonical_name(name).as_str(),
+            "decode"
+                | "decode_bmp"
+                | "decode_jpeg"
+                | "decode_png"
+                | "decode_pnm"
+                | "encode_bmp"
+                | "encode_jpeg"
+                | "encode_pgm"
+                | "encode_png"
+                | "encode_ppm"
+        )
     }
 
     fn collect_imports(&mut self) {
@@ -3112,6 +3140,7 @@ impl<'a> TypedCodegen<'a> {
 #[derive(Default)]
 struct TypeRegistry {
     types: BTreeMap<String, Ty>,
+    use_cv_header: bool,
 }
 
 impl TypeRegistry {
@@ -3162,6 +3191,14 @@ impl TypeRegistry {
         Ok(format!("{}_new", self.c_type(ty)))
     }
 
+    fn set_use_cv_header(&mut self, use_cv_header: bool) {
+        self.use_cv_header = use_cv_header;
+    }
+
+    fn uses_cv_header(&self) -> bool {
+        self.use_cv_header
+    }
+
     fn emit_typedefs(&mut self) -> String {
         let mut out = String::new();
         let mut entries = self
@@ -3171,6 +3208,9 @@ impl TypeRegistry {
             .collect::<Vec<_>>();
         entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         for (_, name, ty) in entries {
+            if self.use_cv_header && is_cv_type_name(&name) {
+                continue;
+            }
             match ty {
                 Ty::Seq(item) => {
                     let item_ty = self.c_type(&item);
@@ -3208,6 +3248,9 @@ impl TypeRegistry {
             .collect::<Vec<_>>();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, ty) in entries {
+            if self.use_cv_header && is_cv_type_name(&name) {
+                continue;
+            }
             match ty {
                 Ty::Seq(item) => {
                     let item_ty = self.c_type(&item);
@@ -3586,6 +3629,19 @@ fn is_predefined_type_name(name: &str) -> bool {
             | "FaFaultable_Stream_Bytes"
             | "FaSeq_Real"
             | "FaFaultable_Seq_Real"
+    )
+}
+
+fn is_cv_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "FaTuple_Real_Real"
+            | "FaTuple_Real_Tuple_Real_Real"
+            | "FaSeq_Tuple_Real_Tuple_Real_Real"
+            | "FaSeq_Seq_Tuple_Real_Tuple_Real_Real"
+            | "FaTuple_Int_Int"
+            | "FaTuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real"
+            | "FaFaultable_Tuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real"
     )
 }
 
