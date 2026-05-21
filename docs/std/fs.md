@@ -7,6 +7,16 @@ Boundary file I/O nodes for command-line programs and effectful wrappers.
 ```text
 read_file    : Bytes                  -> Faultable[Bytes]
 write_file   : (Bytes,Bytes)          -> Faultable[Int]
+exists       : Bytes                  -> Bool
+is_file      : Bytes                  -> Bool
+is_dir       : Bytes                  -> Bool
+file_size    : Bytes                  -> Faultable[Int]
+join_path    : (Bytes,Bytes)          -> Bytes
+basename     : Bytes                  -> Bytes
+dirname      : Bytes                  -> Bytes
+list_dir     : Bytes                  -> Faultable[Seq[Bytes]]
+walk_files   : Bytes                  -> Faultable[Seq[Bytes]]
+read_files   : Seq[Bytes]             -> Faultable[Seq[(Bytes,Bytes)]]
 open_file    : Bytes                  -> Faultable[Stream[Bytes]]
 size         : Stream[Bytes]          -> Faultable[Int]
 read_at      : (Stream[Bytes],Int,Int) -> Faultable[Bytes]
@@ -36,6 +46,37 @@ exists.
 - A path containing a NUL byte returns a fault.
 - Open, write, and close failures return a fault.
 - Successful writes produce `0`.
+
+### Metadata helpers
+
+`exists`, `is_file`, and `is_dir` query the filesystem and return `false` for
+missing paths and invalid paths. They do not expose the underlying I/O
+diagnostic.
+
+`file_size` returns the size of a regular file in bytes. Missing paths, invalid
+paths, and non-file paths return a fault.
+
+### Path helpers
+
+`join_path(base, child)` joins two path byte strings with `/` when the base does
+not already end with `/`. `basename` returns the final path component.
+`dirname` returns the parent path, or `"."` when the input has no parent
+component. These helpers are byte-oriented and do not canonicalize symlinks,
+relative components, or platform-specific aliases.
+
+### Directory discovery
+
+`list_dir(path)` returns non-recursive directory entries as names, excluding `.`
+and `..`. Entries are sorted by byte value so output is deterministic.
+
+`walk_files(path)` returns sorted regular-file paths under `path`. If `path` is
+itself a regular file, the result is a one-item sequence. Symlinks and other
+non-regular, non-directory filesystem objects are skipped.
+
+`read_files(paths)` reads a sequence of paths at the boundary and returns
+`Seq[(path, contents)]`. This is the batch form needed by dataflow programs that
+cannot use effectful `read_file` as a `map` function. Pure nodes can then map,
+filter, split, and format the returned file records.
 
 ### `open_file`
 

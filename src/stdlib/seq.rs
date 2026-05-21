@@ -3,6 +3,7 @@ use super::*;
 const MODULE: &str = "std.seq";
 
 pub const LENGTH: StdSymbol = node(MODULE, "length", "Seq[Var]", "Int");
+pub const IS_EMPTY: StdSymbol = node(MODULE, "is_empty", "Seq[Var]", "Bool");
 pub const GROUP_BY_ID: StdSymbol = node(
     MODULE,
     "group_by_id",
@@ -19,6 +20,10 @@ pub const SHIFT_RIGHT: StdSymbol = node(MODULE, "shift_right", "(Seq[V],V)", "Se
 pub const SHIFT_LEFT: StdSymbol = node(MODULE, "shift_left", "(Seq[V],V)", "Seq[V]");
 pub const HEAD: StdSymbol = node(MODULE, "head", "Seq[V]", "Faultable[V]");
 pub const TAIL: StdSymbol = node(MODULE, "tail", "Seq[V]", "Seq[V]");
+pub const REVERSE: StdSymbol = node(MODULE, "reverse", "Seq[V]", "Seq[V]");
+pub const TAKE: StdSymbol = node(MODULE, "take", "(Seq[V],Int)", "Seq[V]");
+pub const DROP: StdSymbol = node(MODULE, "drop", "(Seq[V],Int)", "Seq[V]");
+pub const FILL: StdSymbol = node(MODULE, "fill", "(V,Int)", "Seq[V]");
 pub const SLICE: StdSymbol = node(MODULE, "slice", "(Seq[V],Int,Int)", "Seq[V]");
 pub const LAST: StdSymbol = node(MODULE, "last", "Seq[V]", "Faultable[V]");
 pub const GET: StdSymbol = node(MODULE, "get", "(Seq[V],Int)", "V");

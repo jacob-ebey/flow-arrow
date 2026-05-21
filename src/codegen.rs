@@ -2504,6 +2504,12 @@ impl<'a> TypedCodegen<'a> {
     ) -> Result<(), String> {
         match name {
             "argv" => out.push_str(&format!("  {target} = fa_argv({input});\n")),
+            "flag_present" => out.push_str(&format!(
+                "  {target} = fa_flag_present({input}.f0, {input}.f1);\n"
+            )),
+            "flag_value" => out.push_str(&format!(
+                "  {target} = fa_flag_value({input}.f0, {input}.f1);\n"
+            )),
             "read_stdin" => out.push_str(&format!("  {target} = fa_read_stdin();\n")),
             "write_stdout" => {
                 out.push_str(&format!("  {target} = fa_write_bytes(stdout, {input});\n"))
@@ -2515,6 +2521,18 @@ impl<'a> TypedCodegen<'a> {
             "write_file" => out.push_str(&format!(
                 "  {target} = fa_write_file({input}.f0, {input}.f1);\n"
             )),
+            "exists" => out.push_str(&format!("  {target} = fa_path_exists({input});\n")),
+            "is_file" => out.push_str(&format!("  {target} = fa_path_is_file({input});\n")),
+            "is_dir" => out.push_str(&format!("  {target} = fa_path_is_dir({input});\n")),
+            "file_size" => out.push_str(&format!("  {target} = fa_path_file_size({input});\n")),
+            "join_path" => out.push_str(&format!(
+                "  {target} = fa_join_path({input}.f0, {input}.f1);\n"
+            )),
+            "basename" => out.push_str(&format!("  {target} = fa_basename({input});\n")),
+            "dirname" => out.push_str(&format!("  {target} = fa_dirname({input});\n")),
+            "list_dir" => out.push_str(&format!("  {target} = fa_list_dir({input});\n")),
+            "walk_files" => out.push_str(&format!("  {target} = fa_walk_files({input});\n")),
+            "read_files" => out.push_str(&format!("  {target} = fa_read_files({input});\n")),
             "open_file" => out.push_str(&format!("  {target} = fa_open_file({input});\n")),
             "size" => out.push_str(&format!("  {target} = fa_stream_size({input});\n")),
             "read_at" => out.push_str(&format!(
@@ -2610,6 +2628,49 @@ impl<'a> TypedCodegen<'a> {
             }
             "split_lines" => out.push_str(&format!("  {target} = fa_split_lines({input});\n")),
             "trim" => out.push_str(&format!("  {target} = fa_trim({input});\n")),
+            "contains" => out.push_str(&format!(
+                "  {target} = fa_bytes_contains({input}.f0, {input}.f1);\n"
+            )),
+            "starts_with" => out.push_str(&format!(
+                "  {target} = fa_bytes_starts_with({input}.f0, {input}.f1);\n"
+            )),
+            "ends_with" => out.push_str(&format!(
+                "  {target} = fa_bytes_ends_with({input}.f0, {input}.f1);\n"
+            )),
+            "index_of" => out.push_str(&format!(
+                "  {target} = fa_index_of({input}.f0, {input}.f1);\n"
+            )),
+            "last_index_of" => out.push_str(&format!(
+                "  {target} = fa_last_index_of({input}.f0, {input}.f1);\n"
+            )),
+            "slice" if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int, Ty::Int])) =>
+            {
+                out.push_str(&format!(
+                    "  {target} = fa_bytes_slice({input}.f0, {input}.f1, {input}.f2);\n"
+                ));
+            }
+            "take" if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) =>
+            {
+                out.push_str(&format!(
+                    "  {target} = fa_bytes_take({input}.f0, {input}.f1);\n"
+                ));
+            }
+            "drop" if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) =>
+            {
+                out.push_str(&format!(
+                    "  {target} = fa_bytes_drop({input}.f0, {input}.f1);\n"
+                ));
+            }
+            "replace" => out.push_str(&format!(
+                "  {target} = fa_bytes_replace({input}.f0, {input}.f1, {input}.f2);\n"
+            )),
+            "repeat_bytes" => {
+                out.push_str(&format!(
+                    "  {target} = fa_bytes_repeat({input}.f0, {input}.f1);\n"
+                ));
+            }
+            "ascii_lower" => out.push_str(&format!("  {target} = fa_ascii_lower({input});\n")),
+            "ascii_upper" => out.push_str(&format!("  {target} = fa_ascii_upper({input});\n")),
             "split_on" => out.push_str(&format!(
                 "  {target} = fa_split_on({input}.f0, {input}.f1);\n"
             )),
@@ -2659,7 +2720,9 @@ impl<'a> TypedCodegen<'a> {
                 out.push_str(&format!("  {target} = {};\n", compare_expr(name, input)));
             }
             "not_empty" => out.push_str(&format!("  {target} = {input}.len > 0;\n")),
-            "is_empty" => out.push_str(&format!("  {target} = {input}.len == 0;\n")),
+            "is_empty" if matches!(input_ty, Ty::Bytes) => {
+                out.push_str(&format!("  {target} = {input}.len == 0;\n"))
+            }
             "and" => out.push_str(&format!("  {target} = {input}.f0 && {input}.f1;\n")),
             "or" => out.push_str(&format!("  {target} = {input}.f0 || {input}.f1;\n")),
             "xor" => out.push_str(&format!("  {target} = {input}.f0 != {input}.f1;\n")),
@@ -2697,6 +2760,9 @@ impl<'a> TypedCodegen<'a> {
                 "  {target} = {input}.f0 ? {input}.f1 : {input}.f2;\n"
             )),
             "length" => out.push_str(&format!("  {target} = (int64_t){input}.count;\n")),
+            "is_empty" if matches!(input_ty, Ty::Seq(_)) => {
+                out.push_str(&format!("  {target} = {input}.count == 0;\n"))
+            }
             "inner_length" => self.emit_inner_length(out, target, input),
             "first" => out.push_str(&format!("  {target} = {input}.f0;\n")),
             "second" => out.push_str(&format!("  {target} = {input}.f1;\n")),
@@ -2718,6 +2784,10 @@ impl<'a> TypedCodegen<'a> {
             "shift_left" => self.emit_shift_left(out, target, output_ty, input, input_ty)?,
             "head" => self.emit_head(out, target, output_ty, input, input_ty)?,
             "tail" => self.emit_tail(out, target, output_ty, input, input_ty)?,
+            "reverse" => self.emit_reverse(out, target, output_ty, input, input_ty)?,
+            "take" => self.emit_take(out, target, output_ty, input, input_ty)?,
+            "drop" => self.emit_drop(out, target, output_ty, input, input_ty)?,
+            "fill" => self.emit_fill(out, target, output_ty, input, input_ty)?,
             "slice" => self.emit_slice(out, target, output_ty, input, input_ty)?,
             "last" => self.emit_last(out, target, output_ty, input, input_ty)?,
             "get" => self.emit_get(out, target, output_ty, input, input_ty)?,
@@ -3256,6 +3326,116 @@ impl<'a> TypedCodegen<'a> {
         ));
         out.push_str(&format!(
             "  for (size_t {i} = 1; {i} < {input}.count; {i}++) {target}.items[{i} - 1] = {input}.items[{i}];\n"
+        ));
+        Ok(())
+    }
+
+    fn emit_reverse(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        if !matches!(input_ty, Ty::Seq(_)) {
+            return Err("reverse expected sequence input".to_string());
+        }
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let i = self.next_temp();
+        out.push_str(&format!("  {target} = {new_fn}({input}.count);\n"));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {input}.count; {i}++) {target}.items[{i}] = {input}.items[{input}.count - 1 - {i}];\n"
+        ));
+        Ok(())
+    }
+
+    fn emit_take(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Tuple(items) = input_ty else {
+            return Err("take expected tuple input".to_string());
+        };
+        if !matches!(items.as_slice(), [Ty::Seq(_), Ty::Int]) {
+            return Err("take expected (Seq[V],Int) input".to_string());
+        }
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let count = self.next_temp();
+        let i = self.next_temp();
+        out.push_str(&format!(
+            "  if ({input}.f1 < 0) fa_die_usage(\"take: count must be non-negative\");\n"
+        ));
+        out.push_str(&format!(
+            "  size_t {count} = (size_t){input}.f1 > {input}.f0.count ? {input}.f0.count : (size_t){input}.f1;\n"
+        ));
+        out.push_str(&format!("  {target} = {new_fn}({count});\n"));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {count}; {i}++) {target}.items[{i}] = {input}.f0.items[{i}];\n"
+        ));
+        Ok(())
+    }
+
+    fn emit_drop(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Tuple(items) = input_ty else {
+            return Err("drop expected tuple input".to_string());
+        };
+        if !matches!(items.as_slice(), [Ty::Seq(_), Ty::Int]) {
+            return Err("drop expected (Seq[V],Int) input".to_string());
+        }
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let offset = self.next_temp();
+        let count = self.next_temp();
+        let i = self.next_temp();
+        out.push_str(&format!(
+            "  if ({input}.f1 < 0) fa_die_usage(\"drop: count must be non-negative\");\n"
+        ));
+        out.push_str(&format!(
+            "  size_t {offset} = (size_t){input}.f1 > {input}.f0.count ? {input}.f0.count : (size_t){input}.f1;\n"
+        ));
+        out.push_str(&format!(
+            "  size_t {count} = {input}.f0.count - {offset};\n"
+        ));
+        out.push_str(&format!("  {target} = {new_fn}({count});\n"));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {count}; {i}++) {target}.items[{i}] = {input}.f0.items[{offset} + {i}];\n"
+        ));
+        Ok(())
+    }
+
+    fn emit_fill(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Tuple(items) = input_ty else {
+            return Err("fill expected tuple input".to_string());
+        };
+        if !matches!(items.as_slice(), [_, Ty::Int]) {
+            return Err("fill expected (V,Int) input".to_string());
+        }
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let i = self.next_temp();
+        out.push_str(&format!(
+            "  if ({input}.f1 < 0) fa_die_usage(\"fill: count must be non-negative\");\n"
+        ));
+        out.push_str(&format!("  {target} = {new_fn}((size_t){input}.f1);\n"));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {target}.count; {i}++) {target}.items[{i}] = {input}.f0;\n"
         ));
         Ok(())
     }
@@ -4445,10 +4625,20 @@ fn builtin_output_type(name: &str, input: &Ty) -> Result<Ty, String> {
 fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
     match name {
         "argv" => Ok(Ty::Seq(Box::new(Ty::Bytes))),
+        "flag_present" => Ok(Ty::Bool),
+        "flag_value" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "read_stdin" => Ok(Ty::Bytes),
         "write_stdout" | "write_stderr" => Ok(Ty::Int),
         "read_file" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "write_file" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "exists" | "is_file" | "is_dir" => Ok(Ty::Bool),
+        "file_size" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "join_path" | "basename" | "dirname" => Ok(Ty::Bytes),
+        "list_dir" | "walk_files" => Ok(Ty::Faultable(Box::new(Ty::Seq(Box::new(Ty::Bytes))))),
+        "read_files" => Ok(Ty::Faultable(Box::new(Ty::Seq(Box::new(Ty::Tuple(vec![
+            Ty::Bytes,
+            Ty::Bytes,
+        ])))))),
         "open_file" => Ok(Ty::Faultable(Box::new(Ty::Stream(Box::new(Ty::Bytes))))),
         "read_at" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "size" | "copy_to_file" | "close" => Ok(Ty::Faultable(Box::new(Ty::Int))),
@@ -4508,13 +4698,24 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "sqlite.as_real" => Ok(Ty::Faultable(Box::new(Ty::Real))),
         "sqlite.as_text" | "sqlite.as_blob" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "split_lines" | "split_on" => Ok(Ty::Seq(Box::new(Ty::Bytes))),
-        "trim" | "join_bytes" | "codes_to_bytes" | "format_faults" => Ok(Ty::Bytes),
+        "trim" | "join_bytes" | "codes_to_bytes" | "format_faults" | "ascii_lower"
+        | "ascii_upper" => Ok(Ty::Bytes),
+        "contains" | "starts_with" | "ends_with" => Ok(Ty::Bool),
+        "index_of" | "last_index_of" => Ok(Ty::Int),
         "concat_bytes" => match input {
             Ty::Seq(item) if matches!(item.as_ref(), Ty::Faultable(inner) if inner.as_ref() == &Ty::Bytes) => {
                 Ok(Ty::Faultable(Box::new(Ty::Bytes)))
             }
             _ => Ok(Ty::Bytes),
         },
+        "replace" => Ok(Ty::Bytes),
+        "slice" if matches!(input, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int, Ty::Int])) => {
+            Ok(Ty::Bytes)
+        }
+        "take" | "drop" if matches!(input, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) => {
+            Ok(Ty::Bytes)
+        }
+        "repeat_bytes" => Ok(Ty::Bytes),
         "strip_prefix" | "strip_suffix" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "decode" | "decode_bmp" | "decode_jpeg" | "decode_png" | "decode_pnm" => {
             Ok(Ty::Faultable(Box::new(cv_image_ty())))
@@ -4662,7 +4863,25 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
                 .cloned()
                 .ok_or_else(|| format!("{name} expected sequence input"))
         }
-        "tail" => Ok(input.clone()),
+        "tail" | "reverse" => Ok(input.clone()),
+        "take" | "drop" => {
+            let Ty::Tuple(items) = input else {
+                return Err(format!("{name} expected tuple input"));
+            };
+            let [seq @ Ty::Seq(_), Ty::Int] = items.as_slice() else {
+                return Err(format!("{name} expected (Seq[V],Int) input"));
+            };
+            Ok(seq.clone())
+        }
+        "fill" => {
+            let Ty::Tuple(items) = input else {
+                return Err("fill expected tuple input".to_string());
+            };
+            let [item, Ty::Int] = items.as_slice() else {
+                return Err("fill expected (V,Int) input".to_string());
+            };
+            Ok(Ty::Seq(Box::new(item.clone())))
+        }
         "slice" => {
             let Ty::Tuple(items) = input else {
                 return Err("slice expected tuple input".to_string());
@@ -4936,11 +5155,15 @@ fn is_predefined_type_name(name: &str) -> bool {
     matches!(
         name,
         "FaSeq_Bytes"
+            | "FaTuple_Bytes_Bytes"
+            | "FaSeq_Tuple_Bytes_Bytes"
             | "FaSeq_Int"
             | "FaSeq_Fault"
             | "FaFaultable_Int"
             | "FaFaultable_Real"
             | "FaFaultable_Bytes"
+            | "FaFaultable_Seq_Bytes"
+            | "FaFaultable_Seq_Tuple_Bytes_Bytes"
             | "FaFaultable_Stream_Bytes"
             | "FaSeq_Real"
             | "FaFaultable_Seq_Real"

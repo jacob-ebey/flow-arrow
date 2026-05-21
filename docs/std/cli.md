@@ -27,7 +27,7 @@ Args
 ```text
 argv         : Args -> Seq[Bytes]
 flag_present : (Args, Bytes) -> Bool
-flag_value   : (Args, Bytes) -> Bytes
+flag_value   : (Args, Bytes) -> Faultable[Bytes]
 ```
 
 ## Semantics
@@ -45,17 +45,16 @@ Returns positional command-line arguments as bytes.
 Returns whether a flag is present.
 
 - The second input is the flag name as bytes, for example `"--verbose"`.
-- The initial profile recognises exact flag names only; no abbreviation
-  or combined short-flag expansion is implied.
+- Recognises exact flag names and `--flag=value` forms.
+- No abbreviation or combined short-flag expansion is implied.
 
 ### `flag_value`
 
 Returns a flag's value as bytes.
 
 - The second input is the flag name as bytes, for example `"--output"`.
-- If the flag is missing or has no value, behavior is a validation fault
-  reported by the host runtime. A future optional-value type may make
-  this total.
+- Accepts both `--flag value` and `--flag=value`.
+- If the flag is missing or has no value, returns a graph-visible fault.
 
 ## Example
 

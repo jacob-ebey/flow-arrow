@@ -187,6 +187,18 @@ pub const SYMBOLS: &[StdSymbol] = &[
     bytes::CONCAT_BYTES,
     bytes::JOIN_BYTES,
     bytes::TRIM,
+    bytes::CONTAINS,
+    bytes::STARTS_WITH,
+    bytes::ENDS_WITH,
+    bytes::INDEX_OF,
+    bytes::LAST_INDEX_OF,
+    bytes::BYTE_SLICE,
+    bytes::TAKE,
+    bytes::DROP,
+    bytes::REPLACE,
+    bytes::REPEAT_BYTES,
+    bytes::ASCII_LOWER,
+    bytes::ASCII_UPPER,
     bytes::SPLIT_ON,
     bytes::STRIP_PREFIX,
     bytes::STRIP_SUFFIX,
@@ -211,6 +223,16 @@ pub const SYMBOLS: &[StdSymbol] = &[
     io::WRITE_STDERR,
     fs::READ_FILE,
     fs::WRITE_FILE,
+    fs::EXISTS,
+    fs::IS_FILE,
+    fs::IS_DIR,
+    fs::FILE_SIZE,
+    fs::JOIN_PATH,
+    fs::BASENAME,
+    fs::DIRNAME,
+    fs::LIST_DIR,
+    fs::WALK_FILES,
+    fs::READ_FILES,
     fs::OPEN_FILE,
     fs::SIZE,
     fs::READ_AT,
@@ -311,6 +333,7 @@ pub const SYMBOLS: &[StdSymbol] = &[
     intrinsic::RANGE_STEP,
     intrinsic::SELECT,
     seq::LENGTH,
+    seq::IS_EMPTY,
     seq::GROUP_BY_ID,
     seq::ZIP,
     seq::BROADCAST_LEFT,
@@ -322,6 +345,10 @@ pub const SYMBOLS: &[StdSymbol] = &[
     seq::SHIFT_LEFT,
     seq::HEAD,
     seq::TAIL,
+    seq::REVERSE,
+    seq::TAKE,
+    seq::DROP,
+    seq::FILL,
     seq::SLICE,
     seq::LAST,
     seq::GET,
@@ -470,16 +497,25 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "from_int"
             | "not"
             | "trim"
+            | "ascii_lower"
+            | "ascii_upper"
             | "bytes_to_codes"
             | "codes_to_bytes"
             | "byte_length"
             | "length"
+            | "is_empty"
             | "inner_length"
             | "transpose"
             | "flatten"
+            | "reverse"
             | "shift_left"
             | "shift_right"
+            | "take"
+            | "drop"
             | "tail"
+            | "basename"
+            | "dirname"
+            | "join_path"
             | "last"
             | "at"
             | "append"
@@ -581,25 +617,6 @@ const fn io_node(
         reduce_output: None,
         effect: Effect::Io,
         runtime: RuntimeSupport::DirectBuiltin,
-    }
-}
-
-const fn unsupported_node(
-    module: &'static str,
-    name: &'static str,
-    input: &'static str,
-    output: &'static str,
-) -> StdSymbol {
-    StdSymbol {
-        module,
-        name,
-        kind: SymbolKind::Node,
-        input: Some(input),
-        output: Some(output),
-        reduce_input: None,
-        reduce_output: None,
-        effect: Effect::Pure,
-        runtime: RuntimeSupport::Unsupported,
     }
 }
 

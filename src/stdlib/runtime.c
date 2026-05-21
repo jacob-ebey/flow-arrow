@@ -147,6 +147,14 @@ static FaSeq_Bytes FaSeq_Bytes_new(size_t count) {
   return seq;
 }
 
+static FaSeq_Tuple_Bytes_Bytes FaSeq_Tuple_Bytes_Bytes_new(size_t count) {
+  FaSeq_Tuple_Bytes_Bytes seq;
+  seq.count = count;
+  seq.items = (FaTuple_Bytes_Bytes *)calloc(count ? count : 1, sizeof(FaTuple_Bytes_Bytes));
+  if (!seq.items) fa_die_alloc();
+  return seq;
+}
+
 static FaSeq_Int FaSeq_Int_new(size_t count) {
   FaSeq_Int seq;
   seq.count = count;
@@ -208,6 +216,34 @@ static FaFaultable_Bytes FaFaultable_Bytes_ok(FaBytes value) {
 
 static FaFaultable_Bytes FaFaultable_Bytes_fault(FaFault fault) {
   FaFaultable_Bytes out;
+  out.is_fault = true;
+  out.fault = fault;
+  return out;
+}
+
+static FaFaultable_Seq_Bytes FaFaultable_Seq_Bytes_ok(FaSeq_Bytes value) {
+  FaFaultable_Seq_Bytes out;
+  out.is_fault = false;
+  out.value = value;
+  return out;
+}
+
+static FaFaultable_Seq_Bytes FaFaultable_Seq_Bytes_fault(FaFault fault) {
+  FaFaultable_Seq_Bytes out;
+  out.is_fault = true;
+  out.fault = fault;
+  return out;
+}
+
+static FaFaultable_Seq_Tuple_Bytes_Bytes FaFaultable_Seq_Tuple_Bytes_Bytes_ok(FaSeq_Tuple_Bytes_Bytes value) {
+  FaFaultable_Seq_Tuple_Bytes_Bytes out;
+  out.is_fault = false;
+  out.value = value;
+  return out;
+}
+
+static FaFaultable_Seq_Tuple_Bytes_Bytes FaFaultable_Seq_Tuple_Bytes_Bytes_fault(FaFault fault) {
+  FaFaultable_Seq_Tuple_Bytes_Bytes out;
   out.is_fault = true;
   out.fault = fault;
   return out;

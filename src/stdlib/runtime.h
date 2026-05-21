@@ -7,6 +7,7 @@
  */
 
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <math.h>
 #include <pthread.h>
@@ -36,11 +37,15 @@ typedef struct {
   bool closed;
 } FaStream;
 typedef struct { size_t count; FaBytes *items; } FaSeq_Bytes;
+typedef struct { FaBytes f0; FaBytes f1; } FaTuple_Bytes_Bytes;
+typedef struct { size_t count; FaTuple_Bytes_Bytes *items; } FaSeq_Tuple_Bytes_Bytes;
 typedef struct { size_t count; int64_t *items; } FaSeq_Int;
 typedef struct { size_t count; double *items; } FaSeq_Real;
 typedef struct { bool is_fault; FaFault fault; int64_t value; } FaFaultable_Int;
 typedef struct { bool is_fault; FaFault fault; double value; } FaFaultable_Real;
 typedef struct { bool is_fault; FaFault fault; FaBytes value; } FaFaultable_Bytes;
+typedef struct { bool is_fault; FaFault fault; FaSeq_Bytes value; } FaFaultable_Seq_Bytes;
+typedef struct { bool is_fault; FaFault fault; FaSeq_Tuple_Bytes_Bytes value; } FaFaultable_Seq_Tuple_Bytes_Bytes;
 typedef struct { bool is_fault; FaFault fault; FaStream value; } FaFaultable_Stream_Bytes;
 typedef struct { bool is_fault; FaFault fault; FaSeq_Real value; } FaFaultable_Seq_Real;
 typedef struct { size_t count; FaFault *items; } FaSeq_Fault;
@@ -66,6 +71,7 @@ static FaFault fa_fault_cstr(const char *message);
 static void fa_exit_fault(FaFault fault);
 static int fa_stream_close(FaStream *stream, FaFault *fault);
 static FaSeq_Bytes FaSeq_Bytes_new(size_t count);
+static FaSeq_Tuple_Bytes_Bytes FaSeq_Tuple_Bytes_Bytes_new(size_t count);
 static FaSeq_Int FaSeq_Int_new(size_t count);
 static FaSeq_Real FaSeq_Real_new(size_t count);
 static FaSeq_Fault FaSeq_Fault_new(size_t count);
@@ -75,6 +81,10 @@ static FaFaultable_Real FaFaultable_Real_ok(double value);
 static FaFaultable_Real FaFaultable_Real_fault(FaFault fault);
 static FaFaultable_Bytes FaFaultable_Bytes_ok(FaBytes value);
 static FaFaultable_Bytes FaFaultable_Bytes_fault(FaFault fault);
+static FaFaultable_Seq_Bytes FaFaultable_Seq_Bytes_ok(FaSeq_Bytes value);
+static FaFaultable_Seq_Bytes FaFaultable_Seq_Bytes_fault(FaFault fault);
+static FaFaultable_Seq_Tuple_Bytes_Bytes FaFaultable_Seq_Tuple_Bytes_Bytes_ok(FaSeq_Tuple_Bytes_Bytes value);
+static FaFaultable_Seq_Tuple_Bytes_Bytes FaFaultable_Seq_Tuple_Bytes_Bytes_fault(FaFault fault);
 static FaFaultable_Stream_Bytes FaFaultable_Stream_Bytes_ok(FaStream value);
 static FaFaultable_Stream_Bytes FaFaultable_Stream_Bytes_fault(FaFault fault);
 static FaFaultable_Seq_Real FaFaultable_Seq_Real_ok(FaSeq_Real value);
