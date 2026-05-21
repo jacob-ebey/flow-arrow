@@ -1164,7 +1164,22 @@ impl<'a> TypedCodegen<'a> {
                 "  {target} = {input}.f0 ? {input}.f1 : {input}.f2;\n"
             )),
             "length" => out.push_str(&format!("  {target} = (int64_t){input}.count;\n")),
+            "inner_length" => self.emit_inner_length(out, target, input),
+            "first" => out.push_str(&format!("  {target} = {input}.f0;\n")),
+            "second" => out.push_str(&format!("  {target} = {input}.f1;\n")),
+            "swap" => {
+                out.push_str(&format!("  {target}.f0 = {input}.f1;\n"));
+                out.push_str(&format!("  {target}.f1 = {input}.f0;\n"));
+            }
             "zip" => self.emit_zip(out, target, output_ty, input, input_ty)?,
+            "broadcast_left" => {
+                self.emit_broadcast_left(out, target, output_ty, input, input_ty)?
+            }
+            "broadcast_right" => {
+                self.emit_broadcast_right(out, target, output_ty, input, input_ty)?
+            }
+            "transpose" => self.emit_transpose(out, target, output_ty, input, input_ty)?,
+            "flatten" => self.emit_flatten(out, target, output_ty, input, input_ty)?,
             "group_by_id" => self.emit_group_by_id(out, target, output_ty, input, input_ty)?,
             "shift_right" => self.emit_shift_right(out, target, output_ty, input, input_ty)?,
             "head" => self.emit_head(out, target, output_ty, input, input_ty)?,
@@ -1276,6 +1291,148 @@ impl<'a> TypedCodegen<'a> {
         ));
         out.push_str("  }\n");
         Ok(())
+    }
+
+    fn emit_broadcast_left(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Tuple(items) = input_ty else {
+            return Err("broadcast_left expected tuple input".to_string());
+        };
+        let [_, Ty::Seq(_)] = items.as_slice() else {
+            return Err("broadcast_left expected (A,Seq[B]) input".to_string());
+        };
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let i = self.next_temp();
+        out.push_str(&format!("  {target} = {new_fn}({input}.f1.count);\n"));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {input}.f1.count; {i}++) {{\n"
+        ));
+        out.push_str(&format!("    {target}.items[{i}].f0 = {input}.f0;\n"));
+        out.push_str(&format!(
+            "    {target}.items[{i}].f1 = {input}.f1.items[{i}];\n"
+        ));
+        out.push_str("  }\n");
+        Ok(())
+    }
+
+    fn emit_broadcast_right(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Tuple(items) = input_ty else {
+            return Err("broadcast_right expected tuple input".to_string());
+        };
+        let [Ty::Seq(_), _] = items.as_slice() else {
+            return Err("broadcast_right expected (Seq[A],B) input".to_string());
+        };
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let i = self.next_temp();
+        out.push_str(&format!("  {target} = {new_fn}({input}.f0.count);\n"));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {input}.f0.count; {i}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "    {target}.items[{i}].f0 = {input}.f0.items[{i}];\n"
+        ));
+        out.push_str(&format!("    {target}.items[{i}].f1 = {input}.f1;\n"));
+        out.push_str("  }\n");
+        Ok(())
+    }
+
+    fn emit_transpose(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Seq(row_ty) = input_ty else {
+            return Err("transpose expected sequence input".to_string());
+        };
+        let Ty::Seq(_) = row_ty.as_ref() else {
+            return Err("transpose expected nested sequence input".to_string());
+        };
+        let out_new = self.types.seq_new_name(output_ty)?;
+        let row_new = self.types.seq_new_name(row_ty)?;
+        let rows = self.next_temp();
+        let cols = self.next_temp();
+        let r = self.next_temp();
+        let c = self.next_temp();
+        out.push_str(&format!("  size_t {rows} = {input}.count;\n"));
+        out.push_str(&format!(
+            "  size_t {cols} = {rows} == 0 ? 0 : {input}.items[0].count;\n"
+        ));
+        out.push_str(&format!("  for (size_t {r} = 0; {r} < {rows}; {r}++) {{\n"));
+        out.push_str(&format!("    if ({input}.items[{r}].count != {cols}) fa_die_usage(\"transpose: rows must have the same length\");\n"));
+        out.push_str("  }\n");
+        out.push_str(&format!("  {target} = {out_new}({cols});\n"));
+        out.push_str(&format!("  for (size_t {c} = 0; {c} < {cols}; {c}++) {{\n"));
+        out.push_str(&format!("    {target}.items[{c}] = {row_new}({rows});\n"));
+        out.push_str(&format!(
+            "    for (size_t {r} = 0; {r} < {rows}; {r}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "      {target}.items[{c}].items[{r}] = {input}.items[{r}].items[{c}];\n"
+        ));
+        out.push_str("    }\n");
+        out.push_str("  }\n");
+        Ok(())
+    }
+
+    fn emit_flatten(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Seq(row_ty) = input_ty else {
+            return Err("flatten expected sequence input".to_string());
+        };
+        let Ty::Seq(_) = row_ty.as_ref() else {
+            return Err("flatten expected nested sequence input".to_string());
+        };
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let total = self.next_temp();
+        let offset = self.next_temp();
+        let r = self.next_temp();
+        let c = self.next_temp();
+        out.push_str(&format!("  size_t {total} = 0;\n"));
+        out.push_str(&format!(
+            "  for (size_t {r} = 0; {r} < {input}.count; {r}++) {total} += {input}.items[{r}].count;\n"
+        ));
+        out.push_str(&format!("  {target} = {new_fn}({total});\n"));
+        out.push_str(&format!("  size_t {offset} = 0;\n"));
+        out.push_str(&format!(
+            "  for (size_t {r} = 0; {r} < {input}.count; {r}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "    for (size_t {c} = 0; {c} < {input}.items[{r}].count; {c}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "      {target}.items[{offset}++] = {input}.items[{r}].items[{c}];\n"
+        ));
+        out.push_str("    }\n");
+        out.push_str("  }\n");
+        Ok(())
+    }
+
+    fn emit_inner_length(&mut self, out: &mut String, target: &str, input: &str) {
+        out.push_str(&format!(
+            "  {target} = {input}.count == 0 ? 0 : (int64_t){input}.items[0].count;\n"
+        ));
     }
 
     fn emit_group_by_id(
@@ -2004,9 +2161,8 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         },
         "strip_prefix" | "strip_suffix" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "bytes_to_codes" | "range_step" => Ok(Ty::Seq(Box::new(Ty::Int))),
-        "byte_length" | "length" | "bit_and" | "bit_or" | "bit_xor" | "bit_shl" | "bit_shr" => {
-            Ok(Ty::Int)
-        }
+        "byte_length" | "length" | "inner_length" | "bit_and" | "bit_or" | "bit_xor"
+        | "bit_shl" | "bit_shr" => Ok(Ty::Int),
         "parse_int" => Ok(Ty::Faultable(Box::new(Ty::Int))),
         "parse_real" => Ok(Ty::Faultable(Box::new(Ty::Real))),
         "format_int" | "format_real" => match input {
@@ -2038,6 +2194,75 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
                 left.as_ref().clone(),
                 right.as_ref().clone(),
             ]))))
+        }
+        "broadcast_left" => {
+            let Ty::Tuple(items) = input else {
+                return Err("broadcast_left expected tuple input".to_string());
+            };
+            let [left, Ty::Seq(right)] = items.as_slice() else {
+                return Err("broadcast_left expected (A,Seq[B]) input".to_string());
+            };
+            Ok(Ty::Seq(Box::new(Ty::Tuple(vec![
+                left.clone(),
+                right.as_ref().clone(),
+            ]))))
+        }
+        "broadcast_right" => {
+            let Ty::Tuple(items) = input else {
+                return Err("broadcast_right expected tuple input".to_string());
+            };
+            let [Ty::Seq(left), right] = items.as_slice() else {
+                return Err("broadcast_right expected (Seq[A],B) input".to_string());
+            };
+            Ok(Ty::Seq(Box::new(Ty::Tuple(vec![
+                left.as_ref().clone(),
+                right.clone(),
+            ]))))
+        }
+        "transpose" => {
+            let Ty::Seq(row) = input else {
+                return Err("transpose expected sequence input".to_string());
+            };
+            if !matches!(row.as_ref(), Ty::Seq(_)) {
+                return Err("transpose expected nested sequence input".to_string());
+            }
+            Ok(input.clone())
+        }
+        "flatten" => {
+            let Ty::Seq(row) = input else {
+                return Err("flatten expected sequence input".to_string());
+            };
+            let Ty::Seq(item) = row.as_ref() else {
+                return Err("flatten expected nested sequence input".to_string());
+            };
+            Ok(Ty::Seq(item.clone()))
+        }
+        "first" => {
+            let Ty::Tuple(items) = input else {
+                return Err("first expected tuple input".to_string());
+            };
+            items
+                .first()
+                .cloned()
+                .ok_or_else(|| "first expected non-empty tuple input".to_string())
+        }
+        "second" => {
+            let Ty::Tuple(items) = input else {
+                return Err("second expected tuple input".to_string());
+            };
+            items
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "second expected two inputs".to_string())
+        }
+        "swap" => {
+            let Ty::Tuple(items) = input else {
+                return Err("swap expected tuple input".to_string());
+            };
+            let [left, right] = items.as_slice() else {
+                return Err("swap expected two inputs".to_string());
+            };
+            Ok(Ty::Tuple(vec![right.clone(), left.clone()]))
         }
         "group_by_id" => {
             let Ty::Tuple(items) = input else {

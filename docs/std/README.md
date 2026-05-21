@@ -17,8 +17,11 @@ Initial modules:
 | [`std.int`](./int.md) | `Int` parsing and formatting |
 | [`std.math`](./math.md) | Arithmetic and comparisons |
 | [`std.predicates`](./predicates.md) | Reusable predicates |
+| [`std.seq`](./seq.md) | Generic sequence reshaping helpers |
+| [`std.tuple`](./tuple.md) | Generic tuple projection helpers |
 | [`std.fault`](./fault.md) | Fault diagnostics and fault-status helpers |
 | [`std.vector`](./vector.md) | Source-backed vector operations |
+| [`std.matrix`](./matrix.md) | Source-backed matrix operations |
 
 Example:
 

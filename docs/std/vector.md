@@ -15,11 +15,20 @@ graph structure it would compile for user-defined nodes.
 | `sub` | `(Seq[Real],Seq[Real])` | `Seq[Real]` | Pairwise subtraction |
 | `mul` | `(Seq[Real],Seq[Real])` | `Seq[Real]` | Pairwise multiplication |
 | `div` | `(Seq[Real],Seq[Real])` | `Seq[Real]` | Pairwise division |
+| `add_scalar` | `(Seq[Real],Real)` | `Seq[Real]` | Adds a scalar to each item |
+| `sub_scalar` | `(Seq[Real],Real)` | `Seq[Real]` | Subtracts a scalar from each item |
+| `scalar_sub` | `(Real,Seq[Real])` | `Seq[Real]` | Subtracts each item from a scalar |
+| `mul_scalar` | `(Seq[Real],Real)` | `Seq[Real]` | Multiplies each item by a scalar |
+| `scalar_mul` | `(Real,Seq[Real])` | `Seq[Real]` | Multiplies each item by a scalar |
+| `div_scalar` | `(Seq[Real],Real)` | `Seq[Real]` | Divides each item by a scalar |
+| `scalar_div` | `(Real,Seq[Real])` | `Seq[Real]` | Divides a scalar by each item |
 | `equals` | `(Seq[Real],Seq[Real])` | `Bool` | Pairwise equality followed by `std.predicates.all` |
 | `dot` | `(Seq[Real],Seq[Real])` | `Real` | Pairwise multiplication followed by `sum` |
 | `squared_norm` | `Seq[Real]` | `Real` | Sum of squared values |
 | `l1_norm` | `Seq[Real]` | `Real` | Sum of absolute values |
 | `norm` | `Seq[Real]` | `Real` | Square root of `squared_norm` |
+| `normalize` | `Seq[Real]` | `Seq[Real]` | Divides values by their Euclidean norm |
+| `cosine_similarity` | `(Seq[Real],Seq[Real])` | `Real` | Dot product divided by both norms |
 | `squared_distance` | `(Seq[Real],Seq[Real])` | `Real` | Sum of squared pairwise differences |
 | `distance` | `(Seq[Real],Seq[Real])` | `Real` | Square root of `squared_distance` |
 
@@ -27,8 +36,10 @@ The current module is intentionally `Real`-specific. Shape-specific
 types such as `Vec[N, Real]` are syntax-level design targets, but they
 are not represented by the current checker yet. Binary vector
 operations use `std.seq.zip`, so mismatched lengths propagate the same
-runtime fault as `zip`. `mean` and pairwise `div` inherit `std.math.div`
-division-by-zero behavior. `norm` and `distance` use `std.math.sqrt`.
+runtime fault as `zip`. Scalar operations use `std.seq.broadcast_left`
+or `std.seq.broadcast_right`. `mean`, `normalize`, `cosine_similarity`,
+and division nodes inherit `std.math.div` division-by-zero behavior.
+`norm` and `distance` use `std.math.sqrt`.
 
 Example:
 

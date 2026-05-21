@@ -8,9 +8,11 @@ mod math;
 mod predicates;
 mod real;
 mod seq;
+mod tuple;
 
 const RUNTIME_C: &str = include_str!("stdlib/runtime.c");
 const VECTOR_FLOW: &str = include_str!("stdlib/source/vector.flow");
+const MATRIX_FLOW: &str = include_str!("stdlib/source/matrix.flow");
 const VECTOR_EXPORTS: &[&str] = &[
     "sum",
     "mean",
@@ -20,13 +22,66 @@ const VECTOR_EXPORTS: &[&str] = &[
     "sub",
     "mul",
     "div",
+    "add_scalar",
+    "sub_scalar",
+    "scalar_sub",
+    "mul_scalar",
+    "scalar_mul",
+    "div_scalar",
+    "scalar_div",
     "equals",
     "dot",
     "squared_norm",
     "l1_norm",
     "norm",
+    "normalize",
+    "cosine_similarity",
     "squared_distance",
     "distance",
+];
+const MATRIX_EXPORTS: &[&str] = &[
+    "rows",
+    "cols",
+    "flatten",
+    "transpose",
+    "neg",
+    "abs",
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "add_scalar",
+    "sub_scalar",
+    "scalar_sub",
+    "mul_scalar",
+    "scalar_mul",
+    "div_scalar",
+    "scalar_div",
+    "add_row",
+    "sub_row",
+    "mul_row",
+    "div_row",
+    "equals",
+    "sum",
+    "mean",
+    "row_sums",
+    "column_sums",
+    "row_means",
+    "column_means",
+    "row_norms",
+    "column_norms",
+    "squared_norm",
+    "l1_norm",
+    "norm",
+    "frobenius_norm",
+    "normalize_rows",
+    "squared_distance",
+    "distance",
+    "matvec",
+    "vecmat",
+    "matmul",
+    "outer",
+    "gram",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,8 +176,16 @@ pub const SYMBOLS: &[StdSymbol] = &[
     seq::LENGTH,
     seq::GROUP_BY_ID,
     seq::ZIP,
+    seq::BROADCAST_LEFT,
+    seq::BROADCAST_RIGHT,
+    seq::TRANSPOSE,
+    seq::FLATTEN,
+    seq::INNER_LENGTH,
     seq::SHIFT_RIGHT,
     seq::HEAD,
+    tuple::FIRST,
+    tuple::SECOND,
+    tuple::SWAP,
 ];
 
 pub fn emit_runtime_c(out: &mut String) {
@@ -154,6 +217,7 @@ pub fn find_export(module: &str, name: &str) -> Option<&'static StdSymbol> {
 pub fn flow_source(module: &str) -> Option<&'static str> {
     match module {
         "std.vector" => Some(VECTOR_FLOW),
+        "std.matrix" => Some(MATRIX_FLOW),
         _ => None,
     }
 }
@@ -161,6 +225,7 @@ pub fn flow_source(module: &str) -> Option<&'static str> {
 pub fn flow_exports(module: &str) -> Option<&'static [&'static str]> {
     match module {
         "std.vector" => Some(VECTOR_EXPORTS),
+        "std.matrix" => Some(MATRIX_EXPORTS),
         _ => None,
     }
 }
@@ -179,6 +244,12 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "codes_to_bytes"
             | "byte_length"
             | "length"
+            | "inner_length"
+            | "transpose"
+            | "flatten"
+            | "first"
+            | "second"
+            | "swap"
             | "add"
             | "sub"
             | "mul"

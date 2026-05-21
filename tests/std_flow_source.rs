@@ -125,6 +125,174 @@ fn source_backed_stdlib_alias_imports_are_rewritten() {
 }
 
 #[test]
+fn std_matrix_source_nodes_run() {
+    let source = r#"
+        import std.cli { Args }
+        import std.math { eq }
+        import std.vector { equals as vector_equals }
+        import std.matrix {
+            rows,
+            cols,
+            flatten,
+            transpose,
+            neg as matrix_neg,
+            abs as matrix_abs,
+            add as matrix_add,
+            sub as matrix_sub,
+            mul as matrix_mul,
+            div as matrix_div,
+            add_scalar,
+            scalar_sub,
+            mul_scalar,
+            add_row,
+            equals as matrix_equals,
+            sum as matrix_sum,
+            mean as matrix_mean,
+            row_sums,
+            column_sums,
+            row_means,
+            column_means,
+            squared_norm,
+            l1_norm,
+            squared_distance,
+            matvec,
+            vecmat,
+            matmul,
+            outer,
+            gram,
+        }
+
+        program main(args: Args) -> exit_code: Int {
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]] -> $a
+            [[6.0, 5.0, 4.0], [3.0, 2.0, 1.0]] -> $b
+
+            $a -> rows -> $row_count
+            ($row_count, 2) -> eq -> $rows_ok
+
+            $a -> cols -> $col_count
+            ($col_count, 3) -> eq -> $cols_ok
+
+            $a -> flatten -> $flat
+            ($flat, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]) -> vector_equals -> $flat_ok
+
+            $a -> transpose -> $transposed
+            ($transposed, [[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]) -> matrix_equals -> $transpose_ok
+
+            $a -> matrix_neg -> matrix_abs -> $absolute
+            ($absolute, $a) -> matrix_equals -> $abs_ok
+
+            ($a, $b) -> matrix_add -> $added
+            ($added, [[7.0, 7.0, 7.0], [7.0, 7.0, 7.0]]) -> matrix_equals -> $add_ok
+
+            ($a, $b) -> matrix_sub -> $subbed
+            ($subbed, [[-5.0, -3.0, -1.0], [1.0, 3.0, 5.0]]) -> matrix_equals -> $sub_ok
+
+            ($a, $b) -> matrix_mul -> $multiplied
+            ($multiplied, [[6.0, 10.0, 12.0], [12.0, 10.0, 6.0]]) -> matrix_equals -> $mul_ok
+
+            ($a, [[1.0, 2.0, 3.0], [2.0, 5.0, 3.0]]) -> matrix_div -> $divided
+            ($divided, [[1.0, 1.0, 1.0], [2.0, 1.0, 2.0]]) -> matrix_equals -> $div_ok
+
+            ($a, 10.0) -> add_scalar -> $scalar_added
+            ($scalar_added, [[11.0, 12.0, 13.0], [14.0, 15.0, 16.0]]) -> matrix_equals -> $add_scalar_ok
+
+            (10.0, $a) -> scalar_sub -> $scalar_subbed
+            ($scalar_subbed, [[9.0, 8.0, 7.0], [6.0, 5.0, 4.0]]) -> matrix_equals -> $scalar_sub_ok
+
+            ($a, 2.0) -> mul_scalar -> $scaled
+            ($scaled, [[2.0, 4.0, 6.0], [8.0, 10.0, 12.0]]) -> matrix_equals -> $mul_scalar_ok
+
+            ($a, [10.0, 20.0, 30.0]) -> add_row -> $row_added
+            ($row_added, [[11.0, 22.0, 33.0], [14.0, 25.0, 36.0]]) -> matrix_equals -> $add_row_ok
+
+            $a -> matrix_sum -> $total
+            ($total, 21.0) -> eq -> $sum_ok
+
+            $a -> matrix_mean -> $average
+            ($average, 3.5) -> eq -> $mean_ok
+
+            $a -> row_sums -> $rs
+            ($rs, [6.0, 15.0]) -> vector_equals -> $row_sums_ok
+
+            $a -> column_sums -> $cs
+            ($cs, [5.0, 7.0, 9.0]) -> vector_equals -> $column_sums_ok
+
+            $a -> row_means -> $rm
+            ($rm, [2.0, 5.0]) -> vector_equals -> $row_means_ok
+
+            $a -> column_means -> $cm
+            ($cm, [2.5, 3.5, 4.5]) -> vector_equals -> $column_means_ok
+
+            $a -> squared_norm -> $sn
+            ($sn, 91.0) -> eq -> $squared_norm_ok
+
+            $a -> l1_norm -> $l1
+            ($l1, 21.0) -> eq -> $l1_ok
+
+            ($a, $a) -> squared_distance -> $sd
+            ($sd, 0.0) -> eq -> $distance_ok
+
+            ($a, [1.0, 0.0, 1.0]) -> matvec -> $mv
+            ($mv, [4.0, 10.0]) -> vector_equals -> $matvec_ok
+
+            ([1.0, 1.0], $a) -> vecmat -> $vm
+            ($vm, [5.0, 7.0, 9.0]) -> vector_equals -> $vecmat_ok
+
+            ($a, [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]) -> matmul -> $mm
+            ($mm, [[22.0, 28.0], [49.0, 64.0]]) -> matrix_equals -> $matmul_ok
+
+            ([1.0, 2.0], [3.0, 4.0, 5.0]) -> outer -> $outer_product
+            ($outer_product, [[3.0, 4.0, 5.0], [6.0, 8.0, 10.0]]) -> matrix_equals -> $outer_ok
+
+            $a -> gram -> $gram_matrix
+            ($gram_matrix, [[14.0, 32.0], [32.0, 77.0]]) -> matrix_equals -> $gram_ok
+
+            ($rows_ok, $cols_ok, false) -> select -> $s1
+            ($s1, $flat_ok, false) -> select -> $s2
+            ($s2, $transpose_ok, false) -> select -> $s3
+            ($s3, $abs_ok, false) -> select -> $s4
+            ($s4, $add_ok, false) -> select -> $s5
+            ($s5, $sub_ok, false) -> select -> $s6
+            ($s6, $mul_ok, false) -> select -> $s7
+            ($s7, $div_ok, false) -> select -> $s8
+            ($s8, $add_scalar_ok, false) -> select -> $s9
+            ($s9, $scalar_sub_ok, false) -> select -> $s10
+            ($s10, $mul_scalar_ok, false) -> select -> $s11
+            ($s11, $add_row_ok, false) -> select -> $s12
+            ($s12, $sum_ok, false) -> select -> $s13
+            ($s13, $mean_ok, false) -> select -> $s14
+            ($s14, $row_sums_ok, false) -> select -> $s15
+            ($s15, $column_sums_ok, false) -> select -> $s16
+            ($s16, $row_means_ok, false) -> select -> $s17
+            ($s17, $column_means_ok, false) -> select -> $s18
+            ($s18, $squared_norm_ok, false) -> select -> $s19
+            ($s19, $l1_ok, false) -> select -> $s20
+            ($s20, $distance_ok, false) -> select -> $s21
+            ($s21, $matvec_ok, false) -> select -> $s22
+            ($s22, $vecmat_ok, false) -> select -> $s23
+            ($s23, $matmul_ok, false) -> select -> $s24
+            ($s24, $outer_ok, false) -> select -> $s25
+            ($s25, $gram_ok, false) -> select -> $all_ok
+            ($all_ok, 0, 1) -> select -> $exit_code
+        }
+    "#;
+
+    let build = support::build_source("matrix-source", source);
+    let output = Command::new(&build.executable).output().expect("run");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runtime_c = fs::read_to_string(build.build_dir.join(".cache/runtime.c")).expect("runtime");
+    assert!(runtime_c.contains("flow_node___flow_std_matrix_matmul"));
+    assert!(runtime_c.contains("flow_node___flow_std_matrix_outer"));
+    assert!(runtime_c.contains("for (size_t"));
+    assert!(!runtime_c.contains("FaValue"));
+}
+
+#[test]
 fn source_backed_stdlib_reports_unknown_exports() {
     let source = r#"
         import std.cli { Args }
@@ -139,6 +307,23 @@ fn source_backed_stdlib_reports_unknown_exports() {
     fs::write(&path, source).expect("write source");
     let error = build_file(&path, None).expect_err("build should fail");
     assert!(error.contains("module `std.vector` does not export `missing`"));
+}
+
+#[test]
+fn source_backed_matrix_helpers_are_private() {
+    let source = r#"
+        import std.cli { Args }
+        import std.matrix { _row_matmul }
+
+        program main(args: Args) -> exit_code: Int {
+            0 -> $exit_code
+        }
+    "#;
+
+    let path = support::source_path("matrix-private-helper");
+    fs::write(&path, source).expect("write source");
+    let error = build_file(&path, None).expect_err("build should fail");
+    assert!(error.contains("module `std.matrix` does not export `_row_matmul`"));
 }
 
 #[test]
