@@ -510,6 +510,12 @@ impl<'a> TypedCodegen<'a> {
     fn stdlib_codegen_type(&self, name: &str) -> Ty {
         match name {
             "Stream" => Ty::Stream(Box::new(Ty::Var("V".to_string()))),
+            "Args" => Ty::Args,
+            "Fault" => Ty::Fault,
+            "ServerConfig" => Ty::HttpServerConfig,
+            "Listener" => Ty::HttpListener,
+            "Request" => Ty::HttpRequest,
+            "Response" => Ty::HttpResponse,
             "Connection" => Ty::SqliteConnection,
             "Row" => Ty::SqliteRow,
             "Value" => Ty::SqliteValue,
@@ -4689,6 +4695,18 @@ impl TypeParser {
         if name == "sqlite.Value" {
             return Ok(Ty::SqliteValue);
         }
+        if name == "http.ServerConfig" {
+            return Ok(Ty::HttpServerConfig);
+        }
+        if name == "http.Listener" {
+            return Ok(Ty::HttpListener);
+        }
+        if name == "http.Request" {
+            return Ok(Ty::HttpRequest);
+        }
+        if name == "http.Response" {
+            return Ok(Ty::HttpResponse);
+        }
         let base_name = name.rsplit('.').next().unwrap_or(&name);
         Ok(match base_name {
             "Unit" | "void" => Ty::Unit,
@@ -4696,12 +4714,7 @@ impl TypeParser {
             "Real" | "f16" | "float" | "double" => Ty::Real,
             "Bool" | "i1" => Ty::Bool,
             "Bytes" | "ptr" => Ty::Bytes,
-            "Args" => Ty::Args,
             "Fault" => Ty::Fault,
-            "ServerConfig" => Ty::HttpServerConfig,
-            "Listener" => Ty::HttpListener,
-            "Request" => Ty::HttpRequest,
-            "Response" => Ty::HttpResponse,
             _ => Ty::Var(name),
         })
     }

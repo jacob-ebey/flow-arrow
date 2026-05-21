@@ -958,10 +958,6 @@ fn primitive_types() -> HashMap<String, Type> {
         ("Bool".to_string(), Type::Bool),
         ("Bytes".to_string(), Type::Bytes),
         ("Fault".to_string(), Type::Fault),
-        ("ServerConfig".to_string(), Type::HttpServerConfig),
-        ("Listener".to_string(), Type::HttpListener),
-        ("Request".to_string(), Type::HttpRequest),
-        ("Response".to_string(), Type::HttpResponse),
         ("i1".to_string(), Type::Bool),
         ("i8".to_string(), Type::Int),
         ("i16".to_string(), Type::Int),
@@ -972,16 +968,24 @@ fn primitive_types() -> HashMap<String, Type> {
         ("double".to_string(), Type::Real),
         ("ptr".to_string(), Type::Bytes),
         ("void".to_string(), Type::Unit),
-        (
-            "Number".to_string(),
-            Type::OneOf(vec![Type::Int, Type::Real]),
-        ),
     ])
 }
 
 fn stdlib_type_symbol(name: &str) -> Result<Type, String> {
     if name == "Stream" {
         Ok(Type::Stream(Box::new(Type::Var("V".to_string()))))
+    } else if name == "Args" {
+        Ok(Type::Args)
+    } else if name == "Fault" {
+        Ok(Type::Fault)
+    } else if name == "ServerConfig" {
+        Ok(Type::HttpServerConfig)
+    } else if name == "Listener" {
+        Ok(Type::HttpListener)
+    } else if name == "Request" {
+        Ok(Type::HttpRequest)
+    } else if name == "Response" {
+        Ok(Type::HttpResponse)
     } else if name == "Connection" {
         Ok(Type::SqliteConnection)
     } else if name == "Row" {
@@ -1287,12 +1291,10 @@ impl TypeParser {
             "Real" => Type::Real,
             "Bool" => Type::Bool,
             "Bytes" => Type::Bytes,
-            "Args" => Type::Args,
-            "Fault" => Type::Fault,
-            "ServerConfig" | "http.ServerConfig" => Type::HttpServerConfig,
-            "Listener" | "http.Listener" => Type::HttpListener,
-            "Request" | "http.Request" => Type::HttpRequest,
-            "Response" | "http.Response" => Type::HttpResponse,
+            "http.ServerConfig" => Type::HttpServerConfig,
+            "http.Listener" => Type::HttpListener,
+            "http.Request" => Type::HttpRequest,
+            "http.Response" => Type::HttpResponse,
             "sqlite.Connection" => Type::SqliteConnection,
             "sqlite.Row" => Type::SqliteRow,
             "sqlite.Value" => Type::SqliteValue,
