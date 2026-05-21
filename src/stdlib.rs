@@ -291,14 +291,29 @@ pub fn emit_runtime_c(out: &mut String) {
         bytes::C,
         intrinsic::C,
     ] {
-        out.push_str(part);
+        push_c_fragment(out, part);
         out.push('\n');
     }
 }
 
 pub fn emit_cv_runtime_c(out: &mut String) {
-    out.push_str(cv::C);
+    push_c_fragment(out, cv::C);
     out.push('\n');
+}
+
+fn push_c_fragment(out: &mut String, source: &str) {
+    for line in source.lines() {
+        if !is_local_c_include(line) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+}
+
+fn is_local_c_include(line: &str) -> bool {
+    line.trim_start()
+        .strip_prefix("#include")
+        .is_some_and(|rest| rest.trim_start().starts_with('"'))
 }
 
 pub fn module_symbols(module: &str) -> impl Iterator<Item = &'static StdSymbol> + '_ {
@@ -381,6 +396,24 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "bit_shr"
             | "collect"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_c_includes_are_stripped_from_runtime_fragments() {
+        let mut out = String::new();
+        push_c_fragment(
+            &mut out,
+            "#include \"runtime.h\"\n#include <stdio.h>\nstatic int value;\n",
+        );
+
+        assert!(!out.contains("#include \"runtime.h\""));
+        assert!(out.contains("#include <stdio.h>"));
+        assert!(out.contains("static int value;"));
+    }
 }
 
 const fn ty(module: &'static str, name: &'static str) -> StdSymbol {

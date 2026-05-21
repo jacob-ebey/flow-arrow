@@ -1,3 +1,5 @@
+#include "runtime.h"
+
 static FaBytes fa_format_real(double value) {
   char buf[128];
   int len = snprintf(buf, sizeof(buf), "%.15g", value);

@@ -1,3 +1,5 @@
+#include "runtime.h"
+
 static FaBytes fa_format_int(int64_t value) {
   char buf[64];
   int len = snprintf(buf, sizeof(buf), "%lld", (long long)value);

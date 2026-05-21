@@ -1,3 +1,5 @@
+#include "runtime.h"
+
 static FaSeq_Int fa_range_step(int64_t start, int64_t stop, int64_t step) {
   if (step == 0) fa_die_usage("range_step: step cannot be zero");
   size_t count = 0;

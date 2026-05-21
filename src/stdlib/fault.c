@@ -1,3 +1,5 @@
+#include "runtime.h"
+
 static FaFault fa_fault_with_line(size_t line, FaFault fault) {
   char prefix[64];
   int prefix_len = snprintf(prefix, sizeof(prefix), "line %zu: ", line);

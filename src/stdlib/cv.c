@@ -1,3 +1,4 @@
+#include "runtime.h"
 #include <jpeglib.h>
 #include <png.h>
 #include <setjmp.h>

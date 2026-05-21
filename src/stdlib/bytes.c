@@ -1,3 +1,5 @@
+#include "runtime.h"
+
 static FaSeq_Bytes fa_split_lines(FaBytes input) {
   size_t count = input.len == 0 ? 0 : 1;
   for (size_t i = 0; i < input.len; i++) if (input.bytes[i] == '\n') count++;

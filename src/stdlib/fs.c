@@ -1,3 +1,5 @@
+#include "runtime.h"
+
 static FaFault fa_io_fault(FaBytes path, const char *operation) {
   FaBytes prefix = fa_bytes_literal(operation, strlen(operation));
   FaBytes middle = fa_bytes_literal(": ", 2);

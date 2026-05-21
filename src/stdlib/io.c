@@ -1,3 +1,5 @@
+#include "runtime.h"
+
 static FaBytes fa_read_stdin(void) {
   size_t cap = 4096;
   size_t len = 0;
