@@ -8,3 +8,7 @@ edition = "2024"
 [[bench]]
 name = "vector"
 harness = false
+
+[[bench]]
+name = "matrix"
+harness = false
