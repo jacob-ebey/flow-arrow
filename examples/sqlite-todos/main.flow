@@ -30,7 +30,8 @@ program main(args: Args) -> exit_code: Faultable[Int] {
 
     ($conn3, "SELECT id, title FROM todos ORDER BY id", $no_params) -> sqlite.query -> $query
     $query                                                          -> first        -> $conn4
-    $query                                                          -> second       -> map todo_line -> stream.to_seq -> concat_bytes -> $output
+    $query                                                          -> second       -> $rows
+    $rows -> map todo_line -> stream.to_seq -> concat_bytes -> $output
 
     $output -> write_stdout -> $written
     $conn4  -> sqlite.close -> $closed
