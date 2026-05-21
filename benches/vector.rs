@@ -23,9 +23,15 @@ fn main() {
         flowarrow_source(&left, &right, config.iterations, expected),
     )
     .expect("write FlowArrow benchmark source");
-    let rust_source_path = root.join("vector_bench.rs");
+    let rust_project_root = root.join("rust_vector_bench");
+    fs::create_dir_all(rust_project_root.join("src")).expect("create Rust benchmark project");
     fs::write(
-        &rust_source_path,
+        rust_project_root.join("Cargo.toml"),
+        rust_manifest("flowarrow-vector-rust-bench"),
+    )
+    .expect("write Rust benchmark manifest");
+    fs::write(
+        rust_project_root.join("src/main.rs"),
         rust_source(&left, &right, config.iterations, expected),
     )
     .expect("write Rust benchmark source");
@@ -36,7 +42,7 @@ fn main() {
     let flowarrow_build_time = flowarrow_build_start.elapsed();
 
     let rust_build_start = Instant::now();
-    let rust_executable = build_rust_executable(&rust_source_path);
+    let rust_executable = build_rust_executable(&rust_project_root, "flowarrow-vector-rust-bench");
     let rust_build_time = rust_build_start.elapsed();
 
     run_executable_once(&rust_executable, "Rust benchmark executable");
@@ -217,26 +223,28 @@ program main(args: Args) -> exit_code: Int {{
 fn rust_source(left: &[f64], right: &[f64], iterations: usize, expected: f64) -> String {
     format!(
         r#"
+use nalgebra::DVector;
 use std::hint::black_box;
 
 static LEFT: &[f64] = &{};
 static RIGHT: &[f64] = &{};
 
 fn kernel(left: &[f64], right: &[f64], iterations: usize) -> f64 {{
+    let left = DVector::from_column_slice(left);
+    let right = DVector::from_column_slice(right);
     let mut score = 0.0;
     for _ in 0..iterations {{
-        let mut dot = 0.0;
-        let mut squared_distance = 0.0;
-        let mut squared_norm = 0.0;
-        for (&a, &b) in left.iter().zip(right) {{
-            dot += a * b;
-            let delta = a - b;
-            squared_distance += delta * delta;
-            squared_norm += a * a;
-        }}
-        score += dot + squared_distance + squared_norm;
+        let squared_distance = (black_box(&left) - black_box(&right)).norm_squared();
+        score += black_box(left.dot(&right))
+            + black_box(squared_distance)
+            + black_box(left.norm_squared());
     }}
     score
+}}
+
+fn is_close(actual: f64, expected: f64) -> bool {{
+    let tolerance = 1e-9 * expected.abs().max(1.0);
+    (actual - expected).abs() <= tolerance
 }}
 
 fn main() {{
@@ -246,12 +254,32 @@ fn main() {{
         black_box({iterations}usize),
     );
     let expected = black_box({});
-    std::process::exit(if score == expected {{ 0 }} else {{ 1 }});
+    std::process::exit(if is_close(score, expected) {{ 0 }} else {{ 1 }});
 }}
 "#,
         rust_slice(left),
         rust_slice(right),
         flow_real(expected),
+    )
+}
+
+fn rust_manifest(package_name: &str) -> String {
+    format!(
+        r#"[package]
+name = "{package_name}"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nalgebra = {{ version = "0.34", default-features = false, features = ["std"] }}
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+"#
     )
 }
 
@@ -283,28 +311,26 @@ fn rust_slice(values: &[f64]) -> String {
     out
 }
 
-fn build_rust_executable(source: &PathBuf) -> PathBuf {
-    let executable =
-        source.with_file_name(format!("rust_vector_bench{}", std::env::consts::EXE_SUFFIX));
-    let output = Command::new("rustc")
-        .arg("-C")
-        .arg("opt-level=3")
-        .arg("-C")
-        .arg("debuginfo=0")
-        .arg("-C")
-        .arg("panic=abort")
-        .arg(source)
-        .arg("-o")
-        .arg(&executable)
+fn build_rust_executable(project_root: &PathBuf, package_name: &str) -> PathBuf {
+    let target_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/flowarrow-rust-benches");
+    let output = Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .arg("--quiet")
+        .current_dir(project_root)
+        .env("CARGO_TARGET_DIR", &target_dir)
         .output()
-        .expect("invoke rustc for Rust benchmark executable");
+        .expect("invoke cargo for Rust benchmark executable");
     assert!(
         output.status.success(),
-        "rustc failed:\n{}{}",
+        "cargo build failed:\n{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    executable
+    target_dir
+        .join("release")
+        .join(format!("{package_name}{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn run_executable_once(executable: &PathBuf, label: &str) {

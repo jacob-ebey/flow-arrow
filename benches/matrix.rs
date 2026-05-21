@@ -34,9 +34,15 @@ fn main() {
         flowarrow_source(&left, &right, &vector, config, expected),
     )
     .expect("write FlowArrow benchmark source");
-    let rust_source_path = root.join("matrix_bench.rs");
+    let rust_project_root = root.join("rust_matrix_bench");
+    fs::create_dir_all(rust_project_root.join("src")).expect("create Rust benchmark project");
     fs::write(
-        &rust_source_path,
+        rust_project_root.join("Cargo.toml"),
+        rust_manifest("flowarrow-matrix-rust-bench"),
+    )
+    .expect("write Rust benchmark manifest");
+    fs::write(
+        rust_project_root.join("src/main.rs"),
         rust_source(&left, &right, &vector, config, expected),
     )
     .expect("write Rust benchmark source");
@@ -47,7 +53,7 @@ fn main() {
     let flowarrow_build_time = flowarrow_build_start.elapsed();
 
     let rust_build_start = Instant::now();
-    let rust_executable = build_rust_executable(&rust_source_path);
+    let rust_executable = build_rust_executable(&rust_project_root, "flowarrow-matrix-rust-bench");
     let rust_build_time = rust_build_start.elapsed();
 
     run_executable_once(&rust_executable, "Rust benchmark executable");
@@ -305,6 +311,7 @@ fn rust_source(
 ) -> String {
     format!(
         r#"
+use nalgebra::{{DMatrix, DVector}};
 use std::hint::black_box;
 
 static LEFT: &[f64] = &{};
@@ -312,42 +319,23 @@ static RIGHT: &[f64] = &{};
 static VECTOR: &[f64] = &{};
 
 fn kernel(left: &[f64], right: &[f64], vector: &[f64], rows: usize, inner: usize, cols: usize, iterations: usize) -> f64 {{
+    let left = DMatrix::from_row_slice(rows, inner, left);
+    let right = DMatrix::from_row_slice(inner, cols, right);
+    let vector = DVector::from_column_slice(vector);
     let mut score = 0.0;
     for _ in 0..iterations {{
-        let mut product_sum = 0.0;
-        for row in 0..rows {{
-            let mut row_product_sum = 0.0;
-            for col in 0..cols {{
-                let mut dot = 0.0;
-                for k in 0..inner {{
-                    dot += left[row * inner + k] * right[k * cols + col];
-                }}
-                row_product_sum += dot;
-            }}
-            product_sum += row_product_sum;
-        }}
-
-        let mut matvec_sum = 0.0;
-        for row in 0..rows {{
-            let mut dot = 0.0;
-            for k in 0..inner {{
-                dot += left[row * inner + k] * vector[k];
-            }}
-            matvec_sum += dot;
-        }}
-
-        let mut row_sum_total = 0.0;
-        for row in 0..rows {{
-            let mut row_sum = 0.0;
-            for col in 0..inner {{
-                row_sum += left[row * inner + col];
-            }}
-            row_sum_total += row_sum;
-        }}
-
-        score += product_sum + matvec_sum + row_sum_total;
+        let product_sum = (black_box(&left) * black_box(&right)).sum();
+        let matvec_sum = (black_box(&left) * black_box(&vector)).sum();
+        score += black_box(product_sum)
+            + black_box(matvec_sum)
+            + black_box(left.sum());
     }}
     score
+}}
+
+fn is_close(actual: f64, expected: f64) -> bool {{
+    let tolerance = 1e-9 * expected.abs().max(1.0);
+    (actual - expected).abs() <= tolerance
 }}
 
 fn main() {{
@@ -361,7 +349,7 @@ fn main() {{
         black_box({}usize),
     );
     let expected = black_box({});
-    std::process::exit(if score == expected {{ 0 }} else {{ 1 }});
+    std::process::exit(if is_close(score, expected) {{ 0 }} else {{ 1 }});
 }}
 "#,
         rust_slice(left),
@@ -372,6 +360,26 @@ fn main() {{
         config.cols,
         config.iterations,
         flow_real(expected),
+    )
+}
+
+fn rust_manifest(package_name: &str) -> String {
+    format!(
+        r#"[package]
+name = "{package_name}"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nalgebra = {{ version = "0.34", default-features = false, features = ["std"] }}
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+"#
     )
 }
 
@@ -422,28 +430,26 @@ fn rust_slice(values: &[f64]) -> String {
     out
 }
 
-fn build_rust_executable(source: &PathBuf) -> PathBuf {
-    let executable =
-        source.with_file_name(format!("rust_matrix_bench{}", std::env::consts::EXE_SUFFIX));
-    let output = Command::new("rustc")
-        .arg("-C")
-        .arg("opt-level=3")
-        .arg("-C")
-        .arg("debuginfo=0")
-        .arg("-C")
-        .arg("panic=abort")
-        .arg(source)
-        .arg("-o")
-        .arg(&executable)
+fn build_rust_executable(project_root: &PathBuf, package_name: &str) -> PathBuf {
+    let target_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/flowarrow-rust-benches");
+    let output = Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .arg("--quiet")
+        .current_dir(project_root)
+        .env("CARGO_TARGET_DIR", &target_dir)
         .output()
-        .expect("invoke rustc for Rust benchmark executable");
+        .expect("invoke cargo for Rust benchmark executable");
     assert!(
         output.status.success(),
-        "rustc failed:\n{}{}",
+        "cargo build failed:\n{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    executable
+    target_dir
+        .join("release")
+        .join(format!("{package_name}{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn run_executable_once(executable: &PathBuf, label: &str) {

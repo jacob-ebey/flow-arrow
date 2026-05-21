@@ -4,6 +4,9 @@ Benchmarks compare compiled FlowArrow applications with native Rust
 equivalents. They are custom `cargo bench` targets with no external
 benchmarking dependency.
 
+The Rust baselines are built as generated Cargo projects, so the first
+run may need to download and compile `nalgebra`.
+
 ## Vector
 
 ```sh
@@ -13,8 +16,8 @@ cargo bench --bench vector
 The vector benchmark generates a FlowArrow program that uses
 `std.vector` to run dot product, squared distance, and squared norm over
 the same vectors for a fixed number of iterations. It also generates and
-compiles an equivalent Rust program with `rustc -C opt-level=3`. It
-builds both programs once, then samples:
+compiles a Rust release executable that uses `nalgebra::DVector` for the
+native baseline. It builds both programs once, then samples:
 
 - the compiled Rust executable
 - the compiled FlowArrow executable
@@ -47,8 +50,8 @@ cargo bench --bench matrix
 The matrix benchmark generates a FlowArrow program that uses
 `std.matrix` for matrix multiplication, matrix-vector multiplication,
 and row reductions over fixed matrices for a fixed number of iterations.
-It also generates and compiles an equivalent Rust program with
-`rustc -C opt-level=3`.
+It also generates and compiles a Rust release executable that uses
+`nalgebra::DMatrix` and `nalgebra::DVector` for the native baseline.
 
 Options:
 
