@@ -656,6 +656,10 @@ impl<'a> TypedCodegen<'a> {
         self.resolve_declared_type(parse_type(text)?)
     }
 
+    fn parse_signature_type(&self, text: &str) -> Result<Ty, String> {
+        self.resolve_signature_type(parse_type(text)?)
+    }
+
     fn resolve_declared_type(&self, ty: Ty) -> Result<Ty, String> {
         match ty {
             Ty::Var(name) => self
@@ -678,6 +682,35 @@ impl<'a> TypedCodegen<'a> {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
                     out.push(self.resolve_declared_type(item)?);
+                }
+                Ok(Ty::Tuple(out))
+            }
+            other => Ok(other),
+        }
+    }
+
+    fn resolve_signature_type(&self, ty: Ty) -> Result<Ty, String> {
+        match ty {
+            Ty::Var(name) => Ok(self
+                .aliases
+                .get(&name)
+                .cloned()
+                .or_else(|| builtin_type_alias(&name))
+                .unwrap_or(Ty::Var(name))),
+            Ty::Faultable(item) => Ok(Ty::Faultable(Box::new(self.resolve_signature_type(*item)?))),
+            Ty::Seq(item) => Ok(Ty::Seq(Box::new(self.resolve_signature_type(*item)?))),
+            Ty::Stream(item) => Ok(Ty::Stream(Box::new(self.resolve_signature_type(*item)?))),
+            Ty::OneOf(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.resolve_signature_type(item)?);
+                }
+                Ok(Ty::OneOf(out))
+            }
+            Ty::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.resolve_signature_type(item)?);
                 }
                 Ok(Ty::Tuple(out))
             }
@@ -4509,8 +4542,8 @@ impl<'a> TypedCodegen<'a> {
             .output
             .ok_or_else(|| format!("stdlib node `{name}` has no output type"))?;
         Ok(vec![Signature {
-            input: self.parse_declared_type(input)?,
-            output: self.parse_declared_type(output)?,
+            input: self.parse_signature_type(input)?,
+            output: self.parse_signature_type(output)?,
         }])
     }
 

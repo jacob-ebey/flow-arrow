@@ -66,19 +66,16 @@ program main(args: Args) -> exit_code: Faultable[Int] {
 }
 
 node grep_config(root_target: Bytes) -> out: Faultable[(Bytes, Seq[Bytes])] {
-    $root_target                                               -> is_dir            -> $root_is_dir
-    $root_target                                               -> dirname           -> $root_parent
-    ($root_is_dir, $root_target, $root_parent)                 -> select            -> $root
-    ($root, ".gitignore")                                      -> join_path         -> $gitignore_path
-    $gitignore_path                                            -> exists            -> $has_gitignore
-    $gitignore_path                                            -> one_path          -> $one_gitignore_path
-    $gitignore_path                                            -> no_paths          -> $no_gitignore_paths
-    ($has_gitignore, $one_gitignore_path, $no_gitignore_paths) -> select            -> $gitignore_paths
-    $gitignore_paths                                           -> read_files        -> $gitignore_files
-    $gitignore_files                                           -> map file_contents -> concat_bytes -> split_lines -> map trim -> $gitignore_filters
-    ["/.git/", ".git/", ".gitignore"]                          -> $default_ignore_filters
-    ($default_ignore_filters, $gitignore_filters)              -> concat            -> $ignore_filters
-    ($root, $ignore_filters)                                   -> $out
+    $root_target                                            -> is_dir            -> $root_is_dir
+    $root_target                                            -> dirname           -> $root_parent
+    ($root_is_dir, $root_target, $root_parent)              -> select            -> $root
+    ($root, ".gitignore")                                   -> join_path         -> $gitignore_path
+    $gitignore_path                                         -> exists            -> $has_gitignore
+    ($has_gitignore, [$gitignore_path], [])                 -> select            -> $gitignore_paths
+    $gitignore_paths                                        -> read_files        -> $gitignore_files
+    $gitignore_files                                        -> map file_contents -> concat_bytes -> split_lines -> map trim -> $gitignore_filters
+    (["/.git/", ".git/", ".gitignore"], $gitignore_filters) -> concat            -> $ignore_filters
+    ($root, $ignore_filters)                                -> $out
 }
 
 node grep_path(input: (Bytes, (Bytes, Seq[Bytes]))) -> out: Faultable[Seq[Bytes]] {

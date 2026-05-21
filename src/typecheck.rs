@@ -1702,12 +1702,17 @@ fn match_types(
             if let Some(bound) = vars.get(name) {
                 if bound == actual {
                     Ok(())
+                } else if matches!(actual, Type::EmptySeq) && matches!(bound, Type::Seq(_)) {
+                    Ok(())
                 } else {
                     Err(format!(
                         "type variable `{name}` was `{bound}` then `{actual}`"
                     ))
                 }
             } else {
+                if matches!(actual, Type::EmptySeq) {
+                    return Ok(());
+                }
                 vars.insert(name.clone(), actual.clone());
                 Ok(())
             }
