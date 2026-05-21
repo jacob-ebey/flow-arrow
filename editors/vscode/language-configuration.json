@@ -18,7 +18,7 @@
     [
       "(",
       ")"
-    ],
+    ]
   ],
   "autoClosingPairs": [
     {
@@ -74,5 +74,5 @@
       "end": "^\\s*#\\s*endregion\\b"
     }
   },
-  "wordPattern": "(-?\\d+(?:\\.\\d+(?:[eE]-?\\d+)?)?)|([A-Za-z_][A-Za-z0-9_]*)"
+  "wordPattern": "(-?\\d+(?:\\.\\d+)?)|(\\$?[A-Za-z_][A-Za-z0-9_]*)"
 }

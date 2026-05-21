@@ -6,9 +6,12 @@ FlowArrow source files.
 ## Features
 
 - Registers `.flow` and `.flowarrow` files as FlowArrow.
-- Highlights FlowArrow declarations, imports, combinators, comments, strings,
-  literals, types, punctuation, and the `->` flow arrow.
-- Marks syntax listed as forbidden in `docs/syntax.md` as illegal tokens.
+- Highlights FlowArrow declarations, type aliases, imports, combinators,
+  comments, strings, literals, types, punctuation, and the `->` flow arrow.
+- Gives `$`-prefixed variables a dedicated scope so they can be colored
+  differently from node references and declaration names.
+- Marks forbidden keywords and assignment-like operators from `docs/syntax.md`
+  as illegal tokens.
 - Configures comments, bracket matching, auto-closing pairs, surrounding pairs,
   and region folding.
 

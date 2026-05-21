@@ -13,6 +13,9 @@
       "include": "#forbidden-keywords"
     },
     {
+      "include": "#variables"
+    },
+    {
       "include": "#declarations"
     },
     {
@@ -20,6 +23,9 @@
     },
     {
       "include": "#combinators"
+    },
+    {
+      "include": "#node-references"
     },
     {
       "include": "#keywords"
@@ -71,7 +77,19 @@
     },
     "forbidden-keywords": {
       "name": "invalid.illegal.keyword.flowarrow",
-      "match": "\\b(?:for|while|break|continue|return|throw|try|catch|await|spawn|join|lock|mutex|atomic|var|set|if|else|take_while|find_first)\\b|(?:\\+\\+|--|\\+=|-=|\\*=|/=|=)"
+      "match": "\\b(?:for|while|break|continue|return|throw|try|catch|await|spawn|join|lock|mutex|atomic|var|set|if|else|take_while|find_first)\\b|(?:\\+\\+|--|\\+=|-=|\\*=|/=)"
+    },
+    "variables": {
+      "name": "variable.other.flowarrow",
+      "match": "(\\$)([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.variable.flowarrow"
+        },
+        "2": {
+          "name": "variable.other.flowarrow"
+        }
+      }
     },
     "declarations": {
       "patterns": [
@@ -88,6 +106,21 @@
           }
         },
         {
+          "name": "meta.declaration.type.flowarrow",
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.type.flowarrow"
+            },
+            "2": {
+              "name": "entity.name.type.alias.flowarrow"
+            },
+            "3": {
+              "name": "punctuation.separator.type-alias.flowarrow"
+            }
+          }
+        },
+        {
           "name": "meta.cell.flowarrow",
           "match": "\\b(cell)\\s*(?=\\()",
           "captures": {
@@ -100,6 +133,18 @@
     },
     "imports": {
       "patterns": [
+        {
+          "name": "meta.import.local.flowarrow",
+          "match": "\\b(import)\\s+(\"(?:\\\\[\"\\\\ntr]|[^\"\\\\])*\")",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.flowarrow"
+            },
+            "2": {
+              "name": "string.quoted.double.flowarrow"
+            }
+          }
+        },
         {
           "name": "meta.import.flowarrow",
           "match": "\\b(import)\\s+((?:[A-Za-z_][A-Za-z0-9_]*)(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
@@ -125,8 +170,159 @@
     "combinators": {
       "patterns": [
         {
+          "name": "meta.combinator.fault-map.flowarrow",
+          "match": "\\b(fault)\\s+(map)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.combinator.flowarrow"
+            },
+            "2": {
+              "name": "keyword.operator.combinator.flowarrow"
+            },
+            "3": {
+              "name": "entity.name.function.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "meta.combinator.map.flowarrow",
+          "match": "\\b(map|filter)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.combinator.flowarrow"
+            },
+            "2": {
+              "name": "entity.name.function.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "meta.combinator.reduce.flowarrow",
+          "match": "\\b(reduce|scan)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()\\s*(identity)\\s*(:)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.combinator.flowarrow"
+            },
+            "2": {
+              "name": "entity.name.function.flowarrow"
+            },
+            "3": {
+              "name": "punctuation.definition.group.flowarrow"
+            },
+            "4": {
+              "name": "keyword.other.identity.flowarrow"
+            },
+            "5": {
+              "name": "punctuation.separator.type.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "meta.combinator.repeat.runtime.flowarrow",
+          "match": "\\b(repeat)\\s*(<)\\s*(\\$)([A-Za-z_][A-Za-z0-9_]*)\\s*(>)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.combinator.flowarrow"
+            },
+            "2": {
+              "name": "punctuation.definition.typeparameters.begin.flowarrow"
+            },
+            "3": {
+              "name": "punctuation.definition.variable.flowarrow"
+            },
+            "4": {
+              "name": "variable.other.flowarrow"
+            },
+            "5": {
+              "name": "punctuation.definition.typeparameters.end.flowarrow"
+            },
+            "6": {
+              "name": "entity.name.function.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "meta.combinator.repeat.literal.flowarrow",
+          "match": "\\b(repeat)\\s*(<)\\s*(-?\\d+)\\s*(>)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.combinator.flowarrow"
+            },
+            "2": {
+              "name": "punctuation.definition.typeparameters.begin.flowarrow"
+            },
+            "3": {
+              "name": "constant.numeric.integer.flowarrow"
+            },
+            "4": {
+              "name": "punctuation.definition.typeparameters.end.flowarrow"
+            },
+            "5": {
+              "name": "entity.name.function.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "meta.combinator.stencil.flowarrow",
+          "match": "\\b(stencil2d)\\s+(radius)\\s*(<)\\s*(-?\\d+)\\s*(>)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.combinator.flowarrow"
+            },
+            "2": {
+              "name": "keyword.other.radius.flowarrow"
+            },
+            "3": {
+              "name": "punctuation.definition.typeparameters.begin.flowarrow"
+            },
+            "4": {
+              "name": "constant.numeric.integer.flowarrow"
+            },
+            "5": {
+              "name": "punctuation.definition.typeparameters.end.flowarrow"
+            },
+            "6": {
+              "name": "entity.name.function.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "meta.combinator.grid.flowarrow",
+          "begin": "\\b(grid)\\s*(<)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.operator.combinator.flowarrow"
+            },
+            "2": {
+              "name": "punctuation.definition.typeparameters.begin.flowarrow"
+            }
+          },
+          "end": ">",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.typeparameters.end.flowarrow"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#variables"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "name": "variable.parameter.grid.flowarrow",
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+            },
+            {
+              "name": "punctuation.separator.comma.flowarrow",
+              "match": ","
+            }
+          ]
+        },
+        {
           "name": "keyword.operator.combinator.flowarrow",
-          "match": "\\b(?:map|reduce|scan|repeat|select|stencil2d|grid|range|range_between|range_step|filter|length)\\b"
+          "match": "\\b(?:select|range|range_between|range_step|length)\\b"
         },
         {
           "name": "keyword.other.identity.flowarrow",
@@ -138,9 +334,28 @@
         }
       ]
     },
+    "node-references": {
+      "patterns": [
+        {
+          "name": "meta.stage.node.flowarrow",
+          "match": "(-)(>)\\s*(?!(?:map|reduce|scan|repeat|fault|filter|select|stencil2d|grid|range|range_between|range_step|length)\\b)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.flowarrow"
+            },
+            "2": {
+              "name": "keyword.control.flowarrow"
+            },
+            "3": {
+              "name": "entity.name.function.flowarrow"
+            }
+          }
+        }
+      ]
+    },
     "keywords": {
       "name": "keyword.other.reserved.flowarrow",
-      "match": "\\b(?:import|as|node|program|cell)\\b"
+      "match": "\\b(?:import|as|type|node|program|cell|fault|ok)\\b"
     },
     "booleans": {
       "name": "constant.language.boolean.flowarrow",
@@ -150,7 +365,7 @@
       "patterns": [
         {
           "name": "constant.numeric.real.flowarrow",
-          "match": "(?<![A-Za-z0-9_])-?\\d+\\.\\d+(?:[eE]-?\\d+)?\\b"
+          "match": "(?<![A-Za-z0-9_])-?\\d+\\.\\d+\\b"
         },
         {
           "name": "constant.numeric.integer.flowarrow",
@@ -162,11 +377,11 @@
       "patterns": [
         {
           "name": "support.type.primitive.flowarrow",
-          "match": "\\b(?:Args|Bool|Bytes|Image|Int|Kernel|Matrix|Real|Seq|Vec)\\b"
+          "match": "\\b(?:Args|Bool|Bytes|Fault|Faultable|Image|Int|Kernel|Matrix|Real|Seq|Stream|Vec|double|i64)\\b"
         },
         {
           "name": "meta.type.annotation.flowarrow",
-          "match": "(:)\\s*([A-Z][A-Za-z0-9_]*(?:\\.[A-Z][A-Za-z0-9_]*)?)",
+          "match": "(:)\\s*([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\[[^\\]]*\\])?(?:\\|[A-Za-z_][A-Za-z0-9_]*(?:\\[[^\\]]*\\])?)*)",
           "captures": {
             "1": {
               "name": "punctuation.separator.type.flowarrow"
@@ -219,6 +434,18 @@
         {
           "name": "punctuation.separator.type.flowarrow",
           "match": ":"
+        },
+        {
+          "name": "punctuation.separator.type-alias.flowarrow",
+          "match": "="
+        },
+        {
+          "name": "punctuation.definition.typeparameters.flowarrow",
+          "match": "[<>]"
+        },
+        {
+          "name": "punctuation.definition.variable.flowarrow",
+          "match": "\\$"
         }
       ]
     }

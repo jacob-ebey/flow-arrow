@@ -31,7 +31,7 @@ Whitespace and comments are insignificant except as token separators.
 
 ```ebnf
 WS           ::= (" " | "\t" | "\r" | "\n")+
-LINE_COMMENT ::= "#" (any character except "\n")* "\n"
+LINE_COMMENT ::= "#" (any character except "\n")* ("\n" | EOF)
 BLOCK_COMMENT::= "/*" (any character)*? "*/"
 ```
 
@@ -64,7 +64,7 @@ filter    length    fault     ok
 ```ebnf
 literal    ::= INT | REAL | BOOL | STRING
 INT        ::= "-"? digit+
-REAL       ::= "-"? digit+ "." digit+ (("e" | "E") "-"? digit+)?
+REAL       ::= "-"? digit+ "." digit+
 BOOL       ::= "true" | "false"
 STRING     ::= "\"" (any character except "\"" or "\\" | escape)* "\""
 escape     ::= "\\" ("\"" | "\\" | "n" | "t" | "r")
@@ -73,7 +73,7 @@ escape     ::= "\\" ("\"" | "\\" | "n" | "t" | "r")
 ### 1.4 Punctuation and operators
 
 ```text
-->   $   .   ,   :   =   (   )   {   }   <   >
+->   $   .   ,   :   =   (   )   {   }   [   ]   <   >
 ```
 
 The only multi-character token is `->` (the **flow arrow**). A `$`
@@ -174,7 +174,7 @@ type           ::= type_alternative ("|" type_alternative)*
 
 type_alternative ::= type_name type_args?
 
-type_name      ::= IDENT ("." IDENT)?
+type_name      ::= IDENT ("." IDENT)*
 
 type_args      ::= "[" type_arg ("," type_arg)* "]"
 
@@ -313,6 +313,7 @@ combinator     ::= map_comb
                  | fault_map_comb
                  | repeat_comb
                  | select_comb
+                 | stencil_comb
                  | grid_comb
                  | range_comb
                  | filter_comb
@@ -338,7 +339,7 @@ stencil_comb   ::= "stencil2d" "radius" "<" INT ">" IDENT
 
 grid_comb      ::= "grid" "<" grid_dim ("," grid_dim)* ">" grid_body
 
-grid_dim       ::= IDENT | INT
+grid_dim       ::= IDENT | INT | variable_ref
 
 grid_body      ::= "{" cell_decl "}"
 
@@ -445,13 +446,16 @@ must be rejected by the parser:
 for      while    break    continue   return
 throw    try      catch    await      spawn
 join     lock     mutex    atomic     var
-set      =        +=       -=         *=        /=
+set      +=       -=       *=         /=
 ++       --       if       else
 take_while         find_first
 ```
 
 A FlowArrow source containing any of these tokens (outside of comments
 or string literals) is **ill-formed**.
+
+The `=` token is legal only in a top-level `type_alias_decl`; it is not
+an assignment operator and may not appear in value-flow chains.
 
 The single permitted form of conditional selection is the pure
 `select` combinator (§6).
@@ -485,7 +489,7 @@ port           ::= IDENT ":" type
 
 type           ::= type_alternative ("|" type_alternative)*
 type_alternative ::= type_name type_args?
-type_name      ::= IDENT ("." IDENT)?
+type_name      ::= IDENT ("." IDENT)*
 type_args      ::= "[" type_arg ("," type_arg)* "]"
 type_arg       ::= type | INT | IDENT
 
@@ -518,7 +522,7 @@ repeat_count   ::= INT | variable_ref
 select_comb    ::= "select"
 stencil_comb   ::= "stencil2d" "radius" "<" INT ">" IDENT
 grid_comb      ::= "grid" "<" grid_dim ("," grid_dim)* ">" grid_body
-grid_dim       ::= IDENT | INT
+grid_dim       ::= IDENT | INT | variable_ref
 grid_body      ::= "{" cell_decl "}"
 cell_decl      ::= "cell" "(" IDENT ("," IDENT)* ")" block
 range_comb     ::= "range" | "range_between" | "range_step"

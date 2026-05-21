@@ -581,6 +581,10 @@ import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 import std.math as math
 import "./filters.flow" { blur, sobel as detect_edges }
+import "./format.flow" as format
+
+# type aliases
+type Pixel = (Real,Real)
 
 # pipeline
 $x -> f -> $y
@@ -599,6 +603,9 @@ op.out -> $z
 # map
 $xs -> map f -> $ys
 
+# fault-aware map
+$xs -> fault map parse_real { ok -> $values, fault -> $faults }
+
 # reduce
 $xs -> reduce associative_op(identity: $e) -> $y
 
@@ -613,8 +620,10 @@ $x -> repeat<$n> step -> $y      # repeat count may be a literal or runtime Int
 
 # dynamic-size sequences
 $n -> range -> $idxs
+(0, $n, 2) -> range_step -> $even_idxs
 $xs -> filter pred -> $ys
 $xs -> length -> $n
+[$a, $b, $c] -> concat_bytes -> $out
 ```
 
 ---
@@ -674,29 +683,43 @@ import_decl ::= "import" (module_path | STRING)
                 ( "as" IDENT | "{" import_item ("," import_item)* "}" )
 
 ports       ::= port ("," port)*
-port        ::= IDENT ":" TYPE
+port_or_list::= port | "(" ports ")"
+port        ::= IDENT ":" type
 
 block       ::= "{" edge* "}"
 
 edge        ::= chain
 
-chain       ::= endpoint "->" endpoint ("->" endpoint)*
+chain       ::= endpoint "->" stage ("->" stage)*
 
-endpoint    ::= IDENT
-              | IDENT "." IDENT
+stage       ::= node_ref
+              | variable_ref
+              | combinator
+
+endpoint    ::= variable_ref
               | literal
               | tuple
               | fanout
-              | combinator
+              | sequence
+
+variable_ref::= "$" IDENT
+node_ref    ::= IDENT ("." IDENT)*
 
 tuple       ::= "(" endpoint ("," endpoint)+ ")"
+sequence    ::= "[" "]" | "[" endpoint ("," endpoint)* "]"
 
-fanout      ::= "{" chain ("," chain)* "}"
+fanout      ::= "{" stage ("->" stage)* ("," stage ("->" stage)*)* "}"
 
 combinator  ::= "map" IDENT
-              | "reduce" IDENT "(" "identity:" literal ")"
-              | "scan" IDENT "(" "identity:" literal ")"
-              | "repeat" "<" INT ">" IDENT
+              | "fault" "map" IDENT "{" "ok" "->" variable_ref ","
+                "fault" "->" variable_ref "}"
+              | "reduce" IDENT "(" "identity" ":" endpoint ")"
+              | "scan" IDENT "(" "identity" ":" endpoint ")"
+              | "repeat" "<" (INT | variable_ref) ">" IDENT
+              | "select"
+              | "range" | "range_between" | "range_step"
+              | "filter" IDENT
+              | "length"
 ```
 
 ---
