@@ -50,56 +50,58 @@ import std.bytes { concat_bytes }
 import std.http as http
 
 program main(args: Args) -> exit_code: Faultable[Int] {
-    ()                         -> http.default_config    -> $config0
+    ()                          -> http.default_config    -> $config0
     ($config0, "0.0.0.0", 8080) -> http.with_tcp_listener -> $config1
     ($config1, true)            -> http.with_http2        -> $config2
     ($config2, false)           -> http.with_http3        -> $config
 
-    $config                 -> http.listen          -> $listener
-    $listener               -> http.requests        -> $requests
-    $requests               -> map handle_request   -> $responses
-    ($listener, $responses) -> http.serve           -> $exit_code
+    $config                 -> http.listen        -> $listener
+    $listener               -> http.requests      -> $requests
+    $requests               -> map handle_request -> $responses
+    ($listener, $responses) -> http.serve         -> $exit_code
 }
 
 # Pure request router. `match` keeps every route and handler statically visible
 # while avoiding eager evaluation of unselected handler subgraphs.
 node handle_request(req: http.Request) -> response: http.Response {
-    $req -> match {
-        http.route("GET", "/health")  -> health_response
-        http.route("GET", "/hello")   -> hello_response
+    $req
+    -> match {
+        http.route("GET", "/health") -> health_response
+        http.route("GET", "/hello") -> hello_response
         http.route("GET", "/created") -> created_response
-        http.route("POST", "/echo")   -> echo_response
-        _                             -> http.not_found
-    } -> $response
+        http.route("POST", "/echo") -> echo_response
+        _ -> http.not_found
+    }
+    -> $response
 }
 
 node health_response(req: http.Request) -> response: http.Response {
-    $req                           -> http.response    -> $response0
-    ($response0, 200)              -> http.with_status -> $response1
+    $req                            -> http.response    -> $response0
+    ($response0, 200)               -> http.with_status -> $response1
     ($response1, "{\"ok\":true}\n") -> http.json        -> $response
 }
 
 node hello_response(req: http.Request) -> response: http.Response {
-    $req                                                   -> http.response    -> $response0
-    ($response0, 200)                                      -> http.with_status -> $response1
-    ($response1, "X-FlowArrow-Example", "hello")           -> http.with_header -> $response2
-    ($response2, "hello from FlowArrow\n")                 -> http.text        -> $response
+    $req                                         -> http.response    -> $response0
+    ($response0, 200)                            -> http.with_status -> $response1
+    ($response1, "X-FlowArrow-Example", "hello") -> http.with_header -> $response2
+    ($response2, "hello from FlowArrow\n")       -> http.text        -> $response
 }
 
 node created_response(req: http.Request) -> response: http.Response {
-    $req                                                   -> http.response    -> $response0
-    ($response0, 201)                                      -> http.with_status -> $response1
-    ($response1, "Location", "/created/123")               -> http.with_header -> $response2
-    ($response2, "Cache-Control", "no-store")              -> http.with_header -> $response3
-    ($response3, "X-FlowArrow-Example", "custom-headers")  -> http.with_header -> $response4
-    ($response4, "{\"id\":123,\"created\":true}\n")         -> http.json        -> $response
+    $req                                                  -> http.response    -> $response0
+    ($response0, 201)                                     -> http.with_status -> $response1
+    ($response1, "Location", "/created/123")              -> http.with_header -> $response2
+    ($response2, "Cache-Control", "no-store")             -> http.with_header -> $response3
+    ($response3, "X-FlowArrow-Example", "custom-headers") -> http.with_header -> $response4
+    ($response4, "{\"id\":123,\"created\":true}\n")       -> http.json        -> $response
 }
 
 node echo_response(req: http.Request) -> response: http.Response {
-    $req                                            -> http.body        -> $body
-    ["echo: ", $body, "\n"]                         -> concat_bytes     -> $message
-    $req                                            -> http.response    -> $response0
-    ($response0, 200)                               -> http.with_status -> $response1
-    ($response1, "X-FlowArrow-Example", "echo")     -> http.with_header -> $response2
-    ($response2, $message)                          -> http.text        -> $response
+    $req                                        -> http.body        -> $body
+    ["echo: ", $body, "\n"]                     -> concat_bytes     -> $message
+    $req                                        -> http.response    -> $response0
+    ($response0, 200)                           -> http.with_status -> $response1
+    ($response1, "X-FlowArrow-Example", "echo") -> http.with_header -> $response2
+    ($response2, $message)                      -> http.text        -> $response
 }

@@ -16,21 +16,21 @@ import std.stream as stream
 import std.tuple { first, second }
 
 program main(args: Args) -> exit_code: Faultable[Int] {
-    () -> sqlite.open_memory -> $conn0
-    () -> sqlite.null        -> $null_value
-    [$null_value]            -> $one_param
-    ($one_param, 0, 0)       -> slice        -> $no_params
+    ()                 -> sqlite.open_memory -> $conn0
+    ()                 -> sqlite.null        -> $null_value
+    [$null_value]      -> $one_param
+    ($one_param, 0, 0) -> slice              -> $no_params
 
     ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", $no_params) -> sqlite.exec -> first -> $conn1
 
-    "write sqlite docs"       -> sqlite.text -> $title1
-    "implement sqlite runtime" -> sqlite.text -> $title2
+    "write sqlite docs"                                         -> sqlite.text -> $title1
+    "implement sqlite runtime"                                  -> sqlite.text -> $title2
     ($conn1, "INSERT INTO todos (title) VALUES (?)", [$title1]) -> sqlite.exec -> first -> $conn2
     ($conn2, "INSERT INTO todos (title) VALUES (?)", [$title2]) -> sqlite.exec -> first -> $conn3
 
     ($conn3, "SELECT id, title FROM todos ORDER BY id", $no_params) -> sqlite.query -> $query
-    $query -> first  -> $conn4
-    $query -> second -> map todo_line -> stream.to_seq -> concat_bytes -> $output
+    $query                                                          -> first        -> $conn4
+    $query                                                          -> second       -> map todo_line -> stream.to_seq -> concat_bytes -> $output
 
     $output -> write_stdout -> $written
     $conn4  -> sqlite.close -> $closed
@@ -38,7 +38,7 @@ program main(args: Args) -> exit_code: Faultable[Int] {
 }
 
 node todo_line(row: sqlite.Row) -> line: Bytes {
-    ($row, "id")    -> sqlite.value_named -> sqlite.as_int  -> expect -> format_int -> $id
-    ($row, "title") -> sqlite.value_named -> sqlite.as_text -> expect              -> $title
-    ["todo ", $id, ": ", $title, "\n"] -> concat_bytes -> $line
+    ($row, "id")                       -> sqlite.value_named -> sqlite.as_int  -> expect -> format_int -> $id
+    ($row, "title")                    -> sqlite.value_named -> sqlite.as_text -> expect -> $title
+    ["todo ", $id, ": ", $title, "\n"] -> concat_bytes       -> $line
 }
