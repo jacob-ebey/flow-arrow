@@ -302,7 +302,11 @@ impl Parser {
             Some(_) => Ok(Stage::Endpoint(Endpoint::Name(
                 self.parse_qualified_ident()?,
             ))),
-            _ if matches!(self.peek(), Token::Variable(_) | Token::LParen) => {
+            _ if matches!(
+                self.peek(),
+                Token::Variable(_) | Token::Discard | Token::LParen
+            ) =>
+            {
                 Ok(Stage::Bind(self.parse_binding_target()?))
             }
             _ => Ok(Stage::Endpoint(self.parse_endpoint()?)),
@@ -311,6 +315,10 @@ impl Parser {
 
     fn parse_binding_target(&mut self) -> Result<BindingTarget, SourceDiagnostic> {
         match self.peek().clone() {
+            Token::Discard => {
+                self.bump();
+                Ok(BindingTarget::Discard)
+            }
             Token::Variable(name) => {
                 self.bump();
                 Ok(BindingTarget::Variable(name))
@@ -413,6 +421,7 @@ impl Parser {
                 self.bump();
                 Ok(Endpoint::Variable(name))
             }
+            Token::Discard => Err(self.error_here("discard `$` is only valid as a binding target")),
             Token::Int(value) => {
                 self.bump();
                 Ok(Endpoint::Int(value))

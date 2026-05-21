@@ -243,6 +243,7 @@ impl MermaidEmitter {
         edge_label: Option<&str>,
     ) -> Result<(), String> {
         match target {
+            BindingTarget::Discard => Ok(()),
             BindingTarget::Variable(name) => {
                 if let Some(edge_label) = edge_label {
                     let value_label = format!("${name}");
@@ -631,6 +632,7 @@ fn stage_label(stage: &Stage) -> String {
 
 fn binding_target_label(target: &BindingTarget) -> String {
     match target {
+        BindingTarget::Discard => "$".to_string(),
         BindingTarget::Variable(name) => format!("${name}"),
         BindingTarget::Tuple(items) => format!(
             "({})",

@@ -50,7 +50,7 @@ program main(args: Args) -> exit_code: Faultable[Int] {
 
     $targets                   -> head        -> $root_target
     $root_target               -> grep_config -> $root_config
-    $root_config               -> ($_, $ignore_filters)
+    $root_config               -> ($, $ignore_filters)
     ($needle, $ignore_filters) -> $search_config
 
     $targets                         -> map walk_files  -> collect                -> flatten                   -> $walked_paths

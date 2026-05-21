@@ -471,6 +471,7 @@ fn format_stage(stage: &Stage) -> String {
 
 fn format_binding_target(target: &BindingTarget) -> String {
     match target {
+        BindingTarget::Discard => "$".to_string(),
         BindingTarget::Variable(name) => format!("${name}"),
         BindingTarget::Tuple(items) => format!(
             "({})",

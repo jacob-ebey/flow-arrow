@@ -108,6 +108,7 @@ pub enum Stage {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BindingTarget {
+    Discard,
     Variable(String),
     Tuple(Vec<BindingTarget>),
 }

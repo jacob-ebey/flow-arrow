@@ -1130,6 +1130,7 @@ impl<'a> TypedCodegen<'a> {
         env: &mut HashMap<String, Value>,
     ) -> Result<(), String> {
         match target {
+            BindingTarget::Discard => {}
             BindingTarget::Variable(name) => {
                 if env.insert(name.clone(), value).is_some() {
                     return Err(format!("value `{name}` is bound more than once"));
@@ -1138,6 +1139,9 @@ impl<'a> TypedCodegen<'a> {
             BindingTarget::Tuple(targets) => match value.ty.clone() {
                 Ty::Tuple(items) if items.len() == targets.len() => {
                     for (index, (target, item_ty)) in targets.iter().zip(items.iter()).enumerate() {
+                        if binding_target_is_discard(target) {
+                            continue;
+                        }
                         self.emit_bind_target(
                             out,
                             target,
@@ -1166,6 +1170,9 @@ impl<'a> TypedCodegen<'a> {
                         ));
                     }
                     for (index, (target, item_ty)) in targets.iter().zip(items.iter()).enumerate() {
+                        if binding_target_is_discard(target) {
+                            continue;
+                        }
                         let projected_ty = faultable_projection_ty(item_ty);
                         let projected_c_ty = self.types.c_type(&projected_ty);
                         let tmp = self.next_temp();
@@ -5495,6 +5502,7 @@ fn compare_expr(name: &str, input: &str) -> String {
 fn stages_binding_output<'a>(chain: &'a Chain, output: &str) -> Option<&'a [Stage]> {
     let (last, stages) = chain.stages.split_last()?;
     match last {
+        Stage::Bind(BindingTarget::Discard) => None,
         Stage::Bind(BindingTarget::Variable(name)) if name == output => Some(stages),
         _ => None,
     }
@@ -5502,6 +5510,7 @@ fn stages_binding_output<'a>(chain: &'a Chain, output: &str) -> Option<&'a [Stag
 
 fn final_variable(chain: &Chain) -> Option<&str> {
     match chain.stages.last()? {
+        Stage::Bind(BindingTarget::Discard) => None,
         Stage::Bind(BindingTarget::Variable(name)) => Some(name),
         _ => None,
     }
@@ -5835,6 +5844,7 @@ fn type_name(ty: &Ty) -> String {
 
 fn format_binding_target_for_error(target: &BindingTarget) -> String {
     match target {
+        BindingTarget::Discard => "$".to_string(),
         BindingTarget::Variable(name) => format!("${name}"),
         BindingTarget::Tuple(items) => format!(
             "({})",
@@ -5845,6 +5855,10 @@ fn format_binding_target_for_error(target: &BindingTarget) -> String {
                 .join(", ")
         ),
     }
+}
+
+fn binding_target_is_discard(target: &BindingTarget) -> bool {
+    matches!(target, BindingTarget::Discard)
 }
 
 fn type_suffix(ty: &Ty) -> String {

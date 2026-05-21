@@ -103,3 +103,32 @@ fn plain_values_flow_into_faultable_outputs() {
     );
     assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "ok");
 }
+
+#[test]
+fn empty_sequence_select_and_discard_destructure_typecheck_and_run() {
+    let source = r#"
+        import std.bytes { concat_bytes }
+        import std.cli { Args }
+        import std.int { format_int }
+        import std.io { write_stdout }
+        import std.seq { length }
+
+        node config(include_path: Bool) -> out: Faultable[(Bytes, Seq[Bytes])] {
+            ($include_path, ["root/.gitignore"], []) -> select -> $paths
+            ("root", $paths) -> $out
+        }
+
+        program main(args: Args) -> exit_code: Faultable[Int] {
+            false -> config -> ($, $paths)
+            $paths -> length -> format_int -> write_stdout -> $exit_code
+        }
+    "#;
+
+    let output = support::run_source("fault-empty-select-discard", source, b"");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "0");
+}

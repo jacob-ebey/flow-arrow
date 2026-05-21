@@ -275,6 +275,9 @@ importing tuple selector nodes. If the upstream value is `Faultable[(A,
 B)]`, the destructured bindings have types `Faultable[A]` and
 `Faultable[B]`.
 
+`$` in a binding target discards that value instead of creating a binding. It
+can be reused and does not count against single-assignment rules.
+
 ### 5.2 Fanouts
 
 ```ebnf

@@ -4,6 +4,7 @@ use crate::diagnostic::{SourceDiagnostic, SourcePosition, SourceSpan};
 pub enum Token {
     Ident(String),
     Variable(String),
+    Discard,
     Int(i64),
     Real(f64),
     Bool(bool),
@@ -240,6 +241,15 @@ impl Lexer {
         let start = self.pos;
         match self.peek() {
             Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {}
+            Some(_)
+                if matches!(
+                    self.peek(),
+                    Some(' ' | '\t' | '\r' | '\n' | ',' | ')' | '}' | ']')
+                ) || (self.peek() == Some('-') && self.peek_next() == Some('>')) =>
+            {
+                self.push(Token::Discard, start_position);
+                return Ok(());
+            }
             Some(other) => {
                 return Err(
                     self.error_here(format!("expected variable name after `$`, found `{other}`"))

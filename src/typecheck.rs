@@ -1381,6 +1381,7 @@ fn binding_target_types(
     value_type: &Type,
 ) -> Result<Vec<(String, Type)>, String> {
     match target {
+        BindingTarget::Discard => Ok(Vec::new()),
         BindingTarget::Variable(name) => Ok(vec![(name.clone(), value_type.clone())]),
         BindingTarget::Tuple(items) => {
             let field_types = match value_type {
@@ -1446,6 +1447,7 @@ fn format_match_target(target: &MatchTarget) -> String {
 
 fn format_binding_target_for_error(target: &BindingTarget) -> String {
     match target {
+        BindingTarget::Discard => "$".to_string(),
         BindingTarget::Variable(name) => format!("${name}"),
         BindingTarget::Tuple(items) => format!(
             "({})",
