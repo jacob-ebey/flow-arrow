@@ -3,9 +3,16 @@ use crate::module_resolver;
 use crate::stdlib::{self, Effect, RuntimeSupport, SymbolKind};
 use std::collections::HashMap;
 use std::fmt;
+use std::path::Path;
 
+#[allow(dead_code)]
 pub fn check_module(module: &Module) -> Result<(), String> {
     let expanded = module_resolver::expand_stdlib_sources(module)?;
+    Checker::new(&expanded)?.check()
+}
+
+pub fn check_module_with_base(module: &Module, base_dir: &Path) -> Result<(), String> {
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     Checker::new(&expanded)?.check()
 }
 
@@ -17,6 +24,7 @@ enum Type {
     Bool,
     Bytes,
     Args,
+    Stream,
     Fault,
     Faultable(Box<Type>),
     Seq(Box<Type>),
@@ -144,7 +152,7 @@ impl<'a> Checker<'a> {
                 continue;
             };
             let ImportSource::Module(module) = &import.source else {
-                return Err("local imports are not supported by this compiler yet".to_string());
+                continue;
             };
             if module == stdlib::INTRINSIC_MODULE {
                 return Err("intrinsic module imports are compiler-internal".to_string());
@@ -619,13 +627,15 @@ impl<'a> Checker<'a> {
         if !as_function && node.runtime == RuntimeSupport::ReduceOnly {
             return Err(format!("`{name}` can only be used as a reduce operation"));
         }
-        let input_faultable = input.contains_faultable();
-        let actual_input = input.strip_faultable();
+        let preserves_faultable_input = node.runtime_name == "collect";
         let mut last_error = None;
         let mut output = None;
         for signature in &node.signatures {
+            if !signature.input.contains_faultable() {
+                continue;
+            }
             let mut vars = HashMap::new();
-            match match_types(&signature.input, &actual_input, &mut vars) {
+            match match_types(&signature.input, input, &mut vars) {
                 Ok(()) => {
                     output = Some(substitute(&signature.output, &vars).ok_or_else(|| {
                         format!("`{name}` output type contains unresolved type variables")
@@ -635,20 +645,37 @@ impl<'a> Checker<'a> {
                 Err(error) => last_error = Some(error),
             }
         }
+        if output.is_none() && !preserves_faultable_input {
+            let input_faultable = input.contains_faultable();
+            let actual_input = input.strip_faultable();
+            for signature in &node.signatures {
+                let mut vars = HashMap::new();
+                match match_types(&signature.input, &actual_input, &mut vars) {
+                    Ok(()) => {
+                        let plain_output = substitute(&signature.output, &vars).ok_or_else(|| {
+                            format!("`{name}` output type contains unresolved type variables")
+                        })?;
+                        output = Some(
+                            if input_faultable && !matches!(plain_output, Type::Faultable(_)) {
+                                Type::Faultable(Box::new(plain_output))
+                            } else {
+                                plain_output
+                            },
+                        );
+                        break;
+                    }
+                    Err(error) => last_error = Some(error),
+                }
+            }
+        }
         let output = output.ok_or_else(|| {
             format!(
                 "`{name}` input type mismatch: {}",
                 last_error
-                    .unwrap_or_else(|| format!("expected callable input, found `{actual_input}`"))
+                    .unwrap_or_else(|| format!("expected callable input, found `{input}`"))
             )
         })?;
-        Ok(
-            if input_faultable && !matches!(output, Type::Faultable(_)) {
-                Type::Faultable(Box::new(output))
-            } else {
-                output
-            },
-        )
+        Ok(output)
     }
 
     fn apply_map(&self, callable: &Callable, name: &str, input: &Type) -> Result<Type, String> {
@@ -717,7 +744,9 @@ impl<'a> Checker<'a> {
         input: &Type,
         identity: &Type,
     ) -> Result<Type, String> {
-        let Type::Seq(item_type) = input else {
+        let input_faultable = matches!(input, Type::Faultable(_));
+        let unwrapped = input.inner_faultable();
+        let Type::Seq(item_type) = &unwrapped else {
             return Err(format!(
                 "`reduce {name}` expected Seq input, found `{input}`"
             ));
@@ -770,7 +799,7 @@ impl<'a> Checker<'a> {
         if callable.name.is_empty() {
             return Err("internal error: empty callable name".to_string());
         }
-        Ok(if item_faultable {
+        Ok(if input_faultable || item_faultable {
             Type::Faultable(Box::new(plain_item_type))
         } else {
             plain_item_type
@@ -1121,6 +1150,7 @@ impl TypeParser {
             "Bool" => Type::Bool,
             "Bytes" => Type::Bytes,
             "Args" => Type::Args,
+            "Stream" => Type::Stream,
             "Fault" => Type::Fault,
             "i1" => Type::Bool,
             "i8" | "i16" | "i32" | "i64" => Type::Int,
@@ -1175,6 +1205,7 @@ impl fmt::Display for Type {
             Type::Bool => write!(f, "Bool"),
             Type::Bytes => write!(f, "Bytes"),
             Type::Args => write!(f, "Args"),
+            Type::Stream => write!(f, "Stream"),
             Type::Fault => write!(f, "Fault"),
             Type::Faultable(item) => write!(f, "Faultable[{item}]"),
             Type::Seq(item) => write!(f, "Seq[{item}]"),

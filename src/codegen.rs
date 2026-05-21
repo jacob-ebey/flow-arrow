@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::module_resolver;
 use crate::stdlib::{self, RuntimeSupport};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 
 pub fn emit_module(module: &Module) -> Result<String, String> {
     let _ = module;
@@ -13,8 +14,14 @@ define i32 @main(i32 %argc, ptr %argv) {\n\
     .to_string())
 }
 
+#[allow(dead_code)]
 pub fn emit_runtime_c(module: &Module) -> Result<String, String> {
     let expanded = module_resolver::expand_stdlib_sources(module)?;
+    TypedCodegen::new(&expanded)?.emit()
+}
+
+pub fn emit_runtime_c_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     TypedCodegen::new(&expanded)?.emit()
 }
 
@@ -26,6 +33,7 @@ enum Ty {
     Bool,
     Bytes,
     Args,
+    Stream,
     Fault,
     Faultable(Box<Ty>),
     Seq(Box<Ty>),
@@ -919,23 +927,11 @@ impl<'a> TypedCodegen<'a> {
             let unwrapped_c_ty = self.types.c_type(&unwrapped_input);
             let unwrapped = self.next_temp();
             out.push_str(&format!("  {target}.is_fault = false;\n"));
-            if let Ty::Tuple(items) = input_ty {
-                for (index, item) in items.iter().enumerate() {
-                    if matches!(item, Ty::Faultable(_)) {
-                        out.push_str(&format!("  if (!{target}.is_fault && {input}.f{index}.is_fault) {{ {target}.is_fault = true; {target}.fault = {input}.f{index}.fault; }}\n"));
-                    }
-                }
+            if matches!(input_ty, Ty::Tuple(_)) {
+                emit_fault_checks_for_value(out, target, input, input_ty);
                 out.push_str(&format!("  if (!{target}.is_fault) {{\n"));
                 out.push_str(&format!("    {unwrapped_c_ty} {unwrapped};\n"));
-                for (index, item) in items.iter().enumerate() {
-                    if matches!(item, Ty::Faultable(_)) {
-                        out.push_str(&format!(
-                            "    {unwrapped}.f{index} = {input}.f{index}.value;\n"
-                        ));
-                    } else {
-                        out.push_str(&format!("    {unwrapped}.f{index} = {input}.f{index};\n"));
-                    }
-                }
+                emit_unwrap_faultable_value(out, &unwrapped, input, input_ty, "    ");
                 let plain_output = if let Some(signature) = self.signatures.get(name) {
                     signature.output.clone()
                 } else {
@@ -1407,12 +1403,52 @@ impl<'a> TypedCodegen<'a> {
         input: Value,
         identity: Value,
     ) -> Result<Value, String> {
+        if let Ty::Faultable(inner) = input.ty.clone() {
+            let Ty::Seq(_) = inner.as_ref() else {
+                return Err(format!("`reduce {op}` expected Seq input"));
+            };
+            let reduced = self.emit_reduce(
+                out,
+                op,
+                Value {
+                    code: format!("{}.value", input.code),
+                    ty: inner.as_ref().clone(),
+                },
+                identity,
+            )?;
+            let output_ty = match reduced.ty {
+                Ty::Faultable(_) => reduced.ty.clone(),
+                ref other => Ty::Faultable(Box::new(other.clone())),
+            };
+            let c_ty = self.types.c_type(&output_ty);
+            let tmp = self.next_temp();
+            out.push_str(&format!("  {c_ty} {tmp};\n"));
+            out.push_str(&format!("  if ({}.is_fault) {{\n", input.code));
+            out.push_str(&format!("    {tmp}.is_fault = true;\n"));
+            out.push_str(&format!("    {tmp}.fault = {}.fault;\n", input.code));
+            out.push_str("  } else {\n");
+            match &reduced.ty {
+                Ty::Faultable(_) => out.push_str(&format!("    {tmp} = {};\n", reduced.code)),
+                _ => {
+                    out.push_str(&format!("    {tmp}.is_fault = false;\n"));
+                    out.push_str(&format!("    {tmp}.value = {};\n", reduced.code));
+                }
+            }
+            out.push_str("  }\n");
+            return Ok(Value {
+                code: tmp,
+                ty: output_ty,
+            });
+        }
         let Ty::Seq(item_ty) = input.ty.clone() else {
             return Err(format!("`reduce {op}` expected Seq input"));
         };
         let canonical = self.canonical_name(op);
         if canonical == "add" {
             return self.emit_reduce_add(out, input, *item_ty, identity);
+        }
+        if canonical == "min" || canonical == "max" {
+            return self.emit_reduce_min_max(out, &canonical, input, *item_ty, identity);
         }
         if canonical == "concat_bytes" {
             let tmp = self.next_temp();
@@ -1426,6 +1462,63 @@ impl<'a> TypedCodegen<'a> {
             });
         }
         Err(format!("unsupported reduce op `{op}`"))
+    }
+
+    fn emit_reduce_min_max(
+        &mut self,
+        out: &mut String,
+        op: &str,
+        input: Value,
+        item_ty: Ty,
+        identity: Value,
+    ) -> Result<Value, String> {
+        let (plain_ty, faultable) = match item_ty {
+            Ty::Faultable(inner) => (*inner, true),
+            other => (other, false),
+        };
+        let output_ty = if faultable {
+            Ty::Faultable(Box::new(plain_ty.clone()))
+        } else {
+            plain_ty.clone()
+        };
+        let c_ty = self.types.c_type(&output_ty);
+        let tmp = self.next_temp();
+        let i = self.next_temp();
+        out.push_str(&format!("  {c_ty} {tmp};\n"));
+        if faultable {
+            out.push_str(&format!("  {tmp}.is_fault = false;\n"));
+            out.push_str(&format!("  {tmp}.value = {};\n", identity.code));
+            out.push_str(&format!(
+                "  for (size_t {i} = 0; {i} < {}.count; {i}++) {{\n",
+                input.code
+            ));
+            out.push_str(&format!("    if ({}.items[{i}].is_fault) {{ {tmp}.is_fault = true; {tmp}.fault = {}.items[{i}].fault; break; }}\n", input.code, input.code));
+            out.push_str(&format!(
+                "    {tmp}.value = {};\n",
+                min_max_expr(
+                    op,
+                    &format!("{tmp}.value"),
+                    &format!("{}.items[{i}].value", input.code),
+                    &plain_ty
+                )
+            ));
+            out.push_str("  }\n");
+        } else {
+            out.push_str(&format!("  {tmp} = {};\n", identity.code));
+            out.push_str(&format!(
+                "  for (size_t {i} = 0; {i} < {}.count; {i}++) {{\n",
+                input.code
+            ));
+            out.push_str(&format!(
+                "    {tmp} = {};\n",
+                min_max_expr(op, &tmp, &format!("{}.items[{i}]", input.code), &plain_ty)
+            ));
+            out.push_str("  }\n");
+        }
+        Ok(Value {
+            code: tmp,
+            ty: output_ty,
+        })
     }
 
     fn emit_reduce_add(
@@ -1575,6 +1668,15 @@ impl<'a> TypedCodegen<'a> {
             "write_file" => out.push_str(&format!(
                 "  {target} = fa_write_file({input}.f0, {input}.f1);\n"
             )),
+            "open_file" => out.push_str(&format!("  {target} = fa_open_file({input});\n")),
+            "size" => out.push_str(&format!("  {target} = fa_stream_size({input});\n")),
+            "read_at" => out.push_str(&format!(
+                "  {target} = fa_stream_read_at({input}.f0, {input}.f1, {input}.f2);\n"
+            )),
+            "copy_to_file" => out.push_str(&format!(
+                "  {target} = fa_copy_stream_to_file({input}.f0, {input}.f1);\n"
+            )),
+            "close" => out.push_str(&format!("  {target} = fa_close_stream({input});\n")),
             "split_lines" => out.push_str(&format!("  {target} = fa_split_lines({input});\n")),
             "trim" => out.push_str(&format!("  {target} = fa_trim({input});\n")),
             "split_on" => out.push_str(&format!(
@@ -1616,7 +1718,7 @@ impl<'a> TypedCodegen<'a> {
                     numeric_binary_expr(name, input, output_ty)
                 ));
             }
-            "neg" | "abs" | "sqrt" => {
+            "neg" | "abs" | "sqrt" | "exp" | "sin" | "cos" => {
                 out.push_str(&format!(
                     "  {target} = {};\n",
                     numeric_unary_expr(name, input, output_ty)
@@ -1635,6 +1737,31 @@ impl<'a> TypedCodegen<'a> {
             "any" => self.emit_all_any(out, target, input, false),
             "has_faults" => out.push_str(&format!("  {target} = {input}.count > 0;\n")),
             "format_faults" => out.push_str(&format!("  {target} = fa_format_faults({input});\n")),
+            "ok" => {
+                let inner_ty = match output_ty {
+                    Ty::Faultable(inner) => inner.as_ref().clone(),
+                    other => other.clone(),
+                };
+                self.emit_assign_value(
+                    out,
+                    target,
+                    output_ty,
+                    &Value {
+                        code: input.to_string(),
+                        ty: inner_ty,
+                    },
+                )?;
+            }
+            "expect" => {
+                if matches!(input_ty, Ty::Faultable(_)) {
+                    out.push_str(&format!(
+                        "  if ({input}.is_fault) fa_die_usage({input}.fault.message.bytes); else {target} = {input}.value;\n"
+                    ));
+                } else {
+                    out.push_str(&format!("  {target} = {input};\n"));
+                }
+            }
+            "collect" => self.emit_collect(out, target, output_ty, input, input_ty)?,
             "select" => out.push_str(&format!(
                 "  {target} = {input}.f0 ? {input}.f1 : {input}.f2;\n"
             )),
@@ -1660,6 +1787,14 @@ impl<'a> TypedCodegen<'a> {
             "shift_left" => self.emit_shift_left(out, target, output_ty, input, input_ty)?,
             "head" => self.emit_head(out, target, output_ty, input, input_ty)?,
             "tail" => self.emit_tail(out, target, output_ty, input, input_ty)?,
+            "slice" => self.emit_slice(out, target, output_ty, input, input_ty)?,
+            "last" => self.emit_last(out, target, output_ty, input, input_ty)?,
+            "get" => self.emit_get(out, target, output_ty, input, input_ty)?,
+            "get_or" => self.emit_get_or(out, target, output_ty, input, input_ty)?,
+            "at" => self.emit_at(out, target, output_ty, input, input_ty)?,
+            "append" => self.emit_append(out, target, output_ty, input, input_ty)?,
+            "set" => self.emit_set(out, target, output_ty, input, input_ty)?,
+            "concat" => self.emit_seq_concat(out, target, output_ty, input, input_ty)?,
             "range_step" => out.push_str(&format!(
                 "  {target} = fa_range_step({input}.f0, {input}.f1, {input}.f2);\n"
             )),
@@ -1747,6 +1882,44 @@ impl<'a> TypedCodegen<'a> {
         out.push_str(&format!(
             "  if (!{target}.is_fault) {target}.value = fa_concat_bytes({ok_values});\n"
         ));
+    }
+
+    fn emit_collect(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Seq(item_ty) = input_ty else {
+            return Err("collect expected sequence input".to_string());
+        };
+        let Ty::Faultable(ok_ty) = item_ty.as_ref() else {
+            return Err("collect expected Seq[Faultable[V]] input".to_string());
+        };
+        let Ty::Faultable(seq_ty) = output_ty else {
+            return Err("collect expected faultable sequence output".to_string());
+        };
+        let new_fn = self.types.seq_new_name(seq_ty)?;
+        let i = self.next_temp();
+        out.push_str(&format!("  {target}.is_fault = false;\n"));
+        out.push_str(&format!("  {target}.value = {new_fn}({input}.count);\n"));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {input}.count; {i}++) {{\n"
+        ));
+        out.push_str(&format!("    if ({input}.items[{i}].is_fault) {{ {target}.is_fault = true; {target}.fault = {input}.items[{i}].fault; break; }}\n"));
+        self.emit_assign_value(
+            out,
+            &format!("{target}.value.items[{i}]"),
+            ok_ty,
+            &Value {
+                code: format!("{input}.items[{i}].value"),
+                ty: ok_ty.as_ref().clone(),
+            },
+        )?;
+        out.push_str("  }\n");
+        Ok(())
     }
 
     fn emit_zip(
@@ -2047,6 +2220,143 @@ impl<'a> TypedCodegen<'a> {
         ));
         out.push_str(&format!(
             "  for (size_t {i} = 1; {i} < {input}.count; {i}++) {target}.items[{i} - 1] = {input}.items[{i}];\n"
+        ));
+        Ok(())
+    }
+
+    fn emit_slice(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        _input_ty: &Ty,
+    ) -> Result<(), String> {
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let i = self.next_temp();
+        out.push_str(&format!(
+            "  if ({input}.f1 < 0 || {input}.f2 < {input}.f1 || (size_t){input}.f2 > {input}.f0.count) fa_die_usage(\"slice: index out of range\");\n"
+        ));
+        out.push_str(&format!("  {target} = {new_fn}((size_t)({input}.f2 - {input}.f1));\n"));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {target}.count; {i}++) {target}.items[{i}] = {input}.f0.items[(size_t){input}.f1 + {i}];\n"
+        ));
+        Ok(())
+    }
+
+    fn emit_last(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        _output_ty: &Ty,
+        input: &str,
+        _input_ty: &Ty,
+    ) -> Result<(), String> {
+        out.push_str(&format!("  if ({input}.count == 0) {{ {target}.is_fault = true; {target}.fault = fa_fault_cstr(\"last: empty sequence\"); }} else {{ {target}.is_fault = false; {target}.value = {input}.items[{input}.count - 1]; }}\n"));
+        Ok(())
+    }
+
+    fn emit_at(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        _output_ty: &Ty,
+        input: &str,
+        _input_ty: &Ty,
+    ) -> Result<(), String> {
+        out.push_str(&format!("  if ({input}.f1 < 0 || (size_t){input}.f1 >= {input}.f0.count) {{ {target}.is_fault = true; {target}.fault = fa_fault_cstr(\"at: index out of range\"); }} else {{ {target}.is_fault = false; {target}.value = {input}.f0.items[{input}.f1]; }}\n"));
+        Ok(())
+    }
+
+    fn emit_get(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        _output_ty: &Ty,
+        input: &str,
+        _input_ty: &Ty,
+    ) -> Result<(), String> {
+        out.push_str(&format!(
+            "  if ({input}.f1 < 0 || (size_t){input}.f1 >= {input}.f0.count) fa_die_usage(\"get: index out of range\");\n"
+        ));
+        out.push_str(&format!("  {target} = {input}.f0.items[{input}.f1];\n"));
+        Ok(())
+    }
+
+    fn emit_get_or(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        _output_ty: &Ty,
+        input: &str,
+        _input_ty: &Ty,
+    ) -> Result<(), String> {
+        out.push_str(&format!(
+            "  {target} = ({input}.f1 < 0 || (size_t){input}.f1 >= {input}.f0.count) ? {input}.f2 : {input}.f0.items[{input}.f1];\n"
+        ));
+        Ok(())
+    }
+
+    fn emit_append(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        _input_ty: &Ty,
+    ) -> Result<(), String> {
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let i = self.next_temp();
+        out.push_str(&format!("  {target} = {new_fn}({input}.f0.count + 1);\n"));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {input}.f0.count; {i}++) {target}.items[{i}] = {input}.f0.items[{i}];\n"
+        ));
+        out.push_str(&format!(
+            "  {target}.items[{input}.f0.count] = {input}.f1;\n"
+        ));
+        Ok(())
+    }
+
+    fn emit_set(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        _input_ty: &Ty,
+    ) -> Result<(), String> {
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let i = self.next_temp();
+        out.push_str(&format!(
+            "  if ({input}.f1 < 0 || (size_t){input}.f1 >= {input}.f0.count) fa_die_usage(\"set: index out of range\");\n"
+        ));
+        out.push_str(&format!("  {target} = {new_fn}({input}.f0.count);\n"));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {input}.f0.count; {i}++) {target}.items[{i}] = {input}.f0.items[{i}];\n"
+        ));
+        out.push_str(&format!("  {target}.items[{input}.f1] = {input}.f2;\n"));
+        Ok(())
+    }
+
+    fn emit_seq_concat(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        _input_ty: &Ty,
+    ) -> Result<(), String> {
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let i = self.next_temp();
+        let j = self.next_temp();
+        out.push_str(&format!(
+            "  {target} = {new_fn}({input}.f0.count + {input}.f1.count);\n"
+        ));
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {input}.f0.count; {i}++) {target}.items[{i}] = {input}.f0.items[{i}];\n"
+        ));
+        out.push_str(&format!(
+            "  for (size_t {j} = 0; {j} < {input}.f1.count; {j}++) {target}.items[{input}.f0.count + {j}] = {input}.f1.items[{j}];\n"
         ));
         Ok(())
     }
@@ -2751,13 +3061,26 @@ impl<'a> TypedCodegen<'a> {
     fn is_parallel_safe_builtin(&self, name: &str) -> bool {
         !matches!(
             name,
-            "read_file" | "write_file" | "read_stdin" | "write_stdout" | "write_stderr"
+            "read_file"
+                | "write_file"
+                | "open_file"
+                | "size"
+                | "copy_to_file"
+                | "close"
+                | "read_stdin"
+                | "write_stdout"
+                | "write_stderr"
         )
     }
 
     fn call_output_type(&self, name: &str, input: &Ty) -> Result<Ty, String> {
         if let Some(signature) = self.signatures.get(name) {
-            if matches!(input, Ty::Faultable(_)) && !matches!(signature.output, Ty::Faultable(_)) {
+            if &signature.input == input && contains_faultable_ty(&signature.input) {
+                return Ok(signature.output.clone());
+            }
+            if (matches!(input, Ty::Faultable(_)) || unwrap_faultable_tuple(input).is_some())
+                && !matches!(signature.output, Ty::Faultable(_))
+            {
                 return Ok(Ty::Faultable(Box::new(signature.output.clone())));
             }
             return Ok(signature.output.clone());
@@ -2794,6 +3117,7 @@ impl TypeRegistry {
             Ty::Bool => "bool".to_string(),
             Ty::Bytes => "FaBytes".to_string(),
             Ty::Args => "FaArgs".to_string(),
+            Ty::Stream => "FaStream".to_string(),
             Ty::Fault => "FaFault".to_string(),
             Ty::Var(_) => "FaUnit".to_string(),
             Ty::Seq(item) => {
@@ -2903,6 +3227,9 @@ fn emit_preamble(out: &mut String) {
 }
 
 fn builtin_output_type(name: &str, input: &Ty) -> Result<Ty, String> {
+    if name == "expect" {
+        return builtin_output_type_plain(name, input);
+    }
     if let Ty::Faultable(inner) = input {
         let output = builtin_output_type_plain(name, inner)?;
         return Ok(match output {
@@ -2927,6 +3254,9 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "write_stdout" | "write_stderr" => Ok(Ty::Int),
         "read_file" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "write_file" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "open_file" => Ok(Ty::Faultable(Box::new(Ty::Stream))),
+        "read_at" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
+        "size" | "copy_to_file" | "close" => Ok(Ty::Faultable(Box::new(Ty::Int))),
         "split_lines" | "split_on" => Ok(Ty::Seq(Box::new(Ty::Bytes))),
         "trim" | "join_bytes" | "codes_to_bytes" | "format_faults" => Ok(Ty::Bytes),
         "concat_bytes" => match input {
@@ -2954,9 +3284,26 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         },
         "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => numeric_binary_output(input),
         "neg" | "abs" => Ok(input.clone()),
-        "sqrt" => Ok(Ty::Real),
+        "sqrt" | "exp" | "sin" | "cos" => Ok(Ty::Real),
         "eq" | "lt" | "gt" | "le" | "ge" | "not_empty" | "is_empty" | "and" | "or" | "xor"
         | "not" | "all" | "any" | "has_faults" => Ok(Ty::Bool),
+        "collect" => {
+            let Ty::Seq(item) = input else {
+                return Err("collect expected sequence input".to_string());
+            };
+            let Ty::Faultable(ok) = item.as_ref() else {
+                return Err("collect expected Seq[Faultable[V]] input".to_string());
+            };
+            Ok(Ty::Faultable(Box::new(Ty::Seq(ok.clone()))))
+        }
+        "ok" => Ok(Ty::Faultable(Box::new(input.clone()))),
+        "expect" => {
+            if let Ty::Faultable(inner) = input {
+                Ok(inner.as_ref().clone())
+            } else {
+                Ok(input.clone())
+            }
+        }
         "select" => {
             let Ty::Tuple(items) = input else {
                 return Err("select expected tuple input".to_string());
@@ -3056,7 +3403,7 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             };
             Ok(Ty::Seq(Box::new(Ty::Seq(value.clone()))))
         }
-        "shift_right" | "shift_left" => {
+        "shift_right" | "shift_left" | "append" | "set" | "concat" => {
             let Ty::Tuple(items) = input else {
                 return Err(format!("{name} expected tuple input"));
             };
@@ -3066,9 +3413,45 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
                 .ok_or_else(|| format!("{name} expected sequence input"))
         }
         "tail" => Ok(input.clone()),
-        "head" => {
+        "slice" => {
+            let Ty::Tuple(items) = input else {
+                return Err("slice expected tuple input".to_string());
+            };
+            let [seq @ Ty::Seq(_), Ty::Int, Ty::Int] = items.as_slice() else {
+                return Err("slice expected (Seq[V],Int,Int) input".to_string());
+            };
+            Ok(seq.clone())
+        }
+        "head" | "last" => {
             let Ty::Seq(item) = input else {
-                return Err("head expected sequence input".to_string());
+                return Err(format!("{name} expected sequence input"));
+            };
+            Ok(Ty::Faultable(item.clone()))
+        }
+        "get" => {
+            let Ty::Tuple(items) = input else {
+                return Err("get expected tuple input".to_string());
+            };
+            let [Ty::Seq(item), Ty::Int] = items.as_slice() else {
+                return Err("get expected (Seq[V],Int) input".to_string());
+            };
+            Ok(item.as_ref().clone())
+        }
+        "get_or" => {
+            let Ty::Tuple(items) = input else {
+                return Err("get_or expected tuple input".to_string());
+            };
+            let [Ty::Seq(item), Ty::Int, _] = items.as_slice() else {
+                return Err("get_or expected (Seq[V],Int,V) input".to_string());
+            };
+            Ok(item.as_ref().clone())
+        }
+        "at" => {
+            let Ty::Tuple(items) = input else {
+                return Err("at expected tuple input".to_string());
+            };
+            let [Ty::Seq(item), Ty::Int] = items.as_slice() else {
+                return Err("at expected (Seq[V],Int) input".to_string());
             };
             Ok(Ty::Faultable(item.clone()))
         }
@@ -3119,10 +3502,70 @@ fn unwrap_faultable_tuple(input: &Ty) -> Option<Ty> {
                 saw_faultable = true;
                 inner.as_ref().clone()
             }
+            Ty::Tuple(_) => {
+                if let Some(unwrapped) = unwrap_faultable_tuple(item) {
+                    saw_faultable = true;
+                    unwrapped
+                } else {
+                    item.clone()
+                }
+            }
             other => other.clone(),
         })
         .collect::<Vec<_>>();
     saw_faultable.then_some(Ty::Tuple(unwrapped))
+}
+
+fn contains_faultable_ty(input: &Ty) -> bool {
+    match input {
+        Ty::Faultable(_) => true,
+        Ty::Seq(item) => contains_faultable_ty(item),
+        Ty::Tuple(items) => items.iter().any(contains_faultable_ty),
+        Ty::OneOf(items) => items.iter().any(contains_faultable_ty),
+        _ => false,
+    }
+}
+
+fn emit_fault_checks_for_value(out: &mut String, target: &str, input: &str, input_ty: &Ty) {
+    match input_ty {
+        Ty::Faultable(_) => {
+            out.push_str(&format!("  if (!{target}.is_fault && {input}.is_fault) {{ {target}.is_fault = true; {target}.fault = {input}.fault; }}\n"));
+        }
+        Ty::Tuple(items) => {
+            for (index, item) in items.iter().enumerate() {
+                emit_fault_checks_for_value(out, target, &format!("{input}.f{index}"), item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn emit_unwrap_faultable_value(
+    out: &mut String,
+    target: &str,
+    input: &str,
+    input_ty: &Ty,
+    indent: &str,
+) {
+    match input_ty {
+        Ty::Faultable(_) => {
+            out.push_str(&format!("{indent}{target} = {input}.value;\n"));
+        }
+        Ty::Tuple(items) => {
+            for (index, item) in items.iter().enumerate() {
+                emit_unwrap_faultable_value(
+                    out,
+                    &format!("{target}.f{index}"),
+                    &format!("{input}.f{index}"),
+                    item,
+                    indent,
+                );
+            }
+        }
+        _ => {
+            out.push_str(&format!("{indent}{target} = {input};\n"));
+        }
+    }
 }
 
 fn is_predefined_type_name(name: &str) -> bool {
@@ -3134,6 +3577,9 @@ fn is_predefined_type_name(name: &str) -> bool {
             | "FaFaultable_Int"
             | "FaFaultable_Real"
             | "FaFaultable_Bytes"
+            | "FaFaultable_Stream"
+            | "FaSeq_Real"
+            | "FaFaultable_Seq_Real"
     )
 }
 
@@ -3196,6 +3642,27 @@ fn numeric_unary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
         "abs" if output_ty == &Ty::Int => format!("(({input}) < 0 ? -({input}) : ({input}))"),
         "abs" => format!("fabs({input})"),
         "sqrt" => format!("sqrt((double){input})"),
+        "exp" => format!("exp((double){input})"),
+        "sin" => format!("sin((double){input})"),
+        "cos" => format!("cos((double){input})"),
+        _ => unreachable!(),
+    }
+}
+
+fn min_max_expr(op: &str, left: &str, right: &str, ty: &Ty) -> String {
+    let cast_left = if ty == &Ty::Int {
+        left.to_string()
+    } else {
+        format!("(double){left}")
+    };
+    let cast_right = if ty == &Ty::Int {
+        right.to_string()
+    } else {
+        format!("(double){right}")
+    };
+    match op {
+        "min" => format!("({cast_left} < {cast_right} ? {cast_left} : {cast_right})"),
+        "max" => format!("({cast_left} > {cast_right} ? {cast_left} : {cast_right})"),
         _ => unreachable!(),
     }
 }
@@ -3403,15 +3870,17 @@ impl TypeParser {
             self.expect(']')?;
             return Ok(Ty::Faultable(Box::new(item)));
         }
-        Ok(match name.as_str() {
+        let base_name = name.rsplit('.').next().unwrap_or(&name);
+        Ok(match base_name {
             "Unit" | "void" => Ty::Unit,
             "Int" | "i8" | "i16" | "i32" | "i64" => Ty::Int,
             "Real" | "f16" | "float" | "double" => Ty::Real,
             "Bool" | "i1" => Ty::Bool,
             "Bytes" | "ptr" => Ty::Bytes,
             "Args" => Ty::Args,
+            "Stream" => Ty::Stream,
             "Fault" => Ty::Fault,
-            other => Ty::Var(other.to_string()),
+            _ => Ty::Var(name),
         })
     }
 
@@ -3474,6 +3943,7 @@ fn type_suffix(ty: &Ty) -> String {
         Ty::Bool => "Bool".to_string(),
         Ty::Bytes => "Bytes".to_string(),
         Ty::Args => "Args".to_string(),
+        Ty::Stream => "Stream".to_string(),
         Ty::Fault => "Fault".to_string(),
         Ty::Faultable(inner) => format!("Faultable_{}", type_suffix(inner)),
         Ty::Seq(item) => format!("Seq_{}", type_suffix(item)),
@@ -3546,6 +4016,7 @@ impl std::fmt::Display for Ty {
             Ty::Bool => write!(f, "Bool"),
             Ty::Bytes => write!(f, "Bytes"),
             Ty::Args => write!(f, "Args"),
+            Ty::Stream => write!(f, "Stream"),
             Ty::Fault => write!(f, "Fault"),
             Ty::Faultable(item) => write!(f, "Faultable[{item}]"),
             Ty::Seq(item) => write!(f, "Seq[{item}]"),

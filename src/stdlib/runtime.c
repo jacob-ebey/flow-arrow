@@ -7,17 +7,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 typedef struct { int _unused; } FaUnit;
 typedef struct { char *bytes; size_t len; } FaBytes;
 typedef struct { FaBytes message; } FaFault;
 typedef struct { int argc; char **argv; } FaArgs;
+typedef struct { FILE *file; int fd; FaBytes path; } FaStream;
 typedef struct { size_t count; FaBytes *items; } FaSeq_Bytes;
 typedef struct { size_t count; int64_t *items; } FaSeq_Int;
+typedef struct { size_t count; double *items; } FaSeq_Real;
 typedef struct { bool is_fault; FaFault fault; int64_t value; } FaFaultable_Int;
 typedef struct { bool is_fault; FaFault fault; double value; } FaFaultable_Real;
 typedef struct { bool is_fault; FaFault fault; FaBytes value; } FaFaultable_Bytes;
+typedef struct { bool is_fault; FaFault fault; FaStream value; } FaFaultable_Stream;
+typedef struct { bool is_fault; FaFault fault; FaSeq_Real value; } FaFaultable_Seq_Real;
 typedef struct { size_t count; FaFault *items; } FaSeq_Fault;
 typedef void (*FaParallelForFn)(void *ctx, size_t start, size_t end);
 
@@ -172,6 +177,14 @@ static FaSeq_Int FaSeq_Int_new(size_t count) {
   return seq;
 }
 
+static FaSeq_Real FaSeq_Real_new(size_t count) {
+  FaSeq_Real seq;
+  seq.count = count;
+  seq.items = (double *)calloc(count ? count : 1, sizeof(double));
+  if (!seq.items) fa_die_alloc();
+  return seq;
+}
+
 static FaSeq_Fault FaSeq_Fault_new(size_t count) {
   FaSeq_Fault seq;
   seq.count = count;
@@ -217,6 +230,34 @@ static FaFaultable_Bytes FaFaultable_Bytes_ok(FaBytes value) {
 
 static FaFaultable_Bytes FaFaultable_Bytes_fault(FaFault fault) {
   FaFaultable_Bytes out;
+  out.is_fault = true;
+  out.fault = fault;
+  return out;
+}
+
+static FaFaultable_Stream FaFaultable_Stream_ok(FaStream value) {
+  FaFaultable_Stream out;
+  out.is_fault = false;
+  out.value = value;
+  return out;
+}
+
+static FaFaultable_Stream FaFaultable_Stream_fault(FaFault fault) {
+  FaFaultable_Stream out;
+  out.is_fault = true;
+  out.fault = fault;
+  return out;
+}
+
+static FaFaultable_Seq_Real FaFaultable_Seq_Real_ok(FaSeq_Real value) {
+  FaFaultable_Seq_Real out;
+  out.is_fault = false;
+  out.value = value;
+  return out;
+}
+
+static FaFaultable_Seq_Real FaFaultable_Seq_Real_fault(FaFault fault) {
+  FaFaultable_Seq_Real out;
   out.is_fault = true;
   out.fault = fault;
   return out;

@@ -7,3 +7,6 @@ Cargo.lock
 **/*.jpg
 **/*.jpeg
 **/*.png
+examples/qwen35-inference/model/
+examples/qwen35-inference/.cache/
+examples/qwen35-inference/.venv/

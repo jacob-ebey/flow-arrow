@@ -35,9 +35,10 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
     let module = parser::parse(&source)?;
-    typecheck::check_module(&module)?;
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    typecheck::check_module_with_base(&module, base_dir)?;
     let llvm = codegen::emit_module(&module)?;
-    let runtime_c = codegen::emit_runtime_c(&module)?;
+    let runtime_c = codegen::emit_runtime_c_with_base(&module, base_dir)?;
 
     if let Some(out) = emit_llvm {
         fs::write(out, &llvm)
@@ -105,14 +106,14 @@ pub fn typecheck_file(path: &Path) -> Result<(), String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
     let module = parser::parse(&source)?;
-    typecheck::check_module(&module)
+    typecheck::check_module_with_base(&module, path.parent().unwrap_or_else(|| Path::new(".")))
 }
 
 pub fn mermaid_file(path: &Path) -> Result<String, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
     let module = parser::parse(&source)?;
-    typecheck::check_module(&module)?;
+    typecheck::check_module_with_base(&module, path.parent().unwrap_or_else(|| Path::new(".")))?;
     mermaid::emit_module(&module)
 }
 

@@ -10,6 +10,7 @@ mod math;
 mod predicates;
 mod real;
 mod seq;
+mod stream;
 mod tuple;
 
 const RUNTIME_C: &str = include_str!("stdlib/runtime.c");
@@ -176,6 +177,7 @@ pub const INTRINSIC_MODULE: &str = "__intrinsic";
 pub const SYMBOLS: &[StdSymbol] = &[
     cli::ARGS,
     fault::FAULT,
+    stream::STREAM,
     bytes::SPLIT_LINES,
     bytes::CONCAT_BYTES,
     bytes::JOIN_BYTES,
@@ -201,6 +203,11 @@ pub const SYMBOLS: &[StdSymbol] = &[
     cv::ENCODE_PPM,
     fs::READ_FILE,
     fs::WRITE_FILE,
+    stream::OPEN_FILE,
+    stream::SIZE,
+    stream::READ_AT,
+    stream::COPY_TO_FILE,
+    stream::CLOSE,
     io::READ_STDIN,
     io::WRITE_STDOUT,
     io::WRITE_STDERR,
@@ -222,6 +229,9 @@ pub const SYMBOLS: &[StdSymbol] = &[
     math::NEG,
     math::ABS,
     math::SQRT,
+    math::EXP,
+    math::SIN,
+    math::COS,
     math::EQ,
     math::LT,
     math::GT,
@@ -239,6 +249,9 @@ pub const SYMBOLS: &[StdSymbol] = &[
     predicates::ANY,
     fault::HAS_FAULTS,
     fault::FORMAT_FAULTS,
+    fault::OK,
+    fault::EXPECT,
+    fault::COLLECT,
     intrinsic::RANGE_STEP,
     intrinsic::SELECT,
     seq::LENGTH,
@@ -253,6 +266,14 @@ pub const SYMBOLS: &[StdSymbol] = &[
     seq::SHIFT_LEFT,
     seq::HEAD,
     seq::TAIL,
+    seq::SLICE,
+    seq::LAST,
+    seq::GET,
+    seq::GET_OR,
+    seq::AT,
+    seq::APPEND,
+    seq::SET,
+    seq::CONCAT,
     tuple::FIRST,
     tuple::SECOND,
     tuple::SWAP,
@@ -264,6 +285,7 @@ pub fn emit_runtime_c(out: &mut String) {
         cli::C,
         io::C,
         fs::C,
+        stream::C,
         int::C,
         real::C,
         fault::C,
@@ -329,6 +351,9 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "shift_left"
             | "shift_right"
             | "tail"
+            | "last"
+            | "at"
+            | "append"
             | "first"
             | "second"
             | "swap"
@@ -340,6 +365,9 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "neg"
             | "abs"
             | "sqrt"
+            | "exp"
+            | "sin"
+            | "cos"
             | "min"
             | "max"
             | "eq"
@@ -352,6 +380,7 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "bit_xor"
             | "bit_shl"
             | "bit_shr"
+            | "collect"
     )
 }
 

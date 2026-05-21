@@ -15,6 +15,7 @@ Initial modules:
 | [`std.cv`](./cv.md) | OpenCV-lite image codecs, transforms, and matrix views |
 | [`std.fs`](./fs.md) | File byte I/O |
 | [`std.io`](./io.md) | Stdin/stdout/stderr boundary I/O |
+| [`std.stream`](./stream.md) | Stream handles for large file artifacts |
 | [`std.real`](./real.md) | `Real` parsing and formatting |
 | [`std.int`](./int.md) | `Int` parsing and formatting |
 | [`std.math`](./math.md) | Arithmetic and comparisons |

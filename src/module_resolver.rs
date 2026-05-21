@@ -1,10 +1,17 @@
 use crate::ast::*;
 use crate::{parser, stdlib};
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 
+#[allow(dead_code)]
 pub fn expand_stdlib_sources(module: &Module) -> Result<Module, String> {
+    expand_sources(module, None)
+}
+
+pub fn expand_sources(module: &Module, base_dir: Option<&Path>) -> Result<Module, String> {
     let mut resolver = Resolver::default();
-    let root = resolver.rewrite_root(module)?;
+    let root = resolver.rewrite_root(module, base_dir)?;
     let mut declarations = resolver.declarations;
     declarations.extend(root);
     Ok(Module { declarations })
@@ -13,12 +20,18 @@ pub fn expand_stdlib_sources(module: &Module) -> Result<Module, String> {
 #[derive(Default)]
 struct Resolver {
     modules: HashMap<String, HashMap<String, String>>,
+    local_modules: HashMap<PathBuf, HashMap<String, String>>,
     resolving: HashSet<String>,
+    resolving_local: HashSet<PathBuf>,
     declarations: Vec<Decl>,
 }
 
 impl Resolver {
-    fn rewrite_root(&mut self, module: &Module) -> Result<Vec<Decl>, String> {
+    fn rewrite_root(
+        &mut self,
+        module: &Module,
+        base_dir: Option<&Path>,
+    ) -> Result<Vec<Decl>, String> {
         let callable_names = callable_names(module);
         let mut references = HashMap::new();
         let mut declarations = Vec::new();
@@ -27,13 +40,17 @@ impl Resolver {
             let Decl::Import(import) = decl else {
                 continue;
             };
-            let ImportSource::Module(source) = &import.source else {
-                continue;
-            };
-            if stdlib::flow_source(source).is_none() {
-                continue;
+            match &import.source {
+                ImportSource::Module(source) if stdlib::flow_source(source).is_some() => {
+                    self.import_flow_module(source, &import.clause, &mut references)?;
+                }
+                ImportSource::Local(path) => {
+                    let base_dir = base_dir
+                        .ok_or_else(|| "local imports require a source file path".to_string())?;
+                    self.import_local_module(base_dir, path, &import.clause, &mut references)?;
+                }
+                ImportSource::Module(_) => {}
             }
-            self.import_flow_module(source, &import.clause, &mut references)?;
         }
 
         for name in references.keys().filter(|name| !name.contains('.')) {
@@ -44,7 +61,7 @@ impl Resolver {
 
         for decl in &module.declarations {
             match decl {
-                Decl::Import(import) if is_flow_std_import(import) => {}
+                Decl::Import(import) if is_source_import(import) => {}
                 Decl::TypeAlias(alias) => declarations.push(Decl::TypeAlias(rewrite_type_alias(
                     alias.clone(),
                     &references,
@@ -181,6 +198,140 @@ impl Resolver {
         self.modules.insert(module.to_string(), exports);
         self.declarations.extend(module_declarations);
         Ok(self.modules.get(module).expect("module was just inserted"))
+    }
+
+    fn import_local_module(
+        &mut self,
+        base_dir: &Path,
+        path: &str,
+        clause: &ImportClause,
+        references: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        let exports = self.expand_local_module(base_dir, path)?;
+        match clause {
+            ImportClause::Alias(alias) => {
+                for (name, internal) in exports {
+                    insert_reference(references, format!("{alias}.{name}"), internal.clone())?;
+                }
+            }
+            ImportClause::Items(items) => {
+                for item in items {
+                    let internal = exports
+                        .get(&item.name)
+                        .ok_or_else(|| format!("local module `{path}` does not export `{}`", item.name))?;
+                    let name = item.alias.as_deref().unwrap_or(&item.name);
+                    insert_reference(references, name.to_string(), internal.clone())?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn expand_local_module(
+        &mut self,
+        base_dir: &Path,
+        path: &str,
+    ) -> Result<&HashMap<String, String>, String> {
+        let full_path = normalize_path(base_dir.join(path))?;
+        if self.local_modules.contains_key(&full_path) {
+            return Ok(self
+                .local_modules
+                .get(&full_path)
+                .expect("local module was just checked"));
+        }
+        if !self.resolving_local.insert(full_path.clone()) {
+            return Err(format!(
+                "cyclic local source import involving `{}`",
+                full_path.display()
+            ));
+        }
+
+        let source = fs::read_to_string(&full_path)
+            .map_err(|error| format!("failed to read `{}`: {error}", full_path.display()))?;
+        let parsed = parser::parse(&source)
+            .map_err(|error| format!("failed to parse `{}`: {error}", full_path.display()))?;
+        let mut references = HashMap::new();
+        let mut exports = HashMap::new();
+        let local_names = declaration_names(&parsed);
+        let module_id = full_path.to_string_lossy();
+
+        for name in &local_names {
+            let internal = internal_name(&module_id, name);
+            insert_reference(&mut references, name.clone(), internal.clone())?;
+            exports.insert(name.clone(), internal);
+        }
+
+        let mut module_declarations = Vec::new();
+        let mut import_index = 0usize;
+        let module_dir = full_path.parent().unwrap_or_else(|| Path::new("."));
+        for decl in &parsed.declarations {
+            let Decl::Import(import) = decl else {
+                continue;
+            };
+            match &import.source {
+                ImportSource::Local(path) => {
+                    self.import_local_module(module_dir, path, &import.clause, &mut references)?;
+                }
+                ImportSource::Module(source) if stdlib::flow_source(source).is_some() => {
+                    self.import_flow_module(source, &import.clause, &mut references)?;
+                }
+                ImportSource::Module(source) => {
+                    let alias = format!("{}_import_{import_index}", internal_prefix(&module_id));
+                    import_index += 1;
+                    rewrite_builtin_import(import, source, &alias, &mut references)?;
+                    module_declarations.push(Decl::Import(Import {
+                        source: ImportSource::Module(source.clone()),
+                        clause: ImportClause::Alias(alias),
+                    }));
+                }
+            }
+        }
+
+        for decl in parsed.declarations {
+            match decl {
+                Decl::TypeAlias(alias) => {
+                    let name = internal_name(&module_id, &alias.name);
+                    module_declarations.push(Decl::TypeAlias(rewrite_type_alias(
+                        alias,
+                        &references,
+                        name,
+                    )));
+                }
+                Decl::Node(callable) => {
+                    let name = internal_name(&module_id, &callable.name);
+                    module_declarations.push(Decl::Node(rewrite_callable(
+                        callable,
+                        &references,
+                        name,
+                    )));
+                }
+                Decl::Program(callable) => {
+                    return Err(format!(
+                        "local module `{}` declares program `{}`; imported local modules may only export types and nodes",
+                        full_path.display(),
+                        callable.name
+                    ));
+                }
+                Decl::Import(_) => {}
+            }
+        }
+
+        self.resolving_local.remove(&full_path);
+        self.local_modules.insert(full_path.clone(), exports);
+        self.declarations.extend(module_declarations);
+        Ok(self
+            .local_modules
+            .get(&full_path)
+            .expect("local module was just inserted"))
+    }
+}
+
+fn normalize_path(path: PathBuf) -> Result<PathBuf, String> {
+    if path.exists() {
+        path.canonicalize()
+            .map_err(|error| format!("failed to canonicalize `{}`: {error}", path.display()))
+    } else {
+        Ok(path)
     }
 }
 
@@ -340,10 +491,10 @@ fn declaration_names(module: &Module) -> HashSet<String> {
         .collect()
 }
 
-fn is_flow_std_import(import: &Import) -> bool {
+fn is_source_import(import: &Import) -> bool {
     match &import.source {
         ImportSource::Module(module) => stdlib::flow_source(module).is_some(),
-        ImportSource::Local(_) => false,
+        ImportSource::Local(_) => true,
     }
 }
 
