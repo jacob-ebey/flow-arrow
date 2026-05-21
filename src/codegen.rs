@@ -69,6 +69,7 @@ enum MapOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Fusion {
     Sum,
+    NestedSum,
     Mean,
     MapUnary(UnaryOp),
     ZipMap(BinaryOp),
@@ -84,6 +85,12 @@ enum ReductionTerm {
     PairMul,
     PairDiffSquare,
     LeftSquare,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BroadcastSide {
+    Left,
+    Right,
 }
 
 struct TypedCodegen<'a> {
@@ -449,7 +456,8 @@ impl<'a> TypedCodegen<'a> {
             }
         }
 
-        for chain in &callable.chains {
+        let chains = fuse_single_use_chains(callable);
+        for chain in &chains {
             self.emit_chain(out, chain, &mut env)?;
         }
 
@@ -641,7 +649,9 @@ impl<'a> TypedCodegen<'a> {
         env: &mut HashMap<String, Value>,
     ) -> Result<(), String> {
         let mut value = self.emit_endpoint(out, &chain.source, env)?;
-        for (index, stage) in chain.stages.iter().enumerate() {
+        let mut index = 0;
+        while index < chain.stages.len() {
+            let stage = &chain.stages[index];
             let is_last = index + 1 == chain.stages.len();
             match stage {
                 Stage::Endpoint(Endpoint::Variable(name)) if is_last => {
@@ -650,6 +660,73 @@ impl<'a> TypedCodegen<'a> {
                     }
                 }
                 Stage::Endpoint(Endpoint::Name(name)) => {
+                    if let Some(Stage::Endpoint(Endpoint::Name(next))) = chain.stages.get(index + 1)
+                    {
+                        if self.is_matmul_name(name)
+                            && self.fusion_for_name(next) == Some(Fusion::NestedSum)
+                        {
+                            let tmp = self.next_temp();
+                            out.push_str(&format!("  double {tmp};\n"));
+                            self.emit_fused_matmul_sum(out, &tmp, &value.code, &value.ty)?;
+                            value = Value {
+                                code: tmp,
+                                ty: Ty::Real,
+                            };
+                            index += 2;
+                            continue;
+                        }
+                        if self.is_matvec_name(name)
+                            && self.fusion_for_name(next) == Some(Fusion::Sum)
+                        {
+                            let tmp = self.next_temp();
+                            out.push_str(&format!("  double {tmp};\n"));
+                            self.emit_fused_matvec_sum(out, &tmp, &value.code, &value.ty)?;
+                            value = Value {
+                                code: tmp,
+                                ty: Ty::Real,
+                            };
+                            index += 2;
+                            continue;
+                        }
+                        if self.is_map_sum_callable(name)
+                            && self.fusion_for_name(next) == Some(Fusion::Sum)
+                        {
+                            let tmp = self.next_temp();
+                            out.push_str(&format!("  double {tmp};\n"));
+                            self.emit_fused_nested_sum(out, &tmp, &value.code, &value.ty)?;
+                            value = Value {
+                                code: tmp,
+                                ty: Ty::Real,
+                            };
+                            index += 2;
+                            continue;
+                        }
+                    }
+                    if let Some(Stage::Map(map_name)) = chain.stages.get(index + 1) {
+                        match self.canonical_name(name).as_str() {
+                            "broadcast_left" => {
+                                value = self.emit_broadcast_map(
+                                    out,
+                                    map_name,
+                                    value.clone(),
+                                    BroadcastSide::Left,
+                                )?;
+                                index += 2;
+                                continue;
+                            }
+                            "broadcast_right" => {
+                                value = self.emit_broadcast_map(
+                                    out,
+                                    map_name,
+                                    value.clone(),
+                                    BroadcastSide::Right,
+                                )?;
+                                index += 2;
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
                     value = self.emit_call(out, name, value.clone())?;
                 }
                 Stage::Endpoint(_) => {
@@ -686,6 +763,7 @@ impl<'a> TypedCodegen<'a> {
                     value = self.emit_scan(out, op, value.clone(), identity_value)?;
                 }
             }
+            index += 1;
         }
         Ok(())
     }
@@ -1003,6 +1081,115 @@ impl<'a> TypedCodegen<'a> {
         })
     }
 
+    fn emit_broadcast_map(
+        &mut self,
+        out: &mut String,
+        name: &str,
+        input: Value,
+        side: BroadcastSide,
+    ) -> Result<Value, String> {
+        let Ty::Tuple(items) = input.ty.clone() else {
+            return Err("broadcast-map fusion expected tuple input".to_string());
+        };
+        let [left_ty, right_ty] = items.as_slice() else {
+            return Err("broadcast-map fusion expected pair input".to_string());
+        };
+
+        let (seq_field, broadcast_field, item_ty, broadcast_ty) = match (side, left_ty, right_ty) {
+            (BroadcastSide::Left, _, Ty::Seq(item_ty)) => {
+                ("f1", "f0", item_ty.as_ref().clone(), left_ty.clone())
+            }
+            (BroadcastSide::Right, Ty::Seq(item_ty), _) => {
+                ("f0", "f1", item_ty.as_ref().clone(), right_ty.clone())
+            }
+            (BroadcastSide::Left, _, _) => {
+                return Err("broadcast_left expected (A,Seq[B]) input".to_string());
+            }
+            (BroadcastSide::Right, _, _) => {
+                return Err("broadcast_right expected (Seq[A],B) input".to_string());
+            }
+        };
+
+        let pair_ty = match side {
+            BroadcastSide::Left => Ty::Tuple(vec![broadcast_ty, item_ty.clone()]),
+            BroadcastSide::Right => Ty::Tuple(vec![item_ty.clone(), broadcast_ty]),
+        };
+        let output_item_ty = self.call_output_type(name, &pair_ty)?;
+        let output_ty = Ty::Seq(Box::new(output_item_ty.clone()));
+        let output_c_ty = self.types.c_type(&output_ty);
+        let new_fn = self.types.seq_new_name(&output_ty)?;
+        let tmp = self.next_temp();
+
+        out.push_str(&format!(
+            "  {output_c_ty} {tmp} = {new_fn}({}.{seq_field}.count);\n",
+            input.code
+        ));
+        if self.is_parallel_safe_name(name, &mut HashSet::new()) {
+            let worker = self.emit_parallel_broadcast_map_helper(
+                name,
+                &input.ty,
+                &pair_ty,
+                &output_ty,
+                &output_item_ty,
+                side,
+            )?;
+            let ctx_ty = format!("{worker}_Ctx");
+            let ctx = self.next_temp();
+            out.push_str(&format!("  {ctx_ty} {ctx};\n"));
+            out.push_str(&format!("  {ctx}.input = {};\n", input.code));
+            out.push_str(&format!("  {ctx}.output = {tmp};\n"));
+            out.push_str(&format!(
+                "  fa_parallel_for(0, {input}.{seq_field}.count, FA_PARALLEL_FOR_GRAIN, {worker}, &{ctx});\n",
+                input = input.code
+            ));
+            return Ok(Value {
+                code: tmp,
+                ty: output_ty,
+            });
+        }
+
+        let pair_c_ty = self.types.c_type(&pair_ty);
+        let item_c_ty = self.types.c_type(&output_item_ty);
+        let pair = self.next_temp();
+        let item = self.next_temp();
+        let i = self.next_temp();
+        out.push_str(&format!(
+            "  for (size_t {i} = 0; {i} < {}.{seq_field}.count; {i}++) {{\n",
+            input.code
+        ));
+        out.push_str(&format!("    {pair_c_ty} {pair};\n"));
+        match side {
+            BroadcastSide::Left => {
+                out.push_str(&format!(
+                    "    {pair}.f0 = {}.{broadcast_field};\n",
+                    input.code
+                ));
+                out.push_str(&format!(
+                    "    {pair}.f1 = {}.{seq_field}.items[{i}];\n",
+                    input.code
+                ));
+            }
+            BroadcastSide::Right => {
+                out.push_str(&format!(
+                    "    {pair}.f0 = {}.{seq_field}.items[{i}];\n",
+                    input.code
+                ));
+                out.push_str(&format!(
+                    "    {pair}.f1 = {}.{broadcast_field};\n",
+                    input.code
+                ));
+            }
+        }
+        out.push_str(&format!("    {item_c_ty} {item};\n"));
+        self.emit_assign_call(out, &item, &output_item_ty, name, &pair, &pair_ty)?;
+        out.push_str(&format!("    {tmp}.items[{i}] = {item};\n"));
+        out.push_str("  }\n");
+        Ok(Value {
+            code: tmp,
+            ty: output_ty,
+        })
+    }
+
     fn emit_parallel_map_helper(
         &mut self,
         name: &str,
@@ -1037,6 +1224,53 @@ impl<'a> TypedCodegen<'a> {
             "ctx->input.items[i]",
             item_ty,
         )?;
+        helper.push_str("    ctx->output.items[i] = item;\n");
+        helper.push_str("  }\n");
+        helper.push_str("}\n\n");
+        self.parallel_helpers.push_str(&helper);
+        Ok(worker)
+    }
+
+    fn emit_parallel_broadcast_map_helper(
+        &mut self,
+        name: &str,
+        input_ty: &Ty,
+        pair_ty: &Ty,
+        output_ty: &Ty,
+        output_item_ty: &Ty,
+        side: BroadcastSide,
+    ) -> Result<String, String> {
+        let id = self.parallel_helper;
+        self.parallel_helper += 1;
+        let worker = format!("fa_parallel_map_worker_{id}");
+        let ctx_ty = format!("{worker}_Ctx");
+        let input_c_ty = self.types.c_type(input_ty);
+        let pair_c_ty = self.types.c_type(pair_ty);
+        let output_c_ty = self.types.c_type(output_ty);
+        let item_c_ty = self.types.c_type(output_item_ty);
+
+        let mut helper = String::new();
+        helper.push_str(&format!(
+            "typedef struct {{ {input_c_ty} input; {output_c_ty} output; }} {ctx_ty};\n"
+        ));
+        helper.push_str(&format!(
+            "static void {worker}(void *ctx_ptr, size_t start, size_t end) {{\n"
+        ));
+        helper.push_str(&format!("  {ctx_ty} *ctx = ({ctx_ty} *)ctx_ptr;\n"));
+        helper.push_str("  for (size_t i = start; i < end; i++) {\n");
+        helper.push_str(&format!("    {pair_c_ty} pair;\n"));
+        match side {
+            BroadcastSide::Left => {
+                helper.push_str("    pair.f0 = ctx->input.f0;\n");
+                helper.push_str("    pair.f1 = ctx->input.f1.items[i];\n");
+            }
+            BroadcastSide::Right => {
+                helper.push_str("    pair.f0 = ctx->input.f0.items[i];\n");
+                helper.push_str("    pair.f1 = ctx->input.f1;\n");
+            }
+        }
+        helper.push_str(&format!("    {item_c_ty} item;\n"));
+        self.emit_assign_call(&mut helper, "item", output_item_ty, name, "pair", pair_ty)?;
         helper.push_str("    ctx->output.items[i] = item;\n");
         helper.push_str("  }\n");
         helper.push_str("}\n\n");
@@ -1854,6 +2088,12 @@ impl<'a> TypedCodegen<'a> {
             [Stage::Reduce { op, identity }] if self.is_add(op) && is_zero(identity) => {
                 Some(Fusion::Sum)
             }
+            [Stage::Map(node), Stage::Endpoint(Endpoint::Name(next))]
+                if self.called_fusion(node, visiting) == Some(Fusion::Sum)
+                    && self.called_fusion(next, visiting) == Some(Fusion::Sum) =>
+            {
+                Some(Fusion::NestedSum)
+            }
             [Stage::Map(node)] => self.unary_op_for_node(node).map(Fusion::MapUnary),
             [Stage::Map(node), Stage::Reduce { op, identity }]
                 if self.is_add(op) && is_zero(identity) =>
@@ -1964,6 +2204,7 @@ impl<'a> TypedCodegen<'a> {
     ) -> Result<(), String> {
         match fusion {
             Fusion::Sum => self.emit_fused_sum(out, target, input, input_ty),
+            Fusion::NestedSum => self.emit_fused_nested_sum(out, target, input, input_ty),
             Fusion::Mean => self.emit_fused_mean(out, target, input),
             Fusion::MapUnary(op) => self.emit_fused_map_unary(out, target, output_ty, *op, input),
             Fusion::ZipMap(op) => self.emit_fused_zip_map(out, target, output_ty, *op, input),
@@ -2002,6 +2243,149 @@ impl<'a> TypedCodegen<'a> {
             "    {target} = {};\n",
             add_expr(target, &format!("{input}.items[{i}]"), item_ty)
         ));
+        out.push_str("  }\n");
+        Ok(())
+    }
+
+    fn emit_fused_nested_sum(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Seq(row_ty) = input_ty else {
+            return Err("nested sum fusion expected sequence input".to_string());
+        };
+        let Ty::Seq(item_ty) = row_ty.as_ref() else {
+            return Err("nested sum fusion expected nested sequence input".to_string());
+        };
+        let r = self.next_temp();
+        let c = self.next_temp();
+        out.push_str(&format!("  {target} = 0;\n"));
+        out.push_str(&format!(
+            "  for (size_t {r} = 0; {r} < {input}.count; {r}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "    for (size_t {c} = 0; {c} < {input}.items[{r}].count; {c}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "      {target} = {};\n",
+            add_expr(target, &format!("{input}.items[{r}].items[{c}]"), item_ty)
+        ));
+        out.push_str("    }\n");
+        out.push_str("  }\n");
+        Ok(())
+    }
+
+    fn emit_fused_matvec_sum(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Tuple(items) = input_ty else {
+            return Err("matvec-sum fusion expected tuple input".to_string());
+        };
+        let [Ty::Seq(row_ty), Ty::Seq(_)] = items.as_slice() else {
+            return Err("matvec-sum fusion expected (matrix, vector) input".to_string());
+        };
+        let Ty::Seq(item_ty) = row_ty.as_ref() else {
+            return Err("matvec-sum fusion expected matrix input".to_string());
+        };
+        if item_ty.as_ref() != &Ty::Real {
+            return Err("matvec-sum fusion expected real matrix input".to_string());
+        }
+
+        let row = self.next_temp();
+        let col = self.next_temp();
+        let dot = self.next_temp();
+        out.push_str(&format!("  {target} = 0.0;\n"));
+        out.push_str(&format!(
+            "  for (size_t {row} = 0; {row} < {input}.f0.count; {row}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "    if ({input}.f0.items[{row}].count != {input}.f1.count) fa_die_usage(\"zip: sequences must have the same length\");\n"
+        ));
+        out.push_str(&format!("    double {dot} = 0.0;\n"));
+        out.push_str(&format!(
+            "    for (size_t {col} = 0; {col} < {input}.f1.count; {col}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "      {dot} += {input}.f0.items[{row}].items[{col}] * {input}.f1.items[{col}];\n"
+        ));
+        out.push_str("    }\n");
+        out.push_str(&format!("    {target} += {dot};\n"));
+        out.push_str("  }\n");
+        Ok(())
+    }
+
+    fn emit_fused_matmul_sum(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Tuple(items) = input_ty else {
+            return Err("matmul-sum fusion expected tuple input".to_string());
+        };
+        let [Ty::Seq(left_row_ty), Ty::Seq(right_row_ty)] = items.as_slice() else {
+            return Err("matmul-sum fusion expected matrix pair input".to_string());
+        };
+        if !matches!(left_row_ty.as_ref(), Ty::Seq(item_ty) if item_ty.as_ref() == &Ty::Real)
+            || !matches!(right_row_ty.as_ref(), Ty::Seq(item_ty) if item_ty.as_ref() == &Ty::Real)
+        {
+            return Err("matmul-sum fusion expected real matrix inputs".to_string());
+        }
+
+        let inner = self.next_temp();
+        let cols = self.next_temp();
+        let check = self.next_temp();
+        let k = self.next_temp();
+        let row = self.next_temp();
+        let col = self.next_temp();
+        let left_sum = self.next_temp();
+        let right_sum = self.next_temp();
+
+        out.push_str(&format!("  size_t {inner} = {input}.f1.count;\n"));
+        out.push_str(&format!(
+            "  size_t {cols} = {inner} == 0 ? 0 : {input}.f1.items[0].count;\n"
+        ));
+        out.push_str(&format!(
+            "  for (size_t {check} = 0; {check} < {inner}; {check}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "    if ({input}.f1.items[{check}].count != {cols}) fa_die_usage(\"transpose: rows must have the same length\");\n"
+        ));
+        out.push_str("  }\n");
+        out.push_str(&format!("  {target} = 0.0;\n"));
+        out.push_str(&format!("  if ({cols} > 0) {{\n"));
+        out.push_str(&format!(
+            "    for (size_t {k} = 0; {k} < {inner}; {k}++) {{\n"
+        ));
+        out.push_str(&format!("      double {left_sum} = 0.0;\n"));
+        out.push_str(&format!(
+            "      for (size_t {row} = 0; {row} < {input}.f0.count; {row}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "        if ({input}.f0.items[{row}].count != {inner}) fa_die_usage(\"zip: sequences must have the same length\");\n"
+        ));
+        out.push_str(&format!(
+            "        {left_sum} += {input}.f0.items[{row}].items[{k}];\n"
+        ));
+        out.push_str("      }\n");
+        out.push_str(&format!("      double {right_sum} = 0.0;\n"));
+        out.push_str(&format!(
+            "      for (size_t {col} = 0; {col} < {cols}; {col}++) {{\n"
+        ));
+        out.push_str(&format!(
+            "        {right_sum} += {input}.f1.items[{k}].items[{col}];\n"
+        ));
+        out.push_str("      }\n");
+        out.push_str(&format!("      {target} += {left_sum} * {right_sum};\n"));
+        out.push_str("    }\n");
         out.push_str("  }\n");
         Ok(())
     }
@@ -2194,6 +2578,36 @@ impl<'a> TypedCodegen<'a> {
         self.direct_single_builtin(name)
             .map(|op| op == "eq")
             .unwrap_or(false)
+    }
+
+    fn is_map_sum_callable(&self, name: &str) -> bool {
+        let Some(callable) = self.callables.get(name) else {
+            return false;
+        };
+        let [input] = callable.inputs.as_slice() else {
+            return false;
+        };
+        let [output] = callable.outputs.as_slice() else {
+            return false;
+        };
+        let [chain] = callable.chains.as_slice() else {
+            return false;
+        };
+        if !matches!(&chain.source, Endpoint::Variable(name) if name == &input.name) {
+            return false;
+        }
+        let Some([Stage::Map(node)]) = stages_binding_output(chain, &output.name) else {
+            return false;
+        };
+        self.fusion_for_name(node) == Some(Fusion::Sum)
+    }
+
+    fn is_matmul_name(&self, name: &str) -> bool {
+        name == "__flow_std_matrix_matmul"
+    }
+
+    fn is_matvec_name(&self, name: &str) -> bool {
+        name == "__flow_std_matrix_matvec"
     }
 
     fn direct_single_builtin(&self, name: &str) -> Option<String> {
@@ -2822,6 +3236,84 @@ fn final_variable(chain: &Chain) -> Option<&str> {
     }
 }
 
+fn fuse_single_use_chains(callable: &Callable) -> Vec<Chain> {
+    let mut chains = callable.chains.clone();
+    loop {
+        let mut uses = HashMap::new();
+        for chain in &chains {
+            count_endpoint_vars(&chain.source, &mut uses);
+            for stage in &chain.stages {
+                match stage {
+                    Stage::Reduce { identity, .. } | Stage::Scan { identity, .. } => {
+                        count_endpoint_vars(identity, &mut uses);
+                    }
+                    Stage::Repeat { count, .. } => count_endpoint_vars(count, &mut uses),
+                    Stage::Endpoint(_)
+                    | Stage::Map(_)
+                    | Stage::Filter(_)
+                    | Stage::FaultMap { .. } => {}
+                }
+            }
+        }
+
+        let mut changed = false;
+        for producer_index in 0..chains.len() {
+            let Some(binding) = final_variable(&chains[producer_index]).map(ToString::to_string)
+            else {
+                continue;
+            };
+            if callable.outputs.iter().any(|output| output.name == binding) {
+                continue;
+            }
+            if uses.get(&binding).copied().unwrap_or(0) != 1 {
+                continue;
+            }
+            let Some(consumer_index) = chains.iter().position(
+                |chain| matches!(&chain.source, Endpoint::Variable(name) if name == &binding),
+            ) else {
+                continue;
+            };
+            if producer_index == consumer_index {
+                continue;
+            }
+
+            let mut stages = chains[producer_index].stages.clone();
+            stages.pop();
+            stages.extend(chains[consumer_index].stages.clone());
+            chains[consumer_index] = Chain {
+                source: chains[producer_index].source.clone(),
+                stages,
+            };
+            chains.remove(producer_index);
+            changed = true;
+            break;
+        }
+        if !changed {
+            break;
+        }
+    }
+    chains
+}
+
+fn count_endpoint_vars(endpoint: &Endpoint, uses: &mut HashMap<String, usize>) {
+    match endpoint {
+        Endpoint::Variable(name) => {
+            *uses.entry(name.clone()).or_insert(0) += 1;
+        }
+        Endpoint::Tuple(items) | Endpoint::Seq(items) => {
+            for item in items {
+                count_endpoint_vars(item, uses);
+            }
+        }
+        Endpoint::Name(_)
+        | Endpoint::Int(_)
+        | Endpoint::Real(_)
+        | Endpoint::Bool(_)
+        | Endpoint::String(_)
+        | Endpoint::Unit => {}
+    }
+}
+
 fn is_zero(endpoint: &Endpoint) -> bool {
     match endpoint {
         Endpoint::Int(value) => *value == 0,
@@ -3091,6 +3583,16 @@ mod tests {
         module
     }
 
+    fn function_body<'a>(runtime_c: &'a str, name: &str) -> &'a str {
+        let start = runtime_c.find(name).expect("function name");
+        let body_start = runtime_c[start..].find(" {\n").expect("function body") + start;
+        let body_end = runtime_c[body_start..]
+            .find("\n}\n\n")
+            .expect("function end")
+            + body_start;
+        &runtime_c[body_start..body_end]
+    }
+
     #[test]
     fn llvm_entry_is_only_a_thin_shim_to_unboxed_c_runtime() {
         let module = checked_module(
@@ -3162,5 +3664,40 @@ define i32 @main(i32 %argc, ptr %argv) {\n\
 
         assert!(runtime_c.contains("fa_parallel_map_worker_0"));
         assert!(runtime_c.contains("fa_parallel_for(0,"));
+    }
+
+    #[test]
+    fn matrix_reduction_pipelines_avoid_materialized_intermediates() {
+        let module = checked_module(
+            r#"
+                import std.cli { Args }
+                import std.math { add, eq }
+                import std.matrix { matmul, matvec, row_sums, sum as matrix_sum }
+                import std.vector { sum as vector_sum }
+
+                program main(args: Args) -> exit_code: Int {
+                    [[1.0, 2.0], [3.0, 4.0]] -> $left
+                    [[5.0, 6.0], [7.0, 8.0]] -> $right
+                    [9.0, 10.0] -> $vector
+                    ($left, $right) -> matmul -> $product
+                    $product -> matrix_sum -> $product_sum
+                    ($left, $vector) -> matvec -> $mv
+                    $mv -> vector_sum -> $mv_sum
+                    $left -> row_sums -> vector_sum -> $row_sum
+                    ($product_sum, $mv_sum) -> add -> $partial
+                    ($partial, $row_sum) -> add -> $score
+                    ($score, 240.0) -> eq -> $ok
+                    ($ok, 0, 1) -> select -> $exit_code
+                }
+            "#,
+        );
+
+        let runtime_c = emit_runtime_c(&module).expect("runtime c");
+        let main = function_body(&runtime_c, "flow_program_main");
+
+        assert!(!main.contains("flow_node___flow_std_matrix_matmul"));
+        assert!(!main.contains("flow_node___flow_std_matrix_matvec"));
+        assert!(!main.contains("flow_node___flow_std_matrix_row_sums"));
+        assert!(main.contains("for (size_t"));
     }
 }

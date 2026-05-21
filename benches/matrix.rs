@@ -35,10 +35,11 @@ fn main() {
     )
     .expect("write FlowArrow benchmark source");
     let rust_project_root = root.join("rust_matrix_bench");
+    let rust_package_name = make_rust_package_name("flowarrow-matrix-rust-bench", &root);
     fs::create_dir_all(rust_project_root.join("src")).expect("create Rust benchmark project");
     fs::write(
         rust_project_root.join("Cargo.toml"),
-        rust_manifest("flowarrow-matrix-rust-bench"),
+        rust_manifest(&rust_package_name),
     )
     .expect("write Rust benchmark manifest");
     fs::write(
@@ -53,7 +54,7 @@ fn main() {
     let flowarrow_build_time = flowarrow_build_start.elapsed();
 
     let rust_build_start = Instant::now();
-    let rust_executable = build_rust_executable(&rust_project_root, "flowarrow-matrix-rust-bench");
+    let rust_executable = build_rust_executable(&rust_project_root, &rust_package_name);
     let rust_build_time = rust_build_start.elapsed();
 
     run_executable_once(&rust_executable, "Rust benchmark executable");
@@ -381,6 +382,23 @@ codegen-units = 1
 panic = "abort"
 "#
     )
+}
+
+fn make_rust_package_name(prefix: &str, root: &PathBuf) -> String {
+    let suffix = root
+        .file_name()
+        .expect("bench temp dir name")
+        .to_string_lossy()
+        .chars()
+        .filter_map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                Some(ch)
+            } else {
+                None
+            }
+        })
+        .collect::<String>();
+    format!("{prefix}-{suffix}")
 }
 
 fn flow_matrix(values: &[f64], rows: usize, cols: usize) -> String {
