@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -51,32 +52,60 @@ fn run_cli() -> Result<u8, String> {
             Ok(0)
         }
         Some("fmt") => {
-            let path = args
-                .next()
-                .ok_or_else(|| "usage: flowarrow fmt <path.flow> [--check|--stdout]".to_string())?;
+            let mut path = None;
             let mut check = false;
             let mut stdout = false;
+            let mut stdin = false;
             for flag in args {
                 match flag.as_str() {
                     "--check" => check = true,
                     "--stdout" => stdout = true,
+                    "--stdin" => stdin = true,
+                    other if other.starts_with("--") => {
+                        return Err(format!("unknown fmt option `{other}`"));
+                    }
+                    _ if path.is_none() => path = Some(flag),
                     other => return Err(format!("unknown fmt option `{other}`")),
                 }
             }
             if check && stdout {
                 return Err("flowarrow fmt accepts only one of --check or --stdout".to_string());
             }
-            let path = PathBuf::from(path);
-            if check {
-                flowarrow::check_format_file(path.as_path())?;
-            } else if stdout {
-                let source = std::fs::read_to_string(&path)
-                    .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
-                print!("{}", flowarrow::format_source(&source)?);
-            } else {
-                flowarrow::format_file(path.as_path())?;
+            if stdin && path.is_some() {
+                return Err("flowarrow fmt accepts either <path.flow> or --stdin".to_string());
             }
-            Ok(0)
+            if stdin {
+                let mut source = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut source)
+                    .map_err(|error| format!("failed to read stdin: {error}"))?;
+                let formatted = flowarrow::format_source(&source)?;
+                if check {
+                    if formatted == source {
+                        Ok(0)
+                    } else {
+                        Err("stdin is not formatted".to_string())
+                    }
+                } else {
+                    print!("{formatted}");
+                    Ok(0)
+                }
+            } else {
+                let path = path.ok_or_else(|| {
+                    "usage: flowarrow fmt <path.flow> [--check|--stdout] | flowarrow fmt --stdin [--check|--stdout]".to_string()
+                })?;
+                let path = PathBuf::from(path);
+                if check {
+                    flowarrow::check_format_file(path.as_path())?;
+                } else if stdout {
+                    let source = std::fs::read_to_string(&path)
+                        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+                    print!("{}", flowarrow::format_source(&source)?);
+                } else {
+                    flowarrow::format_file(path.as_path())?;
+                }
+                Ok(0)
+            }
         }
         Some("graph") => {
             let mut compact = false;

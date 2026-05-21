@@ -13,12 +13,15 @@ program's data-dependency graph.
 flowarrow fmt <path.flow>
 flowarrow fmt <path.flow> --check
 flowarrow fmt <path.flow> --stdout
+flowarrow fmt --stdin
 ```
 
 - Without flags, `fmt` rewrites the file in place.
 - `--check` exits successfully only when the file is already canonical.
 - `--stdout` writes the canonical source to stdout and leaves the file
   unchanged.
+- `--stdin` reads source from stdin and writes the canonical source to stdout
+  for editor integrations and unsaved buffers.
 
 ## Canonical Source Shape
 

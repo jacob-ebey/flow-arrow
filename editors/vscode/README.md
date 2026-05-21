@@ -6,6 +6,7 @@ language server features for FlowArrow source files.
 ## Features
 
 - Registers `.flow` and `.flowarrow` files as FlowArrow.
+- Formats FlowArrow files through `flowarrow fmt --stdin`.
 - Starts `flowarrow lsp` for completions, diagnostics, hovers,
   go-to-definition, and document symbols.
 - Highlights FlowArrow declarations, type aliases, imports, combinators,
@@ -29,8 +30,8 @@ code --extensionDevelopmentPath="$(pwd)"
 ```
 
 Build the FlowArrow CLI first from the repository root so the extension can use
-`../../target/debug/flowarrow`. If you want to use another executable, set
-`flowarrow.server.path` in VS Code.
+`../../target/debug/flowarrow` for language server and formatter features. If
+you want to use another executable, set `flowarrow.server.path` in VS Code.
 
 ## Package locally
 

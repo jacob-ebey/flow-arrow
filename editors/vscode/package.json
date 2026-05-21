@@ -22,7 +22,7 @@
         "flowarrow.server.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the FlowArrow executable used for language server features."
+          "description": "Path to the FlowArrow executable used for language server and formatting features."
         }
       }
     },

@@ -10,7 +10,7 @@ async function activate(context) {
   diagnostics = vscode.languages.createDiagnosticCollection("flowarrow");
   context.subscriptions.push(diagnostics);
 
-  const output = vscode.window.createOutputChannel("FlowArrow Language Server");
+  const output = vscode.window.createOutputChannel("FlowArrow");
   context.subscriptions.push(output);
 
   client = new LspClient(context, output, diagnostics);
@@ -32,6 +32,10 @@ async function activate(context) {
     vscode.languages.registerDocumentSymbolProvider(
       "flowarrow",
       new DocumentSymbolProvider(client),
+    ),
+    vscode.languages.registerDocumentFormattingEditProvider(
+      "flowarrow",
+      new FormattingProvider(context, output),
     ),
   );
 
@@ -327,6 +331,34 @@ class DocumentSymbolProvider {
   }
 }
 
+class FormattingProvider {
+  constructor(context, output) {
+    this.context = context;
+    this.output = output;
+  }
+
+  async provideDocumentFormattingEdits(document) {
+    if (!isFlowArrowDocument(document)) {
+      return [];
+    }
+
+    let formatted;
+    try {
+      formatted = await formatDocument(this.context, document, this.output);
+    } catch (error) {
+      const message = error.message || String(error);
+      this.output.appendLine(`FlowArrow format failed: ${message}`);
+      vscode.window.showErrorMessage(`FlowArrow format failed: ${message}`);
+      return [];
+    }
+
+    if (formatted === document.getText()) {
+      return [];
+    }
+    return [vscode.TextEdit.replace(fullDocumentRange(document), formatted)];
+  }
+}
+
 function resolveServerPath(context) {
   const configured = vscode.workspace.getConfiguration("flowarrow.server").get("path");
   if (configured && configured.trim()) {
@@ -356,6 +388,50 @@ function workspaceRootUri() {
 
 function isFlowArrowDocument(document) {
   return document.languageId === "flowarrow" && document.uri.scheme === "file";
+}
+
+async function formatDocument(context, document, output) {
+  const command = resolveServerPath(context);
+  output.appendLine(`Running ${command} fmt --stdin`);
+  return await execFile(
+    command,
+    ["fmt", "--stdin"],
+    { cwd: workspaceRoot() || context.extensionPath },
+    document.getText(),
+  );
+}
+
+function execFile(command, args, options, input) {
+  return new Promise((resolve, reject) => {
+    const child = cp.spawn(command, args, {
+      ...options,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const stdoutText = Buffer.concat(stdout).toString("utf8");
+      const stderrText = Buffer.concat(stderr).toString("utf8").trim();
+      if (code !== 0) {
+        reject(new Error(stderrText || `flowarrow fmt exited with code ${code}`));
+        return;
+      }
+      if (stderrText) {
+        reject(new Error(stderrText));
+        return;
+      }
+      resolve(stdoutText);
+    });
+    child.stdin.end(input);
+  });
+}
+
+function fullDocumentRange(document) {
+  const lastLine = document.lineAt(document.lineCount - 1);
+  return new vscode.Range(0, 0, lastLine.range.end.line, lastLine.range.end.character);
 }
 
 function fromPosition(position) {
