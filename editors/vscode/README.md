@@ -1,11 +1,13 @@
 # FlowArrow VS Code extension
 
-This extension adds syntax highlighting and editor language configuration for
-FlowArrow source files.
+This extension adds syntax highlighting, editor language configuration, and
+language server features for FlowArrow source files.
 
 ## Features
 
 - Registers `.flow` and `.flowarrow` files as FlowArrow.
+- Starts `flowarrow lsp` for completions, diagnostics, hovers,
+  go-to-definition, and document symbols.
 - Highlights FlowArrow declarations, type aliases, imports, combinators,
   comments, strings, literals, types, punctuation, and the `->` flow arrow.
 - Gives `$`-prefixed variables a dedicated scope so they can be colored
@@ -25,6 +27,10 @@ From this directory:
 ```sh
 code --extensionDevelopmentPath="$(pwd)"
 ```
+
+Build the FlowArrow CLI first from the repository root so the extension can use
+`../../target/debug/flowarrow`. If you want to use another executable, set
+`flowarrow.server.path` in VS Code.
 
 ## Package locally
 

@@ -4,8 +4,10 @@ use std::process::{Command, Stdio};
 
 mod ast;
 mod codegen;
+mod diagnostic;
 mod fmt;
 mod lexer;
+mod lsp;
 mod mermaid;
 mod module_resolver;
 mod parser;
@@ -13,6 +15,10 @@ mod stdlib;
 mod typecheck;
 
 pub use fmt::{check_file as check_format_file, format_file, format_source};
+
+pub fn run_lsp_server() -> Result<u8, String> {
+    lsp::run_server()
+}
 
 pub fn run_file(path: &Path) -> Result<u8, String> {
     run_file_with_args(path, std::iter::empty::<String>())

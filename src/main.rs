@@ -102,6 +102,12 @@ fn run_cli() -> Result<u8, String> {
             print!("{graph}");
             Ok(0)
         }
-        _ => Err("usage: flowarrow <run|build|typecheck|fmt|graph> ...".to_string()),
+        Some("lsp") => {
+            if args.next().is_some() {
+                return Err("usage: flowarrow lsp".to_string());
+            }
+            flowarrow::run_lsp_server()
+        }
+        _ => Err("usage: flowarrow <run|build|typecheck|fmt|graph|lsp> ...".to_string()),
     }
 }

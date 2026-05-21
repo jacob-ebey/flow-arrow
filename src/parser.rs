@@ -1,21 +1,26 @@
 use crate::ast::*;
-use crate::lexer::{Token, lex};
+use crate::diagnostic::{SourceDiagnostic, SourceSpan};
+use crate::lexer::{SpannedToken, Token, lex_spanned};
 
 pub fn parse(source: &str) -> Result<Module, String> {
+    parse_diagnostic(source).map_err(|error| error.message)
+}
+
+pub fn parse_diagnostic(source: &str) -> Result<Module, SourceDiagnostic> {
     Parser {
-        tokens: lex(source)?,
+        tokens: lex_spanned(source)?,
         pos: 0,
     }
     .parse_module()
 }
 
 struct Parser {
-    tokens: Vec<Token>,
+    tokens: Vec<SpannedToken>,
     pos: usize,
 }
 
 impl Parser {
-    fn parse_module(&mut self) -> Result<Module, String> {
+    fn parse_module(&mut self) -> Result<Module, SourceDiagnostic> {
         let mut declarations = Vec::new();
         while !self.at_eof() {
             declarations.push(self.parse_decl()?);
@@ -23,7 +28,7 @@ impl Parser {
         Ok(Module { declarations })
     }
 
-    fn parse_decl(&mut self) -> Result<Decl, String> {
+    fn parse_decl(&mut self) -> Result<Decl, SourceDiagnostic> {
         match self.peek_ident() {
             Some("type") => {
                 self.bump();
@@ -41,25 +46,27 @@ impl Parser {
                 self.bump();
                 Ok(Decl::Program(self.parse_callable()?))
             }
-            _ => Err(format!("expected declaration, found {:?}", self.peek())),
+            _ => Err(self.error_here(format!("expected declaration, found {:?}", self.peek()))),
         }
     }
 
-    fn parse_type_alias(&mut self) -> Result<TypeAlias, String> {
+    fn parse_type_alias(&mut self) -> Result<TypeAlias, SourceDiagnostic> {
         let name = self.expect_ident()?;
         self.expect(Token::Equal)?;
         let ty = self.parse_type_name()?;
         Ok(TypeAlias { name, ty })
     }
 
-    fn parse_import(&mut self) -> Result<Import, String> {
+    fn parse_import(&mut self) -> Result<Import, SourceDiagnostic> {
         let source = match self.peek().clone() {
             Token::String(path) => {
                 self.bump();
                 ImportSource::Local(path)
             }
             Token::Ident(_) => ImportSource::Module(self.parse_qualified_ident()?),
-            other => return Err(format!("expected import source, found {other:?}")),
+            other => {
+                return Err(self.error_here(format!("expected import source, found {other:?}")));
+            }
         };
         let clause = match self.peek_ident() {
             Some("as") => {
@@ -93,7 +100,7 @@ impl Parser {
         Ok(Import { source, clause })
     }
 
-    fn parse_callable(&mut self) -> Result<Callable, String> {
+    fn parse_callable(&mut self) -> Result<Callable, SourceDiagnostic> {
         let name = self.expect_ident()?;
         self.expect(Token::LParen)?;
         let inputs = if self.eat(Token::RParen) {
@@ -114,7 +121,7 @@ impl Parser {
         })
     }
 
-    fn parse_port_or_list(&mut self) -> Result<Vec<Port>, String> {
+    fn parse_port_or_list(&mut self) -> Result<Vec<Port>, SourceDiagnostic> {
         if self.eat(Token::LParen) {
             let ports = self.parse_port_list()?;
             self.expect(Token::RParen)?;
@@ -124,7 +131,7 @@ impl Parser {
         }
     }
 
-    fn parse_port_list(&mut self) -> Result<Vec<Port>, String> {
+    fn parse_port_list(&mut self) -> Result<Vec<Port>, SourceDiagnostic> {
         let mut ports = vec![self.parse_port()?];
         while self.eat(Token::Comma) {
             ports.push(self.parse_port()?);
@@ -132,14 +139,14 @@ impl Parser {
         Ok(ports)
     }
 
-    fn parse_port(&mut self) -> Result<Port, String> {
+    fn parse_port(&mut self) -> Result<Port, SourceDiagnostic> {
         let name = self.expect_ident()?;
         self.expect(Token::Colon)?;
         let ty = self.parse_type_name()?;
         Ok(Port { name, ty })
     }
 
-    fn parse_type_name(&mut self) -> Result<String, String> {
+    fn parse_type_name(&mut self) -> Result<String, SourceDiagnostic> {
         let mut text = String::new();
         let mut depth = 0usize;
         loop {
@@ -194,17 +201,23 @@ impl Parser {
                 {
                     break;
                 }
-                other if text.is_empty() => return Err(format!("expected type, found {other:?}")),
-                other => return Err(format!("unexpected token in type `{text}`: {other:?}")),
+                other if text.is_empty() => {
+                    return Err(self.error_here(format!("expected type, found {other:?}")));
+                }
+                other => {
+                    return Err(
+                        self.error_here(format!("unexpected token in type `{text}`: {other:?}"))
+                    );
+                }
             }
         }
         if depth != 0 {
-            return Err(format!("unterminated type `{text}`"));
+            return Err(self.error_here(format!("unterminated type `{text}`")));
         }
         Ok(text)
     }
 
-    fn parse_block(&mut self) -> Result<Vec<Chain>, String> {
+    fn parse_block(&mut self) -> Result<Vec<Chain>, SourceDiagnostic> {
         self.expect(Token::LBrace)?;
         let mut chains = Vec::new();
         while !self.eat(Token::RBrace) {
@@ -213,19 +226,19 @@ impl Parser {
         Ok(chains)
     }
 
-    fn parse_chain(&mut self) -> Result<Chain, String> {
+    fn parse_chain(&mut self) -> Result<Chain, SourceDiagnostic> {
         let source = self.parse_endpoint()?;
         let mut stages = Vec::new();
         while self.eat(Token::Arrow) {
             stages.push(self.parse_stage()?);
         }
         if stages.is_empty() {
-            return Err("chain must contain at least one `->` stage".to_string());
+            return Err(self.error_here("chain must contain at least one `->` stage"));
         }
         Ok(Chain { source, stages })
     }
 
-    fn parse_stage(&mut self) -> Result<Stage, String> {
+    fn parse_stage(&mut self) -> Result<Stage, SourceDiagnostic> {
         match self.peek_ident() {
             Some("map") => {
                 self.bump();
@@ -255,7 +268,11 @@ impl Parser {
                 self.expect(Token::Less)?;
                 let count = match self.peek().clone() {
                     Token::Variable(_) | Token::Int(_) => self.parse_endpoint()?,
-                    other => return Err(format!("expected repeat count, found {other:?}")),
+                    other => {
+                        return Err(
+                            self.error_here(format!("expected repeat count, found {other:?}"))
+                        );
+                    }
                 };
                 self.expect(Token::Greater)?;
                 let node = self.expect_ident()?;
@@ -289,14 +306,14 @@ impl Parser {
         }
     }
 
-    fn parse_match_stage(&mut self) -> Result<Stage, String> {
+    fn parse_match_stage(&mut self) -> Result<Stage, SourceDiagnostic> {
         self.expect_keyword("match")?;
         self.expect(Token::LBrace)?;
         let mut arms = Vec::new();
         let mut saw_fallback = false;
         while !self.eat(Token::RBrace) {
             if saw_fallback {
-                return Err("`match` fallback arm must be last".to_string());
+                return Err(self.error_here("`match` fallback arm must be last"));
             }
             let guard = if self.peek_ident() == Some("_") {
                 self.bump();
@@ -326,22 +343,22 @@ impl Parser {
             arms.push(MatchArm { guard, target });
         }
         if arms.is_empty() {
-            return Err("`match` must contain at least one arm".to_string());
+            return Err(self.error_here("`match` must contain at least one arm"));
         }
         if !saw_fallback {
-            return Err("`match` must end with a `_` fallback arm".to_string());
+            return Err(self.error_here("`match` must end with a `_` fallback arm"));
         }
         Ok(Stage::Match { arms })
     }
 
-    fn parse_match_target(&mut self) -> Result<MatchTarget, String> {
+    fn parse_match_target(&mut self) -> Result<MatchTarget, SourceDiagnostic> {
         match self.peek() {
             Token::Ident(_) => Ok(MatchTarget::Node(self.parse_qualified_ident()?)),
             _ => Ok(MatchTarget::Value(self.parse_endpoint()?)),
         }
     }
 
-    fn parse_endpoint(&mut self) -> Result<Endpoint, String> {
+    fn parse_endpoint(&mut self) -> Result<Endpoint, SourceDiagnostic> {
         match self.peek().clone() {
             Token::Variable(name) => {
                 self.bump();
@@ -365,12 +382,14 @@ impl Parser {
             }
             Token::LParen => self.parse_tuple_or_unit(),
             Token::LBracket => self.parse_seq(),
-            Token::Ident(name) => Err(format!("expected variable `$` prefix for value `{name}`")),
-            other => Err(format!("expected endpoint, found {other:?}")),
+            Token::Ident(name) => {
+                Err(self.error_here(format!("expected variable `$` prefix for value `{name}`")))
+            }
+            other => Err(self.error_here(format!("expected endpoint, found {other:?}"))),
         }
     }
 
-    fn parse_tuple_or_unit(&mut self) -> Result<Endpoint, String> {
+    fn parse_tuple_or_unit(&mut self) -> Result<Endpoint, SourceDiagnostic> {
         self.expect(Token::LParen)?;
         if self.eat(Token::RParen) {
             return Ok(Endpoint::Unit);
@@ -385,7 +404,7 @@ impl Parser {
         Ok(Endpoint::Tuple(items))
     }
 
-    fn parse_seq(&mut self) -> Result<Endpoint, String> {
+    fn parse_seq(&mut self) -> Result<Endpoint, SourceDiagnostic> {
         self.expect(Token::LBracket)?;
         let mut items = Vec::new();
         if self.eat(Token::RBracket) {
@@ -405,7 +424,7 @@ impl Parser {
         Ok(Endpoint::Seq(items))
     }
 
-    fn parse_qualified_ident(&mut self) -> Result<String, String> {
+    fn parse_qualified_ident(&mut self) -> Result<String, SourceDiagnostic> {
         let mut name = self.expect_ident()?;
         while self.eat(Token::Dot) {
             name.push('.');
@@ -414,45 +433,47 @@ impl Parser {
         Ok(name)
     }
 
-    fn expect_keyword(&mut self, keyword: &str) -> Result<(), String> {
+    fn expect_keyword(&mut self, keyword: &str) -> Result<(), SourceDiagnostic> {
         match self.peek_ident() {
             Some(found) if found == keyword => {
                 self.bump();
                 Ok(())
             }
-            _ => Err(format!(
+            _ => Err(self.error_here(format!(
                 "expected keyword `{keyword}`, found {:?}",
                 self.peek()
-            )),
+            ))),
         }
     }
 
-    fn expect_ident(&mut self) -> Result<String, String> {
+    fn expect_ident(&mut self) -> Result<String, SourceDiagnostic> {
         match self.peek().clone() {
             Token::Ident(name) => {
                 self.bump();
                 Ok(name)
             }
-            other => Err(format!("expected identifier, found {other:?}")),
+            other => Err(self.error_here(format!("expected identifier, found {other:?}"))),
         }
     }
 
-    fn expect_variable(&mut self) -> Result<String, String> {
+    fn expect_variable(&mut self) -> Result<String, SourceDiagnostic> {
         match self.peek().clone() {
             Token::Variable(name) => {
                 self.bump();
                 Ok(name)
             }
-            Token::Ident(name) => Err(format!("expected variable `$` prefix for `{name}`")),
-            other => Err(format!("expected variable, found {other:?}")),
+            Token::Ident(name) => {
+                Err(self.error_here(format!("expected variable `$` prefix for `{name}`")))
+            }
+            other => Err(self.error_here(format!("expected variable, found {other:?}"))),
         }
     }
 
-    fn expect(&mut self, expected: Token) -> Result<(), String> {
+    fn expect(&mut self, expected: Token) -> Result<(), SourceDiagnostic> {
         if self.eat(expected.clone()) {
             Ok(())
         } else {
-            Err(format!("expected {expected:?}, found {:?}", self.peek()))
+            Err(self.error_here(format!("expected {expected:?}, found {:?}", self.peek())))
         }
     }
 
@@ -473,7 +494,15 @@ impl Parser {
     }
 
     fn peek(&self) -> &Token {
-        &self.tokens[self.pos]
+        &self.tokens[self.pos].token
+    }
+
+    fn span(&self) -> SourceSpan {
+        self.tokens[self.pos].span
+    }
+
+    fn error_here(&self, message: impl Into<String>) -> SourceDiagnostic {
+        SourceDiagnostic::new(message, self.span())
     }
 
     fn bump(&mut self) {

@@ -431,6 +431,10 @@ pub fn module_symbols(module: &str) -> impl Iterator<Item = &'static StdSymbol> 
     SYMBOLS.iter().filter(move |symbol| symbol.module == module)
 }
 
+pub fn all_symbols() -> impl Iterator<Item = &'static StdSymbol> {
+    SYMBOLS.iter()
+}
+
 pub fn find_export(module: &str, name: &str) -> Option<&'static StdSymbol> {
     SYMBOLS
         .iter()

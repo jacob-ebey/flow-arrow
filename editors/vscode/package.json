@@ -1,17 +1,31 @@
 {
   "name": "flowarrow-vscode",
   "displayName": "FlowArrow",
-  "description": "Syntax highlighting and language configuration for FlowArrow source files.",
+  "description": "Syntax highlighting and language server support for FlowArrow source files.",
   "version": "0.1.0",
   "publisher": "flowarrow",
   "license": "MIT",
   "engines": {
     "vscode": "^1.84.0"
   },
+  "activationEvents": [
+    "onLanguage:flowarrow"
+  ],
+  "main": "./extension.js",
   "categories": [
     "Programming Languages"
   ],
   "contributes": {
+    "configuration": {
+      "title": "FlowArrow",
+      "properties": {
+        "flowarrow.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the FlowArrow executable used for language server features."
+        }
+      }
+    },
     "languages": [
       {
         "id": "flowarrow",
