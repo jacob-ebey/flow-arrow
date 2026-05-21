@@ -383,9 +383,10 @@ impl<'a> Checker<'a> {
                 Stage::FaultMap { node, .. } | Stage::Repeat { node, .. } => {
                     self.symbol_effect(node) == Effect::Io
                 }
-                Stage::Match { arms } => arms
-                    .iter()
-                    .any(|arm| self.symbol_effect(&arm.node) == Effect::Io),
+                Stage::Match { arms } => arms.iter().any(|arm| match &arm.target {
+                    MatchTarget::Node(node) => self.symbol_effect(node) == Effect::Io,
+                    MatchTarget::Value(_) => false,
+                }),
                 Stage::Endpoint(_) => false,
             })
         })
@@ -925,10 +926,13 @@ impl<'a> Checker<'a> {
                 }
             }
 
-            let arm_output = self.apply_node(callable, kind, &arm.node, input, false)?;
+            let arm_output = match &arm.target {
+                MatchTarget::Node(node) => self.apply_node(callable, kind, node, input, false)?,
+                MatchTarget::Value(endpoint) => self.endpoint_type(endpoint, env)?,
+            };
             if let Some(expected) = &result {
                 self.expect_type(
-                    &format!("match arm `{}` result", arm.node),
+                    &format!("match arm `{}` result", format_match_target(&arm.target)),
                     &arm_output,
                     expected,
                 )?;
@@ -1007,6 +1011,39 @@ fn single_or_tuple(mut items: Vec<Type>) -> Type {
     } else {
         Type::Tuple(items)
     }
+}
+
+fn format_match_target(target: &MatchTarget) -> String {
+    match target {
+        MatchTarget::Node(node) => node.clone(),
+        MatchTarget::Value(endpoint) => format_endpoint_for_error(endpoint),
+    }
+}
+
+fn format_endpoint_for_error(endpoint: &Endpoint) -> String {
+    match endpoint {
+        Endpoint::Variable(name) => format!("${name}"),
+        Endpoint::Name(name) => name.clone(),
+        Endpoint::Int(value) => value.to_string(),
+        Endpoint::Real(value) => value.to_string(),
+        Endpoint::Bool(value) => value.to_string(),
+        Endpoint::String(value) => format!("{value:?}"),
+        Endpoint::Unit => "()".to_string(),
+        Endpoint::Tuple(items) => format_endpoint_list_for_error(items, "(", ")"),
+        Endpoint::Seq(items) => format_endpoint_list_for_error(items, "[", "]"),
+    }
+}
+
+fn format_endpoint_list_for_error(items: &[Endpoint], open: &str, close: &str) -> String {
+    let mut output = String::from(open);
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            output.push_str(", ");
+        }
+        output.push_str(&format_endpoint_for_error(item));
+    }
+    output.push_str(close);
+    output
 }
 
 fn stdlib_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, String> {

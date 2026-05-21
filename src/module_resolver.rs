@@ -416,7 +416,10 @@ fn rewrite_callable(
                             }
                             MatchGuard::Fallback => {}
                         }
-                        rewrite_name(&mut arm.node, references);
+                        match &mut arm.target {
+                            MatchTarget::Node(node) => rewrite_name(node, references),
+                            MatchTarget::Value(endpoint) => rewrite_endpoint(endpoint, references),
+                        }
                     }
                 }
             }

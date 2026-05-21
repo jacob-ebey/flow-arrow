@@ -137,7 +137,7 @@ impl MermaidEmitter {
                                 self.edges(&arg_nodes, &operation, Some("guard arg"), "    ");
                             }
                         }
-                        let branch = self.node(&arm.node, "    ");
+                        let branch = self.node(&match_target_label(&arm.target), "    ");
                         self.edge(
                             &operation,
                             &branch,
@@ -316,6 +316,13 @@ fn match_guard_label(guard: &MatchGuard) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+    }
+}
+
+fn match_target_label(target: &MatchTarget) -> String {
+    match target {
+        MatchTarget::Node(node) => node.clone(),
+        MatchTarget::Value(endpoint) => endpoint_label(endpoint),
     }
 }
 

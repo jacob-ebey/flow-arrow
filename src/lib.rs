@@ -294,7 +294,10 @@ mod tests {
                 ast::Decl::TypeAlias(_) | ast::Decl::Import(_) => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["main", "verse_for", "final_verse_node"]);
+        assert_eq!(
+            names,
+            vec!["main", "verse_for", "bottle_word", "final_verse_node"]
+        );
     }
 
     #[test]
@@ -410,6 +413,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_and_typechecks_match_inline_value_targets() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { eq }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> match {
+                    eq(0) -> 0
+                    _ -> 1
+                } -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+    }
+
+    #[test]
     fn parse_rejects_match_without_fallback() {
         let source = r#"
             import std.cli { Args }
@@ -503,6 +523,24 @@ mod tests {
         let module = parser::parse(source).expect("parse");
         let error = typecheck::check_module(&module).expect_err("typecheck should fail");
         assert!(error.contains("match arm `bytes` result"));
+    }
+
+    #[test]
+    fn typecheck_rejects_match_inline_value_output_mismatch() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { eq }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> match {
+                    eq(0) -> 0
+                    _ -> "bad"
+                } -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("match arm `\"bad\"` result"));
     }
 
     #[test]
@@ -1227,6 +1265,35 @@ mod tests {
         assert!(
             output.status.success(),
             "match laziness failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn llvm_backend_match_emits_inline_value_targets() {
+        let root = unique_temp_root("match-inline-values");
+        let path = root.join("main.flow");
+        fs::write(
+            &path,
+            r#"
+                import std.cli { Args }
+                import std.math { eq }
+
+                program main(args: Args) -> exit_code: Int {
+                    0 -> match {
+                        eq(0) -> 0
+                        _ -> 1
+                    } -> $exit_code
+                }
+            "#,
+        )
+        .expect("write source");
+
+        let build = build_file(&path, None).expect("build");
+        let output = Command::new(&build.executable).output().expect("run");
+        assert!(
+            output.status.success(),
+            "inline match values failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }

@@ -315,7 +315,7 @@ impl<'a> TypedCodegen<'a> {
             | Stage::FaultMap { node: name, .. } => self.is_cv_runtime_name(name),
             Stage::Reduce { op, .. } | Stage::Scan { op, .. } => self.is_cv_runtime_name(op),
             Stage::Match { arms } => arms.iter().any(|arm| {
-                self.is_cv_runtime_name(&arm.node)
+                matches!(&arm.target, MatchTarget::Node(node) if self.is_cv_runtime_name(node))
                     || matches!(
                         &arm.guard,
                         MatchGuard::Call { node, .. } if self.is_cv_runtime_name(node)
@@ -350,7 +350,7 @@ impl<'a> TypedCodegen<'a> {
             | Stage::FaultMap { node: name, .. } => self.is_http_runtime_name(name),
             Stage::Reduce { op, .. } | Stage::Scan { op, .. } => self.is_http_runtime_name(op),
             Stage::Match { arms } => arms.iter().any(|arm| {
-                self.is_http_runtime_name(&arm.node)
+                matches!(&arm.target, MatchTarget::Node(node) if self.is_http_runtime_name(node))
                     || matches!(
                         &arm.guard,
                         MatchGuard::Call { node, .. } if self.is_http_runtime_name(node)
@@ -404,7 +404,7 @@ impl<'a> TypedCodegen<'a> {
             | Stage::FaultMap { node: name, .. } => self.is_sqlite_runtime_name(name),
             Stage::Reduce { op, .. } | Stage::Scan { op, .. } => self.is_sqlite_runtime_name(op),
             Stage::Match { arms } => arms.iter().any(|arm| {
-                self.is_sqlite_runtime_name(&arm.node)
+                matches!(&arm.target, MatchTarget::Node(node) if self.is_sqlite_runtime_name(node))
                     || matches!(
                         &arm.guard,
                         MatchGuard::Call { node, .. } if self.is_sqlite_runtime_name(node)
@@ -1157,7 +1157,7 @@ impl<'a> TypedCodegen<'a> {
         let first = arms
             .first()
             .ok_or_else(|| "`match` must contain at least one arm".to_string())?;
-        let output_ty = self.call_output_type(&first.node, &subject.ty)?;
+        let output_ty = self.match_target_type(&first.target, &subject.ty, env)?;
         let c_ty = self.types.c_type(&output_ty);
         let target = self.next_temp();
         out.push_str(&format!("  {c_ty} {target};\n"));
@@ -1173,13 +1173,13 @@ impl<'a> TypedCodegen<'a> {
                     } else {
                         out.push_str("  else {\n");
                     }
-                    self.emit_assign_call(
+                    self.emit_assign_match_target(
                         out,
                         &target,
                         &output_ty,
-                        &arm.node,
-                        &subject.code,
-                        &subject.ty,
+                        &arm.target,
+                        &subject,
+                        env,
                     )?;
                     out.push_str("  }\n");
                 }
@@ -1208,13 +1208,13 @@ impl<'a> TypedCodegen<'a> {
                         &guard_input.ty,
                     )?;
                     out.push_str(&format!("  if ({guard}) {{\n"));
-                    self.emit_assign_call(
+                    self.emit_assign_match_target(
                         out,
                         &target,
                         &output_ty,
-                        &arm.node,
-                        &subject.code,
-                        &subject.ty,
+                        &arm.target,
+                        &subject,
+                        env,
                     )?;
                     out.push_str("  }\n");
                 }
@@ -1230,6 +1230,78 @@ impl<'a> TypedCodegen<'a> {
             code: target,
             ty: output_ty,
         })
+    }
+
+    fn match_target_type(
+        &self,
+        target: &MatchTarget,
+        subject_ty: &Ty,
+        env: &HashMap<String, Value>,
+    ) -> Result<Ty, String> {
+        match target {
+            MatchTarget::Node(node) => self.call_output_type(node, subject_ty),
+            MatchTarget::Value(endpoint) => self.endpoint_value_type(endpoint, env),
+        }
+    }
+
+    fn endpoint_value_type(
+        &self,
+        endpoint: &Endpoint,
+        env: &HashMap<String, Value>,
+    ) -> Result<Ty, String> {
+        match endpoint {
+            Endpoint::Variable(name) => env
+                .get(name)
+                .map(|value| value.ty.clone())
+                .ok_or_else(|| format!("unknown value `{name}`")),
+            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
+            Endpoint::Int(_) => Ok(Ty::Int),
+            Endpoint::Real(_) => Ok(Ty::Real),
+            Endpoint::Bool(_) => Ok(Ty::Bool),
+            Endpoint::String(_) => Ok(Ty::Bytes),
+            Endpoint::Unit => Ok(Ty::Unit),
+            Endpoint::Tuple(items) => {
+                let mut types = Vec::with_capacity(items.len());
+                for item in items {
+                    types.push(self.endpoint_value_type(item, env)?);
+                }
+                Ok(Ty::Tuple(types))
+            }
+            Endpoint::Seq(items) => {
+                let mut item_ty = None;
+                for item in items {
+                    let ty = self.endpoint_value_type(item, env)?;
+                    if let Some(expected) = &item_ty {
+                        item_ty = Some(sequence_item_type(expected, &ty)?);
+                    } else {
+                        item_ty = Some(ty);
+                    }
+                }
+                let item_ty = item_ty
+                    .ok_or_else(|| "empty sequence literals need a type context".to_string())?;
+                Ok(Ty::Seq(Box::new(item_ty)))
+            }
+        }
+    }
+
+    fn emit_assign_match_target(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        arm_target: &MatchTarget,
+        subject: &Value,
+        env: &HashMap<String, Value>,
+    ) -> Result<(), String> {
+        match arm_target {
+            MatchTarget::Node(node) => {
+                self.emit_assign_call(out, target, output_ty, node, &subject.code, &subject.ty)
+            }
+            MatchTarget::Value(endpoint) => {
+                let value = self.emit_endpoint(out, endpoint, env)?;
+                self.emit_assign_value(out, target, output_ty, &value)
+            }
+        }
     }
 
     fn emit_match_guard_input(
@@ -3694,7 +3766,13 @@ impl<'a> TypedCodegen<'a> {
                     && self.is_parallel_safe_name(op, visiting)
             }
             Stage::Match { arms } => arms.iter().all(|arm| {
-                self.is_parallel_safe_name(&arm.node, visiting)
+                let target_safe = match &arm.target {
+                    MatchTarget::Node(node) => self.is_parallel_safe_name(node, visiting),
+                    MatchTarget::Value(endpoint) => {
+                        self.is_parallel_safe_endpoint(endpoint, visiting)
+                    }
+                };
+                target_safe
                     && match &arm.guard {
                         MatchGuard::Call { node, args } => {
                             self.is_parallel_safe_name(node, visiting)

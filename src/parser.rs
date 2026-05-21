@@ -322,8 +322,8 @@ impl Parser {
                 MatchGuard::Call { node, args }
             };
             self.expect(Token::Arrow)?;
-            let node = self.parse_qualified_ident()?;
-            arms.push(MatchArm { guard, node });
+            let target = self.parse_match_target()?;
+            arms.push(MatchArm { guard, target });
         }
         if arms.is_empty() {
             return Err("`match` must contain at least one arm".to_string());
@@ -332,6 +332,13 @@ impl Parser {
             return Err("`match` must end with a `_` fallback arm".to_string());
         }
         Ok(Stage::Match { arms })
+    }
+
+    fn parse_match_target(&mut self) -> Result<MatchTarget, String> {
+        match self.peek() {
+            Token::Ident(_) => Ok(MatchTarget::Node(self.parse_qualified_ident()?)),
+            _ => Ok(MatchTarget::Value(self.parse_endpoint()?)),
+        }
     }
 
     fn parse_endpoint(&mut self) -> Result<Endpoint, String> {

@@ -341,10 +341,11 @@ match_comb     ::= "match" "{"
                    fallback_arm
                    "}"
 
-match_arm      ::= match_guard "->" node_ref
+match_arm      ::= match_guard "->" match_target
 match_guard    ::= node_ref "(" match_args? ")"
 match_args     ::= endpoint ("," endpoint)* ","?
-fallback_arm   ::= "_" "->" node_ref
+match_target   ::= node_ref | endpoint
+fallback_arm   ::= "_" "->" match_target
 
 stencil_comb   ::= "stencil2d" "radius" "<" INT ">" IDENT
 
@@ -380,11 +381,13 @@ Notes:
 - `select` is invoked as `(predicate, when_true, when_false) -> select`.
   Both candidate values are ordinary graph inputs and are evaluated
   eagerly before `select` runs.
-- `match` is invoked as `$value -> match { guard(args...) -> node _ -> fallback }`.
-  The upstream value is implicitly prepended to each guard and selected arm node.
+- `match` is invoked as `$value -> match { guard(args...) -> target _ -> fallback }`.
+  The upstream value is implicitly prepended to each guard and selected arm node
+  target.
+  Arm targets may be node references or inline endpoint values such as literals.
   Guards must be pure nodes returning `Bool`, are evaluated top-to-bottom, and
-  short-circuit after the first `true` guard. Only the selected arm node is
-  evaluated. All arm nodes must return the same type. A `_` fallback arm is
+  short-circuit after the first `true` guard. Only the selected arm target is
+  evaluated. All arm targets must return the same type. A `_` fallback arm is
   required and must be last.
 - `grid<...>` introduces shape-indexed parallelism. Each `grid_dim`
   may be an integer literal, a compile-time identifier (shape
@@ -542,10 +545,11 @@ repeat_comb    ::= "repeat" "<" repeat_count ">" IDENT
 repeat_count   ::= INT | variable_ref
 select_comb    ::= "select"
 match_comb      ::= "match" "{" match_arm+ fallback_arm "}"
-match_arm       ::= match_guard "->" node_ref
+match_arm       ::= match_guard "->" match_target
 match_guard     ::= node_ref "(" match_args? ")"
 match_args      ::= endpoint ("," endpoint)* ","?
-fallback_arm    ::= "_" "->" node_ref
+match_target    ::= node_ref | endpoint
+fallback_arm    ::= "_" "->" match_target
 stencil_comb   ::= "stencil2d" "radius" "<" INT ">" IDENT
 grid_comb      ::= "grid" "<" grid_dim ("," grid_dim)* ">" grid_body
 grid_dim       ::= IDENT | INT | variable_ref

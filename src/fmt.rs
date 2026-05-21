@@ -480,7 +480,14 @@ fn format_match_arm(arm: &MatchArm) -> String {
                 .join(", ")
         ),
     };
-    format!("{guard} -> {}", arm.node)
+    format!("{guard} -> {}", format_match_target(&arm.target))
+}
+
+fn format_match_target(target: &MatchTarget) -> String {
+    match target {
+        MatchTarget::Node(node) => node.clone(),
+        MatchTarget::Value(endpoint) => format_endpoint(endpoint),
+    }
 }
 
 fn format_endpoint(endpoint: &Endpoint) -> String {
@@ -741,6 +748,22 @@ node zero(x: Int) -> y: Int {
 
 node one(x: Int) -> y: Int {
     1 -> $y
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn formats_match_inline_value_targets() {
+        assert_formats(
+            r#"program main(args:Args)->exit_code:Int{0->match{eq(0)->0 _->1}->$exit_code}"#,
+            r#"program main(args: Args) -> exit_code: Int {
+    0
+    -> match {
+        eq(0) -> 0
+        _ -> 1
+    }
+    -> $exit_code
 }
 "#,
         );

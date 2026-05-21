@@ -8,15 +8,15 @@
 #   - concatenating verses in order via reduce on an associative,
 #     non-commutative operator (byte concatenation)
 #   - emitting the final "no more bottles" verse as a join, not a branch
-#   - grammatical pluralisation via the pure `select` combinator
-#     ("1 bottle" vs "N bottles") — no `if` in the graph
+#   - grammatical pluralisation via `match`
+#     ("1 bottle" vs "N bottles") with statically visible alternatives
 #
 # Dataflow shape:
 #
 #   ()  ─> range_step(99, 0, -1) ─> indices
 #       indices ─> map verse_for ─> verses
 #       verses ─> reduce concat_bytes(identity: "") ─> body
-#       (body, final_verse) ─> concat2 ─> write_stdout ─> exit_code
+#       (body, final_verse) ─> concat_bytes ─> write_stdout ─> exit_code
 import std.bytes { concat_bytes }
 import std.cli { Args }
 import std.io { write_stdout }
@@ -42,12 +42,10 @@ node verse_for(n: Int) -> v: Bytes {
     ($n, 1) -> sub        -> $m
     $m      -> format_int -> $m_str
 
-    # Pluralisation: "bottle" when count == 1, "bottles" otherwise.
-    # Pure data selection — no branch hides in the graph.
-    ($n, 1)                          -> eq     -> $n_is_one
-    ($m, 1)                          -> eq     -> $m_is_one
-    ($n_is_one, "bottle", "bottles") -> select -> $n_word
-    ($m_is_one, "bottle", "bottles") -> select -> $m_word
+    # Pluralisation: `match` exposes both static alternatives while evaluating
+    # only the selected word producer for each count.
+    $n -> bottle_word -> $n_word
+    $m -> bottle_word -> $m_word
 
     # Line 1: "{n} {n_word} of beer on the wall, {n} {n_word} of beer.\n"
     [$n_str, " ", $n_word, " of beer on the wall, ", $n_str, " ", $n_word, " of beer.\n"] -> concat_bytes -> $line1
@@ -56,6 +54,15 @@ node verse_for(n: Int) -> v: Bytes {
     ["Take one down and pass it around, ", $m_str, " ", $m_word, " of beer on the wall.\n\n"] -> concat_bytes -> $line2
 
     [$line1, $line2] -> concat_bytes -> $v
+}
+
+node bottle_word(n: Int) -> word: Bytes {
+    $n
+    -> match {
+        eq(1) -> "bottle"
+        _ -> "bottles"
+    }
+    -> $word
 }
 
 # Final verse: "No more bottles of beer on the wall, no more bottles of beer.

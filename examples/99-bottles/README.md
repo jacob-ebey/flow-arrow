@@ -41,14 +41,21 @@ expressed as a pure dataflow graph:
 
 4. **No conditional branch for the final verse.** The "no more
    bottles" stanza is a separate pure node (`final_verse_node`)
-   joined to the body with `concat2`. There is no `if i == 0` —
+   joined to the body with `concat_bytes`. There is no `if i == 0` —
    that path would hide control flow inside the graph.
 
-5. **Pluralisation via `select`, not branching.** "1 bottle" vs
-   "N bottles" is chosen with the pure `select` combinator:
-   both candidate strings are ordinary graph inputs, and the
-   predicate `eq(n, 1)` picks one. The scheduler still sees
-   the full dependency graph.
+5. **Pluralisation via `match`.** "1 bottle" vs "N bottles" is
+   chosen with a static match:
+
+   ```flow
+   $n -> match {
+       eq(1) -> "bottle"
+       _     -> "bottles"
+   } -> $word
+   ```
+
+   The scheduler still sees both static alternatives, while runtime
+   evaluation only enters the selected arm.
 
 ## What it does *not* require
 

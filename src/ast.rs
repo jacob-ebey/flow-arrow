@@ -104,7 +104,13 @@ pub enum Stage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub guard: MatchGuard,
-    pub node: String,
+    pub target: MatchTarget,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MatchTarget {
+    Node(String),
+    Value(Endpoint),
 }
 
 #[derive(Debug, Clone, PartialEq)]

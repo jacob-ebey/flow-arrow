@@ -322,12 +322,50 @@
         },
         {
           "name": "meta.combinator.match.flowarrow",
-          "match": "\\b(match)\\b",
-          "captures": {
+          "begin": "\\b(match)\\s*(\\{)",
+          "beginCaptures": {
             "1": {
               "name": "support.function.builtin.flowarrow"
+            },
+            "2": {
+              "name": "punctuation.definition.block.flowarrow"
             }
-          }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.block.flowarrow"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#variables"
+            },
+            {
+              "include": "#booleans"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#match-arms"
+            },
+            {
+              "include": "#node-references"
+            },
+            {
+              "include": "#operators"
+            },
+            {
+              "include": "#punctuation"
+            }
+          ]
         },
         {
           "name": "support.function.builtin.flowarrow",
@@ -340,6 +378,26 @@
         {
           "name": "keyword.other.radius.flowarrow",
           "match": "\\bradius\\b"
+        }
+      ]
+    },
+    "match-arms": {
+      "patterns": [
+        {
+          "name": "meta.match.guard.flowarrow",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)\\s*(\\()",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.flowarrow"
+            },
+            "2": {
+              "name": "punctuation.definition.group.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "keyword.operator.fallback.flowarrow",
+          "match": "\\b_\\b(?=\\s*->)"
         }
       ]
     },
