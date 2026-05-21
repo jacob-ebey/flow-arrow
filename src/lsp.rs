@@ -839,32 +839,33 @@ impl Analysis {
         });
 
         let mut variables = Vec::new();
-        if self.is_symbol(index, '(') {
-            index += 1;
-            while index < self.tokens.len() && !self.is_symbol(index, ')') {
-                if let Some((port_name, port_range, next)) = self.next_ident(index) {
-                    index = next;
-                    if self.is_symbol(index, ':') {
-                        let type_start = index + 1;
-                        index += 1;
-                        while index < self.tokens.len()
-                            && !self.is_symbol(index, ',')
-                            && !self.is_symbol(index, ')')
-                        {
-                            index += 1;
-                        }
-                        variables.push(VariableSymbol {
-                            name: port_name,
-                            range: port_range,
-                            detail: format!("input: {}", self.type_text(type_start, index)),
-                        });
-                    }
-                } else {
-                    index += 1;
+        let mut output_start = index;
+        if let Some(close) = self.matching_delimiter(index) {
+            self.collect_port_variables(index + 1, close, "input", &mut variables);
+            output_start = close + 1;
+        }
+
+        while output_start < self.tokens.len()
+            && !matches!(self.tokens[output_start].kind, TokenKind::Arrow)
+        {
+            if self.is_symbol(output_start, '{') {
+                break;
+            }
+            output_start += 1;
+        }
+        if output_start < self.tokens.len()
+            && matches!(self.tokens[output_start].kind, TokenKind::Arrow)
+        {
+            output_start += 1;
+            let output_end = (output_start..self.tokens.len())
+                .find(|candidate| self.is_symbol(*candidate, '{'))
+                .unwrap_or(output_start);
+            if self.is_symbol(output_start, '(') {
+                if let Some(close) = self.matching_delimiter(output_start) {
+                    self.collect_port_variables(output_start + 1, close, "output", &mut variables);
                 }
-                if self.is_symbol(index, ',') {
-                    index += 1;
-                }
+            } else {
+                self.collect_port_variables(output_start, output_end, "output", &mut variables);
             }
         }
 
@@ -895,6 +896,47 @@ impl Analysis {
             stages,
         });
         body_end_index + 1
+    }
+
+    fn collect_port_variables(
+        &self,
+        start: usize,
+        end: usize,
+        label: &str,
+        variables: &mut Vec<VariableSymbol>,
+    ) {
+        let mut index = start;
+        while index < end {
+            if let Some((port_name, port_range, next)) = self.next_ident(index) {
+                index = next;
+                if self.is_symbol(index, ':') {
+                    let type_start = index + 1;
+                    index += 1;
+                    let mut depth = 0usize;
+                    while index < end {
+                        match self.tokens[index].kind {
+                            TokenKind::Symbol('(') | TokenKind::Symbol('[') => depth += 1,
+                            TokenKind::Symbol(')') | TokenKind::Symbol(']') if depth > 0 => {
+                                depth -= 1;
+                            }
+                            TokenKind::Symbol(',') if depth == 0 => break,
+                            _ => {}
+                        }
+                        index += 1;
+                    }
+                    variables.push(VariableSymbol {
+                        name: port_name,
+                        range: port_range,
+                        detail: format!("{label}: {}", self.type_text(type_start, index)),
+                    });
+                }
+            } else {
+                index += 1;
+            }
+            if self.is_symbol(index, ',') {
+                index += 1;
+            }
+        }
     }
 
     fn collect_bindings(&self, start: usize, end: usize, variables: &mut Vec<VariableSymbol>) {
@@ -2085,6 +2127,12 @@ mod tests {
                 .completion_symbols()
                 .iter()
                 .any(|item| item.label == "add")
+        );
+        assert!(
+            analysis
+                .completion_symbols()
+                .iter()
+                .any(|item| item.label == "$exit_code")
         );
         let callable = analysis
             .callables
