@@ -730,8 +730,9 @@ endpoint    ::= variable_ref
 variable_ref::= "$" IDENT
 node_ref    ::= IDENT ("." IDENT)*
 
-tuple       ::= "(" endpoint ("," endpoint)+ ")"
-sequence    ::= "[" "]" | "[" endpoint ("," endpoint)* "]"
+tuple       ::= "(" inline_endpoint ("," inline_endpoint)+ ")"
+sequence    ::= "[" "]" | "[" inline_endpoint ("," inline_endpoint)* "]"
+inline_endpoint ::= endpoint ("->" stage)*
 
 fanout      ::= "{" stage ("->" stage)* ("," stage ("->" stage)*)* "}"
 

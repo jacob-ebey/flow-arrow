@@ -87,14 +87,10 @@ import std.tuple { first, second }
 
 program main(args: Args) -> exit_code: Faultable[Int] {
     () -> sqlite.open_memory -> $conn0
-    () -> sqlite.null -> $null_value
-    [$null_value] -> $one_param
-    ($one_param, 0, 0) -> slice -> $no_params
 
-    ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", $no_params) -> sqlite.exec -> first -> $conn1
-    "ship sqlite" -> sqlite.text -> $title
-    ($conn1, "INSERT INTO todos (title) VALUES (?)", [$title]) -> sqlite.exec -> first -> $conn2
-    ($conn2, "SELECT title FROM todos ORDER BY id", $no_params) -> sqlite.query -> $query
+    ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", []) -> sqlite.exec -> first -> $conn1
+    ($conn1, "INSERT INTO todos (title) VALUES (?)", ["ship sqlite" -> sqlite.text]) -> sqlite.exec -> first -> $conn2
+    ($conn2, "SELECT title FROM todos ORDER BY id", []) -> sqlite.query -> $query
     $query -> first -> $conn3
     $query -> second -> stream.to_seq -> $rows
     $conn3 -> sqlite.close -> $exit_code

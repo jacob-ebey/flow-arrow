@@ -275,6 +275,16 @@ impl MermaidEmitter {
                 self.edges(&dependencies, &source, Some("item"), "    ");
                 Ok(vec![source])
             }
+            Endpoint::Eval { .. } => {
+                let source = self.literal_node(
+                    &format!("input\n{}", endpoint_label(endpoint)),
+                    "input",
+                    "    ",
+                );
+                let dependencies = self.emit_endpoint(endpoint, env)?;
+                self.edges(&dependencies, &source, Some("item"), "    ");
+                Ok(vec![source])
+            }
             Endpoint::Unit => Ok(Vec::new()),
             _ => Ok(vec![self.literal_node(
                 &endpoint_label(endpoint),
@@ -302,6 +312,7 @@ impl MermaidEmitter {
                 }
                 Ok(sources)
             }
+            Endpoint::Eval { source, .. } => self.emit_endpoint(source, env),
             _ => Ok(Vec::new()),
         }
     }
@@ -558,6 +569,25 @@ fn endpoint_label(endpoint: &Endpoint) -> String {
         Endpoint::Unit => "()".to_string(),
         Endpoint::Tuple(items) => endpoint_list_label(items, "(", ")"),
         Endpoint::Seq(items) => endpoint_list_label(items, "[", "]"),
+        Endpoint::Eval { source, stages } => {
+            let mut parts = Vec::with_capacity(stages.len() + 1);
+            parts.push(endpoint_label(source));
+            parts.extend(stages.iter().map(stage_label));
+            parts.join(" -> ")
+        }
+    }
+}
+
+fn stage_label(stage: &Stage) -> String {
+    match stage {
+        Stage::Endpoint(endpoint) => endpoint_label(endpoint),
+        Stage::Map(name) => format!("map {name}"),
+        Stage::FaultMap { node, .. } => format!("fault map {node}"),
+        Stage::Filter(name) => format!("filter {name}"),
+        Stage::Repeat { node, .. } => format!("repeat {node}"),
+        Stage::Reduce { op, .. } => format!("reduce {op}"),
+        Stage::Scan { op, .. } => format!("scan {op}"),
+        Stage::Match { .. } => "match".to_string(),
     }
 }
 

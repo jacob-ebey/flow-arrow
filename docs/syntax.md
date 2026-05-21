@@ -521,13 +521,15 @@ block          ::= "{" chain* "}"
 chain          ::= endpoint ("->" stage)+
 stage          ::= node_ref | variable_ref | combinator
 
-endpoint       ::= variable_ref | tuple | fanout | seq_literal | literal
+endpoint       ::= inline_endpoint
+inline_endpoint ::= endpoint_atom ("->" stage)*
+endpoint_atom  ::= variable_ref | tuple | fanout | seq_literal | literal
 variable_ref   ::= "$" IDENT
 node_ref       ::= IDENT ("." IDENT)*
-tuple          ::= "(" endpoint "," endpoint ("," endpoint)* ")"
+tuple          ::= "(" inline_endpoint "," inline_endpoint ("," inline_endpoint)* ")"
 fanout         ::= "{" fanout_arm ("," fanout_arm)* "}"
 fanout_arm     ::= stage ("->" stage)*
-seq_literal    ::= "[" "]" | "[" endpoint ("," endpoint)* "]"
+seq_literal    ::= "[" "]" | "[" inline_endpoint ("," inline_endpoint)* "]"
 
 combinator     ::= map_comb | fault_map_comb | reduce_comb | scan_comb
                  | repeat_comb | select_comb | match_comb

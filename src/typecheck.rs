@@ -83,6 +83,7 @@ enum Type {
     Tuple(Vec<Type>),
     OneOf(Vec<Type>),
     Var(String),
+    EmptySeq,
 }
 
 #[derive(Debug, Clone)]
@@ -671,6 +672,9 @@ impl<'a> Checker<'a> {
             let input_type = value_type.clone();
             let (label, output_type) = match stage {
                 Stage::Endpoint(Endpoint::Variable(name)) if is_last => {
+                    if contains_empty_seq(&value_type) {
+                        return Err("empty sequence literals need a type context".to_string());
+                    }
                     if env.insert(name.clone(), value_type.clone()).is_some() {
                         return Err(format!("value `{name}` is bound more than once"));
                     }
@@ -774,6 +778,9 @@ impl<'a> Checker<'a> {
             let is_last = index + 1 == chain.stages.len();
             match stage {
                 Stage::Endpoint(Endpoint::Variable(name)) if is_last => {
+                    if contains_empty_seq(&value_type) {
+                        return Err("empty sequence literals need a type context".to_string());
+                    }
                     if env.insert(name.clone(), value_type.clone()).is_some() {
                         return Err(format!("value `{name}` is bound more than once"));
                     }
@@ -864,11 +871,84 @@ impl<'a> Checker<'a> {
                         item_type = Some(ty);
                     }
                 }
-                let item_type = item_type
-                    .ok_or_else(|| "empty sequence literals need a type context".to_string())?;
-                Ok(Type::Seq(Box::new(item_type)))
+                match item_type {
+                    Some(item_type) => Ok(Type::Seq(Box::new(item_type))),
+                    None => Ok(Type::EmptySeq),
+                }
+            }
+            Endpoint::Eval { source, stages } => self.inline_eval_type(source, stages, env),
+        }
+    }
+
+    fn inline_eval_type(
+        &self,
+        source: &Endpoint,
+        stages: &[Stage],
+        env: &HashMap<String, Type>,
+    ) -> Result<Type, String> {
+        let inline_callable = Callable {
+            name: "<inline>".to_string(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            chains: Vec::new(),
+        };
+        let mut value_type = self.endpoint_type(source, env)?;
+        for stage in stages {
+            match stage {
+                Stage::Endpoint(Endpoint::Name(name)) => {
+                    value_type = self.apply_node(
+                        &inline_callable,
+                        CallableKind::Node,
+                        name,
+                        &value_type,
+                        false,
+                    )?;
+                }
+                Stage::Endpoint(Endpoint::Variable(_)) => {
+                    return Err("inline evaluations cannot bind values".to_string());
+                }
+                Stage::Endpoint(_) => {
+                    return Err(
+                        "non-name endpoints may only appear as inline evaluation sources"
+                            .to_string(),
+                    );
+                }
+                Stage::Map(name) => {
+                    value_type = self.apply_map(&inline_callable, name, &value_type)?;
+                }
+                Stage::FaultMap { .. } => {
+                    return Err("inline evaluations cannot use `fault map`".to_string());
+                }
+                Stage::Filter(name) => {
+                    value_type = self.apply_filter(&inline_callable, name, &value_type)?;
+                }
+                Stage::Repeat { count, node } => {
+                    let count_type = self.endpoint_type(count, env)?;
+                    self.expect_type("repeat count", &count_type, &Type::Int)?;
+                    value_type = self.apply_repeat(&inline_callable, node, &value_type)?;
+                }
+                Stage::Reduce { op, identity } => {
+                    let identity_type = self.endpoint_type(identity, env)?;
+                    value_type =
+                        self.apply_reduce(&inline_callable, op, &value_type, &identity_type)?;
+                }
+                Stage::Scan { op, identity } => {
+                    let identity_type = self.endpoint_type(identity, env)?;
+                    value_type =
+                        self.apply_scan(&inline_callable, op, &value_type, &identity_type)?;
+                }
+                Stage::Match { arms } => {
+                    value_type = self.apply_match(
+                        &inline_callable,
+                        CallableKind::Node,
+                        arms,
+                        &value_type,
+                        env,
+                    )?;
+                }
             }
         }
+        Ok(value_type)
     }
 
     fn apply_node(
@@ -905,6 +985,11 @@ impl<'a> Checker<'a> {
             let mut vars = HashMap::new();
             match match_types(&signature.input, input, &mut vars) {
                 Ok(()) => {
+                    if contains_empty_seq(input) {
+                        substitute(&signature.input, &vars).ok_or_else(|| {
+                            "empty sequence literals need a concrete type context".to_string()
+                        })?;
+                    }
                     output = Some(substitute(&signature.output, &vars).ok_or_else(|| {
                         format!("`{name}` output type contains unresolved type variables")
                     })?);
@@ -920,6 +1005,11 @@ impl<'a> Checker<'a> {
                 let mut vars = HashMap::new();
                 match match_types(&signature.input, &actual_input, &mut vars) {
                     Ok(()) => {
+                        if contains_empty_seq(&actual_input) {
+                            substitute(&signature.input, &vars).ok_or_else(|| {
+                                "empty sequence literals need a concrete type context".to_string()
+                            })?;
+                        }
                         let plain_output =
                             substitute(&signature.output, &vars).ok_or_else(|| {
                                 format!("`{name}` output type contains unresolved type variables")
@@ -1274,6 +1364,25 @@ fn format_endpoint_for_error(endpoint: &Endpoint) -> String {
         Endpoint::Unit => "()".to_string(),
         Endpoint::Tuple(items) => format_endpoint_list_for_error(items, "(", ")"),
         Endpoint::Seq(items) => format_endpoint_list_for_error(items, "[", "]"),
+        Endpoint::Eval { source, stages } => {
+            let mut parts = Vec::with_capacity(stages.len() + 1);
+            parts.push(format_endpoint_for_error(source));
+            parts.extend(stages.iter().map(format_stage_for_error));
+            parts.join(" -> ")
+        }
+    }
+}
+
+fn format_stage_for_error(stage: &Stage) -> String {
+    match stage {
+        Stage::Endpoint(endpoint) => format_endpoint_for_error(endpoint),
+        Stage::Map(name) => format!("map {name}"),
+        Stage::FaultMap { node, .. } => format!("fault map {node}"),
+        Stage::Filter(name) => format!("filter {name}"),
+        Stage::Repeat { node, .. } => format!("repeat {node}"),
+        Stage::Reduce { op, .. } => format!("reduce {op}"),
+        Stage::Scan { op, .. } => format!("scan {op}"),
+        Stage::Match { .. } => "match".to_string(),
     }
 }
 
@@ -1399,12 +1508,22 @@ fn sequence_item_type(left: &Type, right: &Type) -> Result<Type, String> {
         return Ok(left.clone());
     }
     match (left, right) {
+        (Type::EmptySeq, other) | (other, Type::EmptySeq) => Ok(other.clone()),
         (Type::Faultable(inner), other) | (other, Type::Faultable(inner))
             if inner.as_ref() == other =>
         {
             Ok(Type::Faultable(inner.clone()))
         }
         _ => Err(format!("expected `{left}`, found `{right}`")),
+    }
+}
+
+fn contains_empty_seq(input: &Type) -> bool {
+    match input {
+        Type::EmptySeq => true,
+        Type::Faultable(item) | Type::Seq(item) | Type::Stream(item) => contains_empty_seq(item),
+        Type::Tuple(items) | Type::OneOf(items) => items.iter().any(contains_empty_seq),
+        _ => false,
     }
 }
 
@@ -1417,6 +1536,10 @@ fn match_types(
         return Ok(());
     }
     match (expected, actual) {
+        (Type::Seq(_), Type::EmptySeq) => Ok(()),
+        (Type::Seq(expected), Type::Seq(actual)) if matches!(actual.as_ref(), Type::EmptySeq) => {
+            match_types(expected, actual, vars)
+        }
         (Type::Var(name), actual) => {
             if let Some(bound) = vars.get(name) {
                 if bound == actual {
@@ -1489,6 +1612,7 @@ fn substitute(ty: &Type, vars: &HashMap<String, Type>) -> Option<Type> {
             }
             Some(Type::Tuple(out))
         }
+        Type::EmptySeq => Some(Type::EmptySeq),
         other => Some(other.clone()),
     }
 }
@@ -1662,6 +1786,7 @@ impl fmt::Display for Type {
                 write!(f, ")")
             }
             Type::Var(name) => write!(f, "{name}"),
+            Type::EmptySeq => write!(f, "[]"),
         }
     }
 }

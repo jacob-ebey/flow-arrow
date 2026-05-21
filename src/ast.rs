@@ -72,6 +72,10 @@ pub enum Endpoint {
     Unit,
     Tuple(Vec<Endpoint>),
     Seq(Vec<Endpoint>),
+    Eval {
+        source: Box<Endpoint>,
+        stages: Vec<Stage>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

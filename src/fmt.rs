@@ -515,6 +515,12 @@ fn format_endpoint(endpoint: &Endpoint) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Endpoint::Eval { source, stages } => {
+            let mut parts = Vec::with_capacity(stages.len() + 1);
+            parts.push(format_endpoint(source));
+            parts.extend(stages.iter().map(format_stage));
+            parts.join(" -> ")
+        }
     }
 }
 

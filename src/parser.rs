@@ -325,7 +325,7 @@ impl Parser {
                 let mut args = Vec::new();
                 if !self.eat(Token::RParen) {
                     loop {
-                        args.push(self.parse_endpoint()?);
+                        args.push(self.parse_inline_endpoint()?);
                         if self.eat(Token::Comma) {
                             if self.eat(Token::RParen) {
                                 break;
@@ -354,11 +354,31 @@ impl Parser {
     fn parse_match_target(&mut self) -> Result<MatchTarget, SourceDiagnostic> {
         match self.peek() {
             Token::Ident(_) => Ok(MatchTarget::Node(self.parse_qualified_ident()?)),
-            _ => Ok(MatchTarget::Value(self.parse_endpoint()?)),
+            _ => Ok(MatchTarget::Value(self.parse_inline_endpoint()?)),
         }
     }
 
     fn parse_endpoint(&mut self) -> Result<Endpoint, SourceDiagnostic> {
+        self.parse_endpoint_atom()
+    }
+
+    fn parse_inline_endpoint(&mut self) -> Result<Endpoint, SourceDiagnostic> {
+        let source = self.parse_endpoint_atom()?;
+        let mut stages = Vec::new();
+        while self.eat(Token::Arrow) {
+            stages.push(self.parse_stage()?);
+        }
+        if stages.is_empty() {
+            Ok(source)
+        } else {
+            Ok(Endpoint::Eval {
+                source: Box::new(source),
+                stages,
+            })
+        }
+    }
+
+    fn parse_endpoint_atom(&mut self) -> Result<Endpoint, SourceDiagnostic> {
         match self.peek().clone() {
             Token::Variable(name) => {
                 self.bump();
@@ -394,11 +414,11 @@ impl Parser {
         if self.eat(Token::RParen) {
             return Ok(Endpoint::Unit);
         }
-        let first = self.parse_endpoint()?;
+        let first = self.parse_inline_endpoint()?;
         self.expect(Token::Comma)?;
-        let mut items = vec![first, self.parse_endpoint()?];
+        let mut items = vec![first, self.parse_inline_endpoint()?];
         while self.eat(Token::Comma) {
-            items.push(self.parse_endpoint()?);
+            items.push(self.parse_inline_endpoint()?);
         }
         self.expect(Token::RParen)?;
         Ok(Endpoint::Tuple(items))
@@ -411,7 +431,7 @@ impl Parser {
             return Ok(Endpoint::Seq(items));
         }
         loop {
-            items.push(self.parse_endpoint()?);
+            items.push(self.parse_inline_endpoint()?);
             if self.eat(Token::Comma) {
                 if self.eat(Token::RBracket) {
                     break;

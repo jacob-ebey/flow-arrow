@@ -47,6 +47,7 @@ enum Ty {
     Tuple(Vec<Ty>),
     OneOf(Vec<Ty>),
     Var(String),
+    EmptySeq,
 }
 
 #[derive(Debug, Clone)]
@@ -921,7 +922,16 @@ impl<'a> TypedCodegen<'a> {
         chain: &Chain,
         env: &mut HashMap<String, Value>,
     ) -> Result<(), String> {
-        let mut value = self.emit_endpoint(out, &chain.source, env)?;
+        let mut value = if endpoint_contains_empty_seq(&chain.source) {
+            if let Some(Stage::Endpoint(Endpoint::Name(name))) = chain.stages.first() {
+                let expected = self.call_input_type_for_endpoint(name, &chain.source, env)?;
+                self.emit_endpoint_expected(out, &chain.source, env, Some(&expected))?
+            } else {
+                self.emit_endpoint_expected(out, &chain.source, env, None)?
+            }
+        } else {
+            self.emit_endpoint(out, &chain.source, env)?
+        };
         let mut index = 0;
         while index < chain.stages.len() {
             let stage = &chain.stages[index];
@@ -1050,6 +1060,16 @@ impl<'a> TypedCodegen<'a> {
         endpoint: &Endpoint,
         env: &HashMap<String, Value>,
     ) -> Result<Value, String> {
+        self.emit_endpoint_expected(out, endpoint, env, None)
+    }
+
+    fn emit_endpoint_expected(
+        &mut self,
+        out: &mut String,
+        endpoint: &Endpoint,
+        env: &HashMap<String, Value>,
+        expected: Option<&Ty>,
+    ) -> Result<Value, String> {
         match endpoint {
             Endpoint::Variable(name) => env
                 .get(name)
@@ -1077,9 +1097,23 @@ impl<'a> TypedCodegen<'a> {
                 ty: Ty::Unit,
             }),
             Endpoint::Tuple(items) => {
+                let expected_items = match expected {
+                    Some(Ty::Tuple(expected_items)) if expected_items.len() == items.len() => {
+                        Some(expected_items.as_slice())
+                    }
+                    _ => None,
+                };
                 let values = items
                     .iter()
-                    .map(|item| self.emit_endpoint(out, item, env))
+                    .enumerate()
+                    .map(|(index, item)| {
+                        self.emit_endpoint_expected(
+                            out,
+                            item,
+                            env,
+                            expected_items.and_then(|items| items.get(index)),
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 let ty = Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect());
                 let c_ty = self.types.c_type(&ty);
@@ -1092,11 +1126,42 @@ impl<'a> TypedCodegen<'a> {
             }
             Endpoint::Seq(items) => {
                 if items.is_empty() {
-                    return Err("empty sequence literals need a type context".to_string());
+                    let Some(seq_ty @ Ty::Seq(_)) = expected else {
+                        return Err("empty sequence literals need a type context".to_string());
+                    };
+                    if contains_type_var(seq_ty) {
+                        return Err(
+                            "empty sequence literals need a concrete type context".to_string()
+                        );
+                    }
+                    let c_ty = self.types.c_type(seq_ty);
+                    let new_fn = self.types.seq_new_name(seq_ty)?;
+                    let tmp = self.next_temp();
+                    out.push_str(&format!("  {c_ty} {tmp} = {new_fn}(0);\n"));
+                    return Ok(Value {
+                        code: tmp,
+                        ty: seq_ty.clone(),
+                    });
                 }
+                let inferred_item;
+                let expected_item = match expected {
+                    Some(Ty::Seq(item)) => Some(item.as_ref()),
+                    _ if items.iter().any(endpoint_contains_empty_seq) => {
+                        match self.endpoint_value_type(endpoint, env)? {
+                            Ty::Seq(item)
+                                if !contains_empty_seq(&item) && !contains_type_var(&item) =>
+                            {
+                                inferred_item = *item;
+                                Some(&inferred_item)
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
                 let values = items
                     .iter()
-                    .map(|item| self.emit_endpoint(out, item, env))
+                    .map(|item| self.emit_endpoint_expected(out, item, env, expected_item))
                     .collect::<Result<Vec<_>, _>>()?;
                 let mut item_ty = values[0].ty.clone();
                 for value in values.iter().skip(1) {
@@ -1114,6 +1179,64 @@ impl<'a> TypedCodegen<'a> {
                     code: tmp,
                     ty: seq_ty,
                 })
+            }
+            Endpoint::Eval { source, stages } => {
+                let mut value = if endpoint_contains_empty_seq(source) {
+                    if let Some(Stage::Endpoint(Endpoint::Name(name))) = stages.first() {
+                        let expected = self.call_input_type_for_endpoint(name, source, env)?;
+                        self.emit_endpoint_expected(out, source, env, Some(&expected))?
+                    } else {
+                        self.emit_endpoint_expected(out, source, env, None)?
+                    }
+                } else {
+                    self.emit_endpoint(out, source, env)?
+                };
+                for stage in stages {
+                    match stage {
+                        Stage::Endpoint(Endpoint::Name(name)) => {
+                            if contains_empty_seq(&value.ty) {
+                                let expected = self.call_input_type_for_value(name, &value.ty)?;
+                                value =
+                                    self.emit_endpoint_expected(out, source, env, Some(&expected))?;
+                            }
+                            value = self.emit_call(out, name, value)?;
+                        }
+                        Stage::Endpoint(Endpoint::Variable(_)) => {
+                            return Err("inline evaluations cannot bind values".to_string());
+                        }
+                        Stage::Endpoint(_) => {
+                            return Err(
+                                "non-name endpoints may only appear as inline evaluation sources"
+                                    .to_string(),
+                            );
+                        }
+                        Stage::Map(name) => {
+                            value = self.emit_map(out, name, value)?;
+                        }
+                        Stage::FaultMap { .. } => {
+                            return Err("inline evaluations cannot use `fault map`".to_string());
+                        }
+                        Stage::Filter(name) => {
+                            value = self.emit_filter(out, name, value)?;
+                        }
+                        Stage::Repeat { count, node } => {
+                            let count_value = self.emit_endpoint(out, count, env)?;
+                            value = self.emit_repeat(out, node, value, count_value)?;
+                        }
+                        Stage::Reduce { op, identity } => {
+                            let identity_value = self.emit_endpoint(out, identity, env)?;
+                            value = self.emit_reduce(out, op, value, identity_value)?;
+                        }
+                        Stage::Scan { op, identity } => {
+                            let identity_value = self.emit_endpoint(out, identity, env)?;
+                            value = self.emit_scan(out, op, value, identity_value)?;
+                        }
+                        Stage::Match { arms } => {
+                            value = self.emit_match(out, arms, value, env)?;
+                        }
+                    }
+                }
+                Ok(value)
             }
         }
     }
@@ -1277,11 +1400,98 @@ impl<'a> TypedCodegen<'a> {
                         item_ty = Some(ty);
                     }
                 }
-                let item_ty = item_ty
-                    .ok_or_else(|| "empty sequence literals need a type context".to_string())?;
-                Ok(Ty::Seq(Box::new(item_ty)))
+                match item_ty {
+                    Some(item_ty) => Ok(Ty::Seq(Box::new(item_ty))),
+                    None => Ok(Ty::EmptySeq),
+                }
+            }
+            Endpoint::Eval { source, stages } => self.inline_eval_value_type(source, stages, env),
+        }
+    }
+
+    fn inline_eval_value_type(
+        &self,
+        source: &Endpoint,
+        stages: &[Stage],
+        env: &HashMap<String, Value>,
+    ) -> Result<Ty, String> {
+        let mut value_ty = self.endpoint_value_type(source, env)?;
+        for stage in stages {
+            match stage {
+                Stage::Endpoint(Endpoint::Name(name)) => {
+                    value_ty = self.call_output_type(name, &value_ty)?;
+                }
+                Stage::Endpoint(Endpoint::Variable(_)) => {
+                    return Err("inline evaluations cannot bind values".to_string());
+                }
+                Stage::Endpoint(_) => {
+                    return Err(
+                        "non-name endpoints may only appear as inline evaluation sources"
+                            .to_string(),
+                    );
+                }
+                Stage::Map(name) => {
+                    let output_item_ty = match &value_ty {
+                        Ty::Seq(item_ty) | Ty::Stream(item_ty) => {
+                            self.call_output_type(name, item_ty)?
+                        }
+                        _ => return Err(format!("`map {name}` expected Seq or Stream input")),
+                    };
+                    value_ty = match value_ty {
+                        Ty::Seq(_) => Ty::Seq(Box::new(output_item_ty)),
+                        Ty::Stream(_) => Ty::Stream(Box::new(output_item_ty)),
+                        _ => unreachable!(),
+                    };
+                }
+                Stage::FaultMap { .. } => {
+                    return Err("inline evaluations cannot use `fault map`".to_string());
+                }
+                Stage::Filter(name) => {
+                    let Ty::Seq(item_ty) = &value_ty else {
+                        return Err(format!("`filter {name}` expected Seq input"));
+                    };
+                    let predicate_ty = self.call_output_type(name, item_ty)?;
+                    if predicate_ty != Ty::Bool {
+                        return Err(format!(
+                            "`filter {name}` predicate expected `Bool`, found `{predicate_ty}`"
+                        ));
+                    }
+                }
+                Stage::Repeat { node, .. } => {
+                    value_ty = self.call_output_type(node, &value_ty)?;
+                }
+                Stage::Reduce { op, identity } => {
+                    let Ty::Seq(item_ty) = &value_ty else {
+                        return Err(format!("`reduce {op}` expected Seq input"));
+                    };
+                    let identity_ty = self.endpoint_value_type(identity, env)?;
+                    if item_ty.as_ref() != &identity_ty {
+                        return Err(format!(
+                            "`reduce {op}` identity expected `{item_ty}`, found `{identity_ty}`"
+                        ));
+                    }
+                    value_ty = self.call_output_type(op, item_ty)?;
+                }
+                Stage::Scan { op, identity } => {
+                    let Ty::Seq(item_ty) = &value_ty else {
+                        return Err(format!("`scan {op}` expected Seq input"));
+                    };
+                    let identity_ty = self.endpoint_value_type(identity, env)?;
+                    if item_ty.as_ref() != &identity_ty {
+                        return Err(format!(
+                            "`scan {op}` identity expected `{item_ty}`, found `{identity_ty}`"
+                        ));
+                    }
+                }
+                Stage::Match { arms } => {
+                    let first = arms
+                        .first()
+                        .ok_or_else(|| "`match` must contain at least one arm".to_string())?;
+                    value_ty = self.match_target_type(&first.target, &value_ty, env)?;
+                }
             }
         }
+        Ok(value_ty)
     }
 
     fn emit_assign_match_target(
@@ -3796,6 +4006,26 @@ impl<'a> TypedCodegen<'a> {
             Endpoint::Tuple(items) | Endpoint::Seq(items) => items
                 .iter()
                 .all(|item| self.is_parallel_safe_endpoint(item, visiting)),
+            Endpoint::Eval { source, stages } => {
+                self.is_parallel_safe_endpoint(source, visiting)
+                    && stages.iter().all(|stage| match stage {
+                        Stage::Endpoint(Endpoint::Name(name)) => {
+                            self.is_parallel_safe_name(name, visiting)
+                        }
+                        Stage::Endpoint(endpoint) => {
+                            self.is_parallel_safe_endpoint(endpoint, visiting)
+                        }
+                        Stage::Map(name)
+                        | Stage::Filter(name)
+                        | Stage::Repeat { node: name, .. }
+                        | Stage::Reduce { op: name, .. }
+                        | Stage::Scan { op: name, .. } => {
+                            self.is_parallel_safe_name(name, visiting)
+                        }
+                        Stage::FaultMap { node, .. } => self.is_parallel_safe_name(node, visiting),
+                        Stage::Match { .. } => false,
+                    })
+            }
             Endpoint::Variable(_)
             | Endpoint::Int(_)
             | Endpoint::Real(_)
@@ -3834,6 +4064,66 @@ impl<'a> TypedCodegen<'a> {
         }
         let canonical = self.canonical_name(name);
         builtin_output_type(&canonical, input)
+    }
+
+    fn call_input_type_for_endpoint(
+        &self,
+        name: &str,
+        endpoint: &Endpoint,
+        env: &HashMap<String, Value>,
+    ) -> Result<Ty, String> {
+        let actual = self.endpoint_value_type(endpoint, env)?;
+        self.call_input_type_for_value(name, &actual)
+    }
+
+    fn call_input_type_for_value(&self, name: &str, actual: &Ty) -> Result<Ty, String> {
+        let signatures = self.call_signatures(name)?;
+        let mut last_error = None;
+        for signature in signatures {
+            let mut vars = HashMap::new();
+            match match_input_types(&signature.input, actual, &mut vars) {
+                Ok(()) => {
+                    let input = substitute_ty(&signature.input, &vars).ok_or_else(|| {
+                        format!("`{name}` input type contains unresolved type variables")
+                    })?;
+                    if contains_type_var(&input) {
+                        return Err(
+                            "empty sequence literals need a concrete type context".to_string()
+                        );
+                    }
+                    return Ok(input);
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| format!("cannot infer input type for `{name}`")))
+    }
+
+    fn call_signatures(&self, name: &str) -> Result<Vec<Signature>, String> {
+        if let Some(signature) = self.signatures.get(name) {
+            return Ok(vec![signature.clone()]);
+        }
+        let canonical = self.canonical_name(name);
+        let (module, symbol_name) = if let Some(symbol_name) = canonical.strip_prefix("sqlite.") {
+            ("std.sqlite", symbol_name)
+        } else {
+            stdlib::all_symbols()
+                .find(|symbol| symbol.kind == stdlib::SymbolKind::Node && symbol.name == canonical)
+                .map(|symbol| (symbol.module, symbol.name))
+                .ok_or_else(|| format!("unknown node `{name}`"))?
+        };
+        let symbol = stdlib::find_export(module, symbol_name)
+            .ok_or_else(|| format!("unknown node `{name}`"))?;
+        let input = symbol
+            .input
+            .ok_or_else(|| format!("stdlib node `{name}` has no input type"))?;
+        let output = symbol
+            .output
+            .ok_or_else(|| format!("stdlib node `{name}` has no output type"))?;
+        Ok(vec![Signature {
+            input: self.parse_declared_type(input)?,
+            output: self.parse_declared_type(output)?,
+        }])
     }
 
     fn canonical_name(&self, name: &str) -> String {
@@ -3922,6 +4212,7 @@ impl TypeRegistry {
                 }
                 name
             }
+            Ty::EmptySeq => "FaUnit".to_string(),
         }
     }
 
@@ -4336,6 +4627,7 @@ fn sequence_item_type(left: &Ty, right: &Ty) -> Result<Ty, String> {
         return Ok(left.clone());
     }
     match (left, right) {
+        (Ty::EmptySeq, other) | (other, Ty::EmptySeq) => Ok(other.clone()),
         (Ty::Faultable(inner), other) | (other, Ty::Faultable(inner))
             if inner.as_ref() == other =>
         {
@@ -4345,6 +4637,112 @@ fn sequence_item_type(left: &Ty, right: &Ty) -> Result<Ty, String> {
         _ => Err(format!(
             "sequence literal item type mismatch: `{left}` vs `{right}`"
         )),
+    }
+}
+
+fn match_input_types(
+    expected: &Ty,
+    actual: &Ty,
+    vars: &mut HashMap<String, Ty>,
+) -> Result<(), String> {
+    if expected == actual {
+        return Ok(());
+    }
+    if let Ty::Faultable(actual) = actual {
+        return match_input_types(expected, actual, vars);
+    }
+    if let Some(actual) = unwrap_faultable_tuple(actual) {
+        return match_input_types(expected, &actual, vars);
+    }
+    match (expected, actual) {
+        (Ty::Seq(_), Ty::EmptySeq) => Ok(()),
+        (Ty::Var(name), actual) => {
+            if matches!(actual, Ty::EmptySeq) {
+                return Ok(());
+            }
+            if let Some(bound) = vars.get(name) {
+                if bound == actual {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "type variable `{name}` was `{bound}` then `{actual}`"
+                    ))
+                }
+            } else {
+                vars.insert(name.clone(), actual.clone());
+                Ok(())
+            }
+        }
+        (Ty::Faultable(expected), Ty::Faultable(actual)) => {
+            match_input_types(expected, actual, vars)
+        }
+        (Ty::Seq(expected), Ty::Seq(actual)) => match_input_types(expected, actual, vars),
+        (Ty::Stream(expected), Ty::Stream(actual)) => match_input_types(expected, actual, vars),
+        (Ty::OneOf(expected), actual) => {
+            for expected in expected {
+                let mut candidate_vars = vars.clone();
+                if match_input_types(expected, actual, &mut candidate_vars).is_ok() {
+                    *vars = candidate_vars;
+                    return Ok(());
+                }
+            }
+            Err(format!(
+                "expected one of `{}`, found `{actual}`",
+                Ty::OneOf(expected.clone())
+            ))
+        }
+        (Ty::Tuple(expected), Ty::Tuple(actual)) if expected.len() == actual.len() => {
+            for (expected, actual) in expected.iter().zip(actual) {
+                match_input_types(expected, actual, vars)?;
+            }
+            Ok(())
+        }
+        _ => Err(format!("expected `{expected}`, found `{actual}`")),
+    }
+}
+
+fn substitute_ty(ty: &Ty, vars: &HashMap<String, Ty>) -> Option<Ty> {
+    match ty {
+        Ty::Var(name) => vars
+            .get(name)
+            .cloned()
+            .or_else(|| Some(Ty::Var(name.clone()))),
+        Ty::Faultable(item) => Some(Ty::Faultable(Box::new(substitute_ty(item, vars)?))),
+        Ty::Seq(item) => Some(Ty::Seq(Box::new(substitute_ty(item, vars)?))),
+        Ty::Stream(item) => Some(Ty::Stream(Box::new(substitute_ty(item, vars)?))),
+        Ty::OneOf(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(substitute_ty(item, vars)?);
+            }
+            Some(Ty::OneOf(out))
+        }
+        Ty::Tuple(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(substitute_ty(item, vars)?);
+            }
+            Some(Ty::Tuple(out))
+        }
+        other => Some(other.clone()),
+    }
+}
+
+fn contains_type_var(input: &Ty) -> bool {
+    match input {
+        Ty::Var(_) => true,
+        Ty::Faultable(item) | Ty::Seq(item) | Ty::Stream(item) => contains_type_var(item),
+        Ty::Tuple(items) | Ty::OneOf(items) => items.iter().any(contains_type_var),
+        _ => false,
+    }
+}
+
+fn contains_empty_seq(input: &Ty) -> bool {
+    match input {
+        Ty::EmptySeq => true,
+        Ty::Faultable(item) | Ty::Seq(item) | Ty::Stream(item) => contains_empty_seq(item),
+        Ty::Tuple(items) | Ty::OneOf(items) => items.iter().any(contains_empty_seq),
+        _ => false,
     }
 }
 
@@ -4660,12 +5058,71 @@ fn count_endpoint_vars(endpoint: &Endpoint, uses: &mut HashMap<String, usize>) {
                 count_endpoint_vars(item, uses);
             }
         }
+        Endpoint::Eval { source, stages } => {
+            count_endpoint_vars(source, uses);
+            for stage in stages {
+                match stage {
+                    Stage::Repeat { count, .. }
+                    | Stage::Reduce {
+                        identity: count, ..
+                    }
+                    | Stage::Scan {
+                        identity: count, ..
+                    } => count_endpoint_vars(count, uses),
+                    Stage::Match { arms } => {
+                        for arm in arms {
+                            if let MatchGuard::Call { args, .. } = &arm.guard {
+                                for arg in args {
+                                    count_endpoint_vars(arg, uses);
+                                }
+                            }
+                            if let MatchTarget::Value(endpoint) = &arm.target {
+                                count_endpoint_vars(endpoint, uses);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         Endpoint::Name(_)
         | Endpoint::Int(_)
         | Endpoint::Real(_)
         | Endpoint::Bool(_)
         | Endpoint::String(_)
         | Endpoint::Unit => {}
+    }
+}
+
+fn endpoint_contains_empty_seq(endpoint: &Endpoint) -> bool {
+    match endpoint {
+        Endpoint::Seq(items) => items.is_empty() || items.iter().any(endpoint_contains_empty_seq),
+        Endpoint::Tuple(items) => items.iter().any(endpoint_contains_empty_seq),
+        Endpoint::Eval { source, stages } => {
+            endpoint_contains_empty_seq(source)
+                || stages.iter().any(|stage| match stage {
+                    Stage::Repeat { count, .. }
+                    | Stage::Reduce {
+                        identity: count, ..
+                    }
+                    | Stage::Scan {
+                        identity: count, ..
+                    } => endpoint_contains_empty_seq(count),
+                    Stage::Match { arms } => arms.iter().any(|arm| {
+                        (match &arm.guard {
+                            MatchGuard::Call { args, .. } => {
+                                args.iter().any(endpoint_contains_empty_seq)
+                            }
+                            MatchGuard::Fallback => false,
+                        }) || match &arm.target {
+                            MatchTarget::Value(endpoint) => endpoint_contains_empty_seq(endpoint),
+                            MatchTarget::Node(_) => false,
+                        }
+                    }),
+                    _ => false,
+                })
+        }
+        _ => false,
     }
 }
 
@@ -4875,6 +5332,7 @@ fn type_suffix(ty: &Ty) -> String {
             items.iter().map(type_suffix).collect::<Vec<_>>().join("_")
         ),
         Ty::Var(name) => format!("Var_{name}"),
+        Ty::EmptySeq => "EmptySeq".to_string(),
     }
 }
 
@@ -4882,6 +5340,7 @@ fn type_depth(ty: &Ty) -> usize {
     match ty {
         Ty::Seq(item) | Ty::Stream(item) | Ty::Faultable(item) => 1 + type_depth(item),
         Ty::Tuple(items) | Ty::OneOf(items) => 1 + items.iter().map(type_depth).max().unwrap_or(0),
+        Ty::EmptySeq => 0,
         _ => 0,
     }
 }
@@ -4965,6 +5424,7 @@ impl std::fmt::Display for Ty {
                     .join("|")
             ),
             Ty::Var(name) => write!(f, "{name}"),
+            Ty::EmptySeq => write!(f, "[]"),
         }
     }
 }

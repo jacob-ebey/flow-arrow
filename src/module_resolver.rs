@@ -396,33 +396,7 @@ fn rewrite_callable(
     for chain in &mut callable.chains {
         rewrite_endpoint(&mut chain.source, references);
         for stage in &mut chain.stages {
-            match stage {
-                Stage::Endpoint(endpoint) => rewrite_endpoint(endpoint, references),
-                Stage::Map(name)
-                | Stage::Filter(name)
-                | Stage::Scan { op: name, .. }
-                | Stage::Reduce { op: name, .. } => rewrite_name(name, references),
-                Stage::FaultMap { node, .. } | Stage::Repeat { node, .. } => {
-                    rewrite_name(node, references)
-                }
-                Stage::Match { arms } => {
-                    for arm in arms {
-                        match &mut arm.guard {
-                            MatchGuard::Call { node, args } => {
-                                rewrite_name(node, references);
-                                for arg in args {
-                                    rewrite_endpoint(arg, references);
-                                }
-                            }
-                            MatchGuard::Fallback => {}
-                        }
-                        match &mut arm.target {
-                            MatchTarget::Node(node) => rewrite_name(node, references),
-                            MatchTarget::Value(endpoint) => rewrite_endpoint(endpoint, references),
-                        }
-                    }
-                }
-            }
+            rewrite_stage(stage, references);
         }
     }
     callable
@@ -446,12 +420,50 @@ fn rewrite_endpoint(endpoint: &mut Endpoint, references: &HashMap<String, String
                 rewrite_endpoint(item, references);
             }
         }
+        Endpoint::Eval { source, stages } => {
+            rewrite_endpoint(source, references);
+            rewrite_stages(stages, references);
+        }
         Endpoint::Variable(_)
         | Endpoint::Int(_)
         | Endpoint::Real(_)
         | Endpoint::Bool(_)
         | Endpoint::String(_)
         | Endpoint::Unit => {}
+    }
+}
+
+fn rewrite_stages(stages: &mut [Stage], references: &HashMap<String, String>) {
+    for stage in stages {
+        rewrite_stage(stage, references);
+    }
+}
+
+fn rewrite_stage(stage: &mut Stage, references: &HashMap<String, String>) {
+    match stage {
+        Stage::Endpoint(endpoint) => rewrite_endpoint(endpoint, references),
+        Stage::Map(name)
+        | Stage::Filter(name)
+        | Stage::Scan { op: name, .. }
+        | Stage::Reduce { op: name, .. } => rewrite_name(name, references),
+        Stage::FaultMap { node, .. } | Stage::Repeat { node, .. } => rewrite_name(node, references),
+        Stage::Match { arms } => {
+            for arm in arms {
+                match &mut arm.guard {
+                    MatchGuard::Call { node, args } => {
+                        rewrite_name(node, references);
+                        for arg in args {
+                            rewrite_endpoint(arg, references);
+                        }
+                    }
+                    MatchGuard::Fallback => {}
+                }
+                match &mut arm.target {
+                    MatchTarget::Node(node) => rewrite_name(node, references),
+                    MatchTarget::Value(endpoint) => rewrite_endpoint(endpoint, references),
+                }
+            }
+        }
     }
 }
 

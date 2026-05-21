@@ -10,22 +10,16 @@ const SQLITE_SOURCE: &str = r#"
     import std.fault { expect }
     import std.int { format_int }
     import std.io { write_stdout }
-    import std.seq { slice }
     import std.sqlite as sqlite
     import std.stream as stream
     import std.tuple { first, second }
 
     program main(args: Args) -> exit_code: Faultable[Int] {
         () -> sqlite.open_memory -> $conn0
-        () -> sqlite.null -> $null_value
-        [$null_value] -> $one_param
-        ($one_param, 0, 0) -> slice -> $no_params
-        ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", $no_params) -> sqlite.exec -> first -> $conn1
-        "alpha" -> sqlite.text -> $title1
-        "beta" -> sqlite.text -> $title2
-        ($conn1, "INSERT INTO todos (title) VALUES (?)", [$title1]) -> sqlite.exec -> first -> $conn2
-        ($conn2, "INSERT INTO todos (title) VALUES (?)", [$title2]) -> sqlite.exec -> first -> $conn3
-        ($conn3, "SELECT id, title FROM todos ORDER BY id", $no_params) -> sqlite.query -> $query
+        ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", []) -> sqlite.exec -> first -> $conn1
+        ($conn1, "INSERT INTO todos (title) VALUES (?)", ["alpha" -> sqlite.text]) -> sqlite.exec -> first -> $conn2
+        ($conn2, "INSERT INTO todos (title) VALUES (?)", ["beta" -> sqlite.text]) -> sqlite.exec -> first -> $conn3
+        ($conn3, "SELECT id, title FROM todos ORDER BY id", []) -> sqlite.query -> $query
         $query -> first -> $conn4
         $query -> second -> map todo_line -> stream.to_seq -> concat_bytes -> $output
         $output -> write_stdout -> $written
@@ -142,29 +136,20 @@ fn std_sqlite_runtime_query_all_values_and_transactions_run() {
         import std.int { format_int }
         import std.io { write_stdout }
         import std.real { format_real }
-        import std.seq { head, length, slice }
+        import std.seq { head, length }
         import std.sqlite as sqlite
         import std.tuple { first, second }
 
         program main(args: Args) -> exit_code: Faultable[Int] {
             () -> sqlite.open_memory -> $conn0
-            () -> sqlite.null -> $null_value
-            [$null_value] -> $one_param
-            ($one_param, 0, 0) -> slice -> $no_params
-            ($conn0, "CREATE TABLE sample (id INTEGER, score REAL, name TEXT, payload BLOB, optional TEXT)", $no_params) -> sqlite.exec -> first -> $conn1
+            ($conn0, "CREATE TABLE sample (id INTEGER, score REAL, name TEXT, payload BLOB, optional TEXT)", []) -> sqlite.exec -> first -> $conn1
             $conn1 -> sqlite.begin -> $conn2
-            99 -> sqlite.int -> $rolled_id
-            ($conn2, "INSERT INTO sample (id, score, name, payload, optional) VALUES (?, 1.0, 'rolled', x'00', NULL)", [$rolled_id]) -> sqlite.exec -> first -> $conn3
+            ($conn2, "INSERT INTO sample (id, score, name, payload, optional) VALUES (?, 1.0, 'rolled', x'00', NULL)", [99 -> sqlite.int]) -> sqlite.exec -> first -> $conn3
             $conn3 -> sqlite.rollback -> $conn4
             $conn4 -> sqlite.begin_immediate -> $conn5
-            7 -> sqlite.int -> $id
-            2.5 -> sqlite.real -> $score
-            "seven" -> sqlite.text -> $name
-            "blob-bytes" -> sqlite.blob -> $payload
-            () -> sqlite.null -> $optional
-            ($conn5, "INSERT INTO sample (id, score, name, payload, optional) VALUES (?, ?, ?, ?, ?)", [$id, $score, $name, $payload, $optional]) -> sqlite.exec -> first -> $conn6
+            ($conn5, "INSERT INTO sample (id, score, name, payload, optional) VALUES (?, ?, ?, ?, ?)", [7 -> sqlite.int, 2.5 -> sqlite.real, "seven" -> sqlite.text, "blob-bytes" -> sqlite.blob, () -> sqlite.null]) -> sqlite.exec -> first -> $conn6
             $conn6 -> sqlite.commit -> $conn7
-            ($conn7, "SELECT id, score, name, payload, optional FROM sample ORDER BY id", $no_params) -> sqlite.query_all -> $result
+            ($conn7, "SELECT id, score, name, payload, optional FROM sample ORDER BY id", []) -> sqlite.query_all -> $result
             $result -> first -> $conn8
             $result -> second -> $rows
             $rows -> length -> format_int -> $count
@@ -202,17 +187,13 @@ fn std_sqlite_runtime_faults_on_bad_param_count() {
     }
     let source = r#"
         import std.cli { Args }
-        import std.seq { slice }
         import std.sqlite as sqlite
         import std.tuple { first }
 
         program main(args: Args) -> exit_code: Faultable[Int] {
             () -> sqlite.open_memory -> $conn0
-            () -> sqlite.null -> $null_value
-            [$null_value] -> $one_param
-            ($one_param, 0, 0) -> slice -> $no_params
-            ($conn0, "CREATE TABLE t (id INTEGER)", $no_params) -> sqlite.exec -> first -> $conn1
-            ($conn1, "INSERT INTO t (id) VALUES (?)", $no_params) -> sqlite.exec -> first -> $conn2
+            ($conn0, "CREATE TABLE t (id INTEGER)", []) -> sqlite.exec -> first -> $conn1
+            ($conn1, "INSERT INTO t (id) VALUES (?)", []) -> sqlite.exec -> first -> $conn2
             $conn2 -> sqlite.close -> $exit_code
         }
     "#;

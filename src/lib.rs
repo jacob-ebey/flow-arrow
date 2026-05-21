@@ -694,6 +694,42 @@ mod tests {
     }
 
     #[test]
+    fn typecheck_and_codegen_inline_empty_sqlite_params() {
+        let source = r#"
+            import std.cli { Args }
+            import std.sqlite as sqlite
+            import std.tuple { first }
+
+            program main(args: Args) -> exit_code: Faultable[Int] {
+                () -> sqlite.open_memory -> $conn0
+                ($conn0, "CREATE TABLE todos (title TEXT NOT NULL)", []) -> sqlite.exec -> first -> $conn1
+                ($conn1, "INSERT INTO todos (title) VALUES (?)", ["write sqlite docs" -> sqlite.text]) -> sqlite.exec -> first -> $conn2
+                $conn2 -> sqlite.close -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
+        assert!(runtime_c.contains("FaSeq_SqliteValue_new(0)"));
+        assert!(runtime_c.contains("fa_sqlite_text"));
+    }
+
+    #[test]
+    fn typecheck_rejects_untyped_empty_sequence_binding() {
+        let source = r#"
+            import std.cli { Args }
+
+            program main(args: Args) -> exit_code: Int {
+                [] -> $empty
+                0 -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("empty sequence literals need a type context"));
+    }
+
+    #[test]
     fn typechecks_mixed_numeric_add_and_llvm_type_names() {
         let source = r#"
             import std.cli { Args }
