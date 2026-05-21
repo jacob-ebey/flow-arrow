@@ -174,14 +174,18 @@ fn std_fs_grep_example_builds_and_runs_with_faultable_pipeline() {
     let build = support::build_source("fs-grep-example", source);
     let root = support::source_path("fs-grep-example-root").with_file_name("grep-example-root");
     let nested = root.join("nested");
+    let ignored = root.join("ignored");
     fs::create_dir_all(&nested).expect("create nested");
+    fs::create_dir_all(&ignored).expect("create ignored");
+    fs::write(root.join(".gitignore"), b"ignored/\n*.log\n").expect("write ignore");
     fs::write(root.join("a.txt"), b"needle one\nskip\n").expect("write a");
+    fs::write(root.join("ignored.log"), b"needle ignored log\n").expect("write log");
+    fs::write(ignored.join("c.txt"), b"needle ignored dir\n").expect("write ignored");
     fs::write(nested.join("b.txt"), b"skip\nneedle two\n").expect("write b");
 
     let output = Command::new(&build.executable)
         .arg("needle")
-        .arg(root.join("*.txt"))
-        .arg(&nested)
+        .arg(&root)
         .output()
         .expect("run");
     assert!(
@@ -192,7 +196,8 @@ fn std_fs_grep_example_builds_and_runs_with_faultable_pipeline() {
     let stdout = String::from_utf8(output.stdout).expect("utf8");
     assert!(stdout.contains(":1:needle one\n"), "{stdout}");
     assert!(stdout.contains(":2:needle two\n"), "{stdout}");
-    assert!(stdout.contains("files walked: 2\n"), "{stdout}");
+    assert!(!stdout.contains("needle ignored"), "{stdout}");
+    assert!(stdout.contains("files walked: 5\n"), "{stdout}");
     assert!(stdout.contains("files scanned: 2\n"), "{stdout}");
 }
 

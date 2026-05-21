@@ -56,6 +56,10 @@ program main(args: Args) -> exit_code: Faultable[Int] {
 ```
 
 That declaration is honest about the fact that malformed stdin can fault.
+Plain values can also flow into matching faultable outputs. If a declaration or
+match arm expects `Faultable[T]` and the produced value is `T`, the compiler
+wraps it as the successful branch of the faultable value.
+
 If a definition handles the fault path, it may return a non-faultable
 type:
 

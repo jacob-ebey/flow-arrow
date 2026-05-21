@@ -12,12 +12,15 @@ Fault
 Faultable[T]
 ```
 
+Plain values flow into matching `Faultable[T]` outputs implicitly. A node or
+match arm that produces `T` can satisfy a declared `Faultable[T]` result; the
+compiler emits the successful faultable wrapper.
+
 ## Nodes
 
 ```text
 has_faults    : Seq[Fault] -> Bool
 format_faults : Seq[Fault] -> Bytes
-ok            : V -> Faultable[V]
 expect        : Faultable[V] -> V
 collect       : Seq[Faultable[V]] -> Faultable[Seq[V]]
 collect       : Faultable[Seq[Faultable[V]]] -> Faultable[Seq[V]]
@@ -35,10 +38,6 @@ Formats fault diagnostics as bytes suitable for `write_stderr`.
 
 The initial diagnostic format is intentionally simple and human-readable.
 A stable structured diagnostic model is still an open design question.
-
-### `ok`
-
-Wraps a value as a successful `Faultable[V]`.
 
 ### `expect`
 

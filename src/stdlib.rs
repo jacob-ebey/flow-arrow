@@ -327,7 +327,6 @@ pub const SYMBOLS: &[StdSymbol] = &[
     predicates::ANY,
     fault::HAS_FAULTS,
     fault::FORMAT_FAULTS,
-    fault::OK,
     fault::EXPECT,
     fault::COLLECT,
     intrinsic::RANGE_STEP,

@@ -718,11 +718,14 @@ mod tests {
     fn typecheck_and_codegen_destructure_tuple_binding() {
         let source = r#"
             import std.cli { Args }
-            import std.fault { expect, ok }
 
-            program main(args: Args) -> exit_code: Int {
-                (1, 2) -> ok -> ($left, $right)
-                $left -> expect -> $exit_code
+            node pair(input: Int) -> out: Faultable[(Int, Int)] {
+                ($input, 2) -> $out
+            }
+
+            program main(args: Args) -> exit_code: Faultable[Int] {
+                1 -> pair -> ($left, $right)
+                $left -> $exit_code
             }
         "#;
         let module = parser::parse(source).expect("parse");

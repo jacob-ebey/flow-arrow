@@ -59,3 +59,47 @@ fn std_fault_collect_accepts_faultable_sequence() {
     );
     assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "ok:2\n");
 }
+
+#[test]
+fn plain_values_flow_into_faultable_outputs() {
+    let source = r#"
+        import std.bytes { concat_bytes }
+        import std.cli { Args }
+        import std.io { write_stdout }
+        import std.predicates { is_empty }
+        import std.seq { tail }
+
+        node empty_lines(input: Bytes) -> out: Seq[Bytes] {
+            [""] -> tail -> $out
+        }
+
+        node maybe_lines(input: Bytes) -> out: Faultable[Seq[Bytes]] {
+            $input
+            -> match {
+                input_empty() -> empty_lines
+                _ -> one_line
+            }
+            -> $out
+        }
+
+        node input_empty(input: Bytes) -> out: Bool {
+            $input -> is_empty -> $out
+        }
+
+        node one_line(input: Bytes) -> out: Faultable[Seq[Bytes]] {
+            [$input] -> $out
+        }
+
+        program main(args: Args) -> exit_code: Faultable[Int] {
+            "ok" -> maybe_lines -> concat_bytes -> write_stdout -> $exit_code
+        }
+    "#;
+
+    let output = support::run_source("fault-implicit-ok", source, b"");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "ok");
+}

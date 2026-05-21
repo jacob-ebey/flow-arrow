@@ -753,29 +753,58 @@ impl<'a> TypedCodegen<'a> {
     ) -> Result<Value, String> {
         match callable.outputs.as_slice() {
             [] => Err(format!("`{}` must declare an output", callable.name)),
-            [output] => env
-                .get(&output.name)
-                .cloned()
-                .ok_or_else(|| format!("output `{}` is never bound", output.name)),
+            [output] => {
+                let value = env
+                    .get(&output.name)
+                    .cloned()
+                    .ok_or_else(|| format!("output `{}` is never bound", output.name))?;
+                let expected = self.parse_declared_type(&output.ty)?;
+                self.emit_coerced_value(out, value, &expected)
+            }
             outputs => {
                 let mut values = Vec::new();
+                let mut types = Vec::new();
                 for output in outputs {
+                    let expected = self.parse_declared_type(&output.ty)?;
                     values.push(
                         env.get(&output.name)
                             .cloned()
                             .ok_or_else(|| format!("output `{}` is never bound", output.name))?,
                     );
+                    types.push(expected);
                 }
-                let ty = Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect());
+                let ty = Ty::Tuple(types.clone());
                 let c_ty = self.types.c_type(&ty);
                 let tmp = self.next_temp();
                 out.push_str(&format!("  {c_ty} {tmp};\n"));
-                for (index, value) in values.iter().enumerate() {
-                    out.push_str(&format!("  {tmp}.f{index} = {};\n", value.code));
+                for (index, (value, item_ty)) in values.iter().zip(types.iter()).enumerate() {
+                    self.emit_assign_value(out, &format!("{tmp}.f{index}"), item_ty, value)?;
                 }
                 Ok(Value { code: tmp, ty })
             }
         }
+    }
+
+    fn emit_coerced_value(
+        &mut self,
+        out: &mut String,
+        value: Value,
+        expected: &Ty,
+    ) -> Result<Value, String> {
+        if &value.ty == expected {
+            return Ok(value);
+        }
+        if !assignable_output_ty(expected, &value.ty) {
+            return Err(format!("expected `{expected}`, found `{}`", value.ty));
+        }
+        let c_ty = self.types.c_type(expected);
+        let tmp = self.next_temp();
+        out.push_str(&format!("  {c_ty} {tmp};\n"));
+        self.emit_assign_value(out, &tmp, expected, &value)?;
+        Ok(Value {
+            code: tmp,
+            ty: expected.clone(),
+        })
     }
 
     fn emit_accumulator_fusion(
@@ -1351,6 +1380,22 @@ impl<'a> TypedCodegen<'a> {
                 out.push_str(&format!("  {target}.is_fault = false;\n"));
                 out.push_str(&format!("  {target}.value = {};\n", value.code));
             }
+            (Ty::Faultable(inner), value_ty)
+                if unwrap_faultable_tuple(value_ty)
+                    .as_ref()
+                    .is_some_and(|unwrapped| unwrapped == inner.as_ref()) =>
+            {
+                let unwrapped_ty = inner.as_ref();
+                let unwrapped_c_ty = self.types.c_type(unwrapped_ty);
+                let unwrapped = self.next_temp();
+                out.push_str(&format!("  {target}.is_fault = false;\n"));
+                emit_fault_checks_for_value(out, target, &value.code, value_ty);
+                out.push_str(&format!("  if (!{target}.is_fault) {{\n"));
+                out.push_str(&format!("    {unwrapped_c_ty} {unwrapped};\n"));
+                emit_unwrap_faultable_value(out, &unwrapped, &value.code, value_ty, "    ");
+                out.push_str(&format!("    {target}.value = {unwrapped};\n"));
+                out.push_str("  }\n");
+            }
             _ => out.push_str(&format!("  {target} = {};\n", value.code)),
         }
         Ok(())
@@ -1375,10 +1420,7 @@ impl<'a> TypedCodegen<'a> {
         subject: Value,
         env: &HashMap<String, Value>,
     ) -> Result<Value, String> {
-        let first = arms
-            .first()
-            .ok_or_else(|| "`match` must contain at least one arm".to_string())?;
-        let output_ty = self.match_target_type(&first.target, &subject.ty, env)?;
+        let output_ty = self.match_output_type(arms, &subject.ty, env)?;
         let c_ty = self.types.c_type(&output_ty);
         let target = self.next_temp();
         out.push_str(&format!("  {c_ty} {target};\n"));
@@ -1463,6 +1505,28 @@ impl<'a> TypedCodegen<'a> {
             MatchTarget::Node(node) => self.call_output_type(node, subject_ty),
             MatchTarget::Value(endpoint) => self.endpoint_value_type(endpoint, env),
         }
+    }
+
+    fn match_output_type(
+        &self,
+        arms: &[MatchArm],
+        subject_ty: &Ty,
+        env: &HashMap<String, Value>,
+    ) -> Result<Ty, String> {
+        let mut output = None;
+        for arm in arms {
+            let arm_ty = self.match_target_type(&arm.target, subject_ty, env)?;
+            output = Some(if let Some(current) = output {
+                common_assignable_output_ty(
+                    &current,
+                    &arm_ty,
+                    &format!("match arm `{}` result", format_match_target(&arm.target)),
+                )?
+            } else {
+                arm_ty
+            });
+        }
+        output.ok_or_else(|| "`match` must contain at least one arm".to_string())
     }
 
     fn endpoint_value_type(
@@ -1585,10 +1649,7 @@ impl<'a> TypedCodegen<'a> {
                     }
                 }
                 Stage::Match { arms } => {
-                    let first = arms
-                        .first()
-                        .ok_or_else(|| "`match` must contain at least one arm".to_string())?;
-                    value_ty = self.match_target_type(&first.target, &value_ty, env)?;
+                    value_ty = self.match_output_type(arms, &value_ty, env)?;
                 }
             }
         }
@@ -1718,6 +1779,29 @@ impl<'a> TypedCodegen<'a> {
                     )?;
                 }
                 out.push_str("  }\n");
+                return Ok(());
+            }
+        }
+        if let Ty::Faultable(output_inner) = output_ty {
+            let plain_output = if let Some(signature) = self.signatures.get(name) {
+                signature.output.clone()
+            } else {
+                builtin_output_type_plain(&self.canonical_name(name), input_ty)?
+            };
+            if &plain_output == output_inner.as_ref() {
+                let c_ty = self.types.c_type(output_inner);
+                let tmp = self.next_temp();
+                out.push_str(&format!("  {c_ty} {tmp};\n"));
+                self.emit_assign_call_plain(out, &tmp, output_inner, name, input, input_ty)?;
+                self.emit_assign_value(
+                    out,
+                    target,
+                    output_ty,
+                    &Value {
+                        code: tmp,
+                        ty: output_inner.as_ref().clone(),
+                    },
+                )?;
                 return Ok(());
             }
         }
@@ -2124,6 +2208,34 @@ impl<'a> TypedCodegen<'a> {
     }
 
     fn emit_filter(&mut self, out: &mut String, name: &str, input: Value) -> Result<Value, String> {
+        if let Ty::Faultable(inner) = input.ty.clone() {
+            if !matches!(inner.as_ref(), Ty::Seq(_)) {
+                return Err(format!("`filter {name}` expected Seq input"));
+            }
+            let output_ty = input.ty.clone();
+            let c_ty = self.types.c_type(&output_ty);
+            let tmp = self.next_temp();
+            out.push_str(&format!("  {c_ty} {tmp};\n"));
+            out.push_str(&format!("  if ({}.is_fault) {{\n", input.code));
+            out.push_str(&format!("    {tmp}.is_fault = true;\n"));
+            out.push_str(&format!("    {tmp}.fault = {}.fault;\n", input.code));
+            out.push_str("  } else {\n");
+            out.push_str(&format!("    {tmp}.is_fault = false;\n"));
+            let filtered = self.emit_filter(
+                out,
+                name,
+                Value {
+                    code: format!("{}.value", input.code),
+                    ty: inner.as_ref().clone(),
+                },
+            )?;
+            out.push_str(&format!("    {tmp}.value = {};\n", filtered.code));
+            out.push_str("  }\n");
+            return Ok(Value {
+                code: tmp,
+                ty: output_ty,
+            });
+        }
         let Ty::Seq(item_ty) = input.ty.clone() else {
             return Err(format!("`filter {name}` expected Seq input"));
         };
@@ -2733,21 +2845,6 @@ impl<'a> TypedCodegen<'a> {
             "any" => self.emit_all_any(out, target, input, false),
             "has_faults" => out.push_str(&format!("  {target} = {input}.count > 0;\n")),
             "format_faults" => out.push_str(&format!("  {target} = fa_format_faults({input});\n")),
-            "ok" => {
-                let inner_ty = match output_ty {
-                    Ty::Faultable(inner) => inner.as_ref().clone(),
-                    other => other.clone(),
-                };
-                self.emit_assign_value(
-                    out,
-                    target,
-                    output_ty,
-                    &Value {
-                        code: input.to_string(),
-                        ty: inner_ty,
-                    },
-                )?;
-            }
             "expect" => {
                 if matches!(input_ty, Ty::Faultable(_)) {
                     out.push_str(&format!(
@@ -4757,7 +4854,6 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             };
             Ok(Ty::Faultable(Box::new(Ty::Seq(ok.clone()))))
         }
-        "ok" => Ok(Ty::Faultable(Box::new(input.clone()))),
         "expect" => {
             if let Ty::Faultable(inner) = input {
                 Ok(inner.as_ref().clone())
@@ -5028,6 +5124,63 @@ fn match_input_types(
             Ok(())
         }
         _ => Err(format!("expected `{expected}`, found `{actual}`")),
+    }
+}
+
+fn assignable_output_ty(expected: &Ty, actual: &Ty) -> bool {
+    if expected == actual {
+        return true;
+    }
+    match (expected, actual) {
+        (Ty::Faultable(expected), actual) => {
+            expected.as_ref() == actual
+                || unwrap_faultable_tuple(actual)
+                    .as_ref()
+                    .is_some_and(|actual| expected.as_ref() == actual)
+        }
+        (Ty::Seq(_), Ty::EmptySeq) => true,
+        (Ty::Seq(expected), Ty::Seq(actual)) if matches!(actual.as_ref(), Ty::EmptySeq) => {
+            assignable_output_ty(expected, actual)
+        }
+        (Ty::Seq(expected), Ty::Seq(actual)) => assignable_output_ty(expected, actual),
+        (Ty::Stream(expected), Ty::Stream(actual)) => assignable_output_ty(expected, actual),
+        (Ty::Tuple(expected), Ty::Tuple(actual)) if expected.len() == actual.len() => expected
+            .iter()
+            .zip(actual.iter())
+            .all(|(expected, actual)| assignable_output_ty(expected, actual)),
+        _ => false,
+    }
+}
+
+fn common_assignable_output_ty(current: &Ty, next: &Ty, label: &str) -> Result<Ty, String> {
+    if assignable_output_ty(current, next) {
+        return Ok(current.clone());
+    }
+    if assignable_output_ty(next, current) {
+        return Ok(next.clone());
+    }
+    Err(format!("{label} expected `{current}`, found `{next}`"))
+}
+
+fn format_match_target(target: &MatchTarget) -> String {
+    match target {
+        MatchTarget::Node(node) => node.clone(),
+        MatchTarget::Value(endpoint) => format_endpoint_for_error_codegen(endpoint),
+    }
+}
+
+fn format_endpoint_for_error_codegen(endpoint: &Endpoint) -> String {
+    match endpoint {
+        Endpoint::Variable(name) => format!("${name}"),
+        Endpoint::Name(name) => name.clone(),
+        Endpoint::Int(value) => value.to_string(),
+        Endpoint::Real(value) => value.to_string(),
+        Endpoint::Bool(value) => value.to_string(),
+        Endpoint::String(value) => format!("\"{value}\""),
+        Endpoint::Unit => "()".to_string(),
+        Endpoint::Tuple(_) => "(...)".to_string(),
+        Endpoint::Seq(_) => "[...]".to_string(),
+        Endpoint::Eval { .. } => "(inline eval)".to_string(),
     }
 }
 

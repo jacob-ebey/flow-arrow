@@ -597,7 +597,7 @@ impl<'a> Checker<'a> {
                     callable.name, output.name
                 )
             })?;
-            self.expect_type(
+            self.expect_assignable_type(
                 &format!("output `{}` of `{}`", output.name, callable.name),
                 actual,
                 &expected,
@@ -643,7 +643,7 @@ impl<'a> Checker<'a> {
                     callable.name, output.name
                 )
             })?;
-            self.expect_type(
+            self.expect_assignable_type(
                 &format!("output `{}` of `{}`", output.name, callable.name),
                 actual,
                 &expected,
@@ -1284,11 +1284,11 @@ impl<'a> Checker<'a> {
                 MatchTarget::Value(endpoint) => self.endpoint_type(endpoint, env)?,
             };
             if let Some(expected) = &result {
-                self.expect_type(
-                    &format!("match arm `{}` result", format_match_target(&arm.target)),
-                    &arm_output,
+                result = Some(common_assignable_type(
                     expected,
-                )?;
+                    &arm_output,
+                    &format!("match arm `{}` result", format_match_target(&arm.target)),
+                )?);
             } else {
                 result = Some(arm_output);
             }
@@ -1303,6 +1303,16 @@ impl<'a> Checker<'a> {
     fn expect_type(&self, label: &str, actual: &Type, expected: &Type) -> Result<(), String> {
         let mut vars = HashMap::new();
         match_types(expected, actual, &mut vars)
+            .map_err(|error| format!("{label} expected `{expected}`, found `{actual}`: {error}"))
+    }
+
+    fn expect_assignable_type(
+        &self,
+        label: &str,
+        actual: &Type,
+        expected: &Type,
+    ) -> Result<(), String> {
+        assignable_type(expected, actual)
             .map_err(|error| format!("{label} expected `{expected}`, found `{actual}`: {error}"))
     }
 }
@@ -1612,6 +1622,58 @@ fn sequence_item_type(left: &Type, right: &Type) -> Result<Type, String> {
         }
         _ => Err(format!("expected `{left}`, found `{right}`")),
     }
+}
+
+fn assignable_type(expected: &Type, actual: &Type) -> Result<(), String> {
+    let mut vars = HashMap::new();
+    match_types(expected, actual, &mut vars).or_else(|_| {
+        if let Type::Faultable(inner) = expected {
+            if let Some(actual) = unwrap_faultable_tuple_type(actual) {
+                let mut vars = HashMap::new();
+                return match_types(inner, &actual, &mut vars);
+            }
+            let mut vars = HashMap::new();
+            match_types(inner, actual, &mut vars)
+        } else {
+            Err(format!("expected `{expected}`, found `{actual}`"))
+        }
+    })
+}
+
+fn common_assignable_type(current: &Type, next: &Type, label: &str) -> Result<Type, String> {
+    if assignable_type(current, next).is_ok() {
+        return Ok(current.clone());
+    }
+    if assignable_type(next, current).is_ok() {
+        return Ok(next.clone());
+    }
+    Err(format!("{label} expected `{current}`, found `{next}`"))
+}
+
+fn unwrap_faultable_tuple_type(input: &Type) -> Option<Type> {
+    let Type::Tuple(items) = input else {
+        return None;
+    };
+    let mut saw_faultable = false;
+    let unwrapped = items
+        .iter()
+        .map(|item| match item {
+            Type::Faultable(inner) => {
+                saw_faultable = true;
+                inner.as_ref().clone()
+            }
+            Type::Tuple(_) => {
+                if let Some(unwrapped) = unwrap_faultable_tuple_type(item) {
+                    saw_faultable = true;
+                    unwrapped
+                } else {
+                    item.clone()
+                }
+            }
+            other => other.clone(),
+        })
+        .collect::<Vec<_>>();
+    saw_faultable.then_some(Type::Tuple(unwrapped))
 }
 
 fn contains_empty_seq(input: &Type) -> bool {

@@ -2331,11 +2331,14 @@ program main(args: Args) -> exit_code: Int {
     #[test]
     fn lsp_infers_destructured_binding_types() {
         let source = r#"import std.cli { Args }
-import std.fault { expect, ok }
 
-program main(args: Args) -> exit_code: Int {
-    (1, "x") -> ok -> ($left, $right)
-    $left -> expect -> $exit_code
+node pair(input: Int) -> out: Faultable[(Int, Bytes)] {
+    ($input, "x") -> $out
+}
+
+program main(args: Args) -> exit_code: Faultable[Int] {
+    1 -> pair -> ($left, $right)
+    $left -> $exit_code
 }
 "#;
         let analysis = Analysis::new("file:///tmp/main.flow".to_string(), source.to_string());

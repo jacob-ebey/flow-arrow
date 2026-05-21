@@ -9,15 +9,32 @@
 # Example:
 #
 #   $ flowarrow run main.flow needle ./src "*.flow"
-import std.bytes { concat_bytes, contains, split_lines }
+import std.bytes {
+    concat_bytes,
+    contains,
+    replace,
+    split_lines,
+    starts_with,
+    trim,
+}
 import std.cli { Args, argv }
 import std.fault { collect }
-import std.fs { open_file, walk_files }
+import std.fs {
+    dirname,
+    exists,
+    is_dir,
+    join_path,
+    open_file,
+    read_files,
+    walk_files,
+}
 import std.int { format_int }
 import std.io { write_stdout }
 import std.math { add }
+import std.predicates { any, not, not_empty, or }
 import std.seq {
     broadcast_right,
+    concat,
     flatten,
     head,
     length,
@@ -31,10 +48,16 @@ program main(args: Args) -> exit_code: Faultable[Int] {
     $raw_args -> head -> $needle
     $raw_args -> tail -> $targets
 
-    $targets          -> map walk_files  -> collect       -> flatten -> $paths
-    ($paths, $needle) -> broadcast_right -> map grep_path -> collect -> flatten -> $lines
-    $paths            -> length          -> format_int    -> $walked_count
-    $paths            -> length          -> format_int    -> $file_count
+    $targets                   -> head        -> $root_target
+    $root_target               -> grep_config -> $root_config
+    $root_config               -> ($_, $ignore_filters)
+    ($needle, $ignore_filters) -> $search_config
+
+    $targets                         -> map walk_files  -> collect                -> flatten                   -> $walked_paths
+    ($walked_paths, $ignore_filters) -> broadcast_right -> filter path_is_visible -> map path_from_filter_pair -> $paths
+    ($paths, $search_config)         -> broadcast_right -> map grep_path          -> collect                   -> flatten -> $lines
+    $walked_paths                    -> length          -> format_int             -> $walked_count
+    $paths                           -> length          -> format_int             -> $file_count
     # summarize the walk and scan counts, and print the matches
     ["files walked: ", $walked_count, "\n", "files scanned: ", $file_count, "\n"] -> concat_bytes -> $summary
     $lines                                                                        -> concat_bytes -> $matches
@@ -42,10 +65,93 @@ program main(args: Args) -> exit_code: Faultable[Int] {
     $output                                                                       -> write_stdout -> $exit_code
 }
 
-node grep_path(input: (Bytes, Bytes)) -> out: Faultable[Seq[Bytes]] {
-    $input                      -> ($path, $needle)
+node grep_config(root_target: Bytes) -> out: Faultable[(Bytes, Seq[Bytes])] {
+    $root_target                                               -> is_dir            -> $root_is_dir
+    $root_target                                               -> dirname           -> $root_parent
+    ($root_is_dir, $root_target, $root_parent)                 -> select            -> $root
+    ($root, ".gitignore")                                      -> join_path         -> $gitignore_path
+    $gitignore_path                                            -> exists            -> $has_gitignore
+    $gitignore_path                                            -> one_path          -> $one_gitignore_path
+    $gitignore_path                                            -> no_paths          -> $no_gitignore_paths
+    ($has_gitignore, $one_gitignore_path, $no_gitignore_paths) -> select            -> $gitignore_paths
+    $gitignore_paths                                           -> read_files        -> $gitignore_files
+    $gitignore_files                                           -> map file_contents -> concat_bytes -> split_lines -> map trim -> $gitignore_filters
+    ["/.git/", ".git/", ".gitignore"]                          -> $default_ignore_filters
+    ($default_ignore_filters, $gitignore_filters)              -> concat            -> $ignore_filters
+    ($root, $ignore_filters)                                   -> $out
+}
+
+node grep_path(input: (Bytes, (Bytes, Seq[Bytes]))) -> out: Faultable[Seq[Bytes]] {
+    $input
+    -> match {
+        grep_path_is_ignored() -> no_matches
+        _ -> grep_visible_path
+    }
+    -> $out
+}
+
+node no_paths(input: Bytes) -> out: Seq[Bytes] {
+    [""] -> tail -> $out
+}
+
+node one_path(input: Bytes) -> out: Faultable[Seq[Bytes]] {
+    [$input] -> $out
+}
+
+node grep_visible_path(input: (Bytes, (Bytes, Seq[Bytes]))) -> out: Faultable[Seq[Bytes]] {
+    $input                      -> ($path, ($needle, $ignore_filters))
     $path                       -> open_file -> stream.to_seq -> concat_bytes -> $contents
     ($path, $contents, $needle) -> grep_file -> $out
+}
+
+node no_matches(input: (Bytes, (Bytes, Seq[Bytes]))) -> out: Seq[Bytes] {
+    [""] -> tail -> $out
+}
+
+node grep_path_is_ignored(input: (Bytes, (Bytes, Seq[Bytes]))) -> out: Bool {
+    $input                   -> ($path, ($needle, $ignore_filters))
+    ($path, $ignore_filters) -> path_matches_filters -> $out
+}
+
+node path_is_visible(input: (Bytes, Seq[Bytes])) -> out: Bool {
+    $input -> path_matches_filters -> not -> $out
+}
+
+node path_matches_filters(input: (Bytes, Seq[Bytes])) -> out: Bool {
+    $input                   -> ($path, $ignore_filters)
+    ($ignore_filters, $path) -> broadcast_right -> map path_contains_filter -> any -> $out
+}
+
+node path_from_filter_pair(input: (Bytes, Seq[Bytes])) -> out: Bytes {
+    $input -> ($path, $ignore_filters)
+    $path  -> $out
+}
+
+node path_contains_filter(input: (Bytes, Bytes)) -> out: Bool {
+    $input
+    -> match {
+        ignore_filter_inactive() -> false
+        _ -> path_contains_active_filter
+    }
+    -> $out
+}
+
+node ignore_filter_inactive(input: (Bytes, Bytes)) -> out: Bool {
+    $input             -> ($filter, $path)
+    $filter            -> not_empty   -> not -> $empty
+    ($filter, "#")     -> starts_with -> $comment
+    ($empty, $comment) -> or          -> $out
+}
+
+node path_contains_active_filter(input: (Bytes, Bytes)) -> out: Bool {
+    $input                      -> ($filter, $path)
+    ($filter, "*", "")          -> replace  -> $normalized_filter
+    ($path, $normalized_filter) -> contains -> $out
+}
+
+node file_contents(input: (Bytes, Bytes)) -> out: Bytes {
+    $input    -> ($path, $contents)
+    $contents -> $out
 }
 
 node grep_file(input: (Bytes, Bytes, Bytes)) -> out: Seq[Bytes] {
