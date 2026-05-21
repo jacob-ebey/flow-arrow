@@ -1,11 +1,13 @@
 #include <ctype.h>
 #include <errno.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 typedef struct { int _unused; } FaUnit;
 typedef struct { char *bytes; size_t len; } FaBytes;
@@ -17,6 +19,10 @@ typedef struct { bool is_fault; FaFault fault; int64_t value; } FaFaultable_Int;
 typedef struct { bool is_fault; FaFault fault; double value; } FaFaultable_Real;
 typedef struct { bool is_fault; FaFault fault; FaBytes value; } FaFaultable_Bytes;
 typedef struct { size_t count; FaFault *items; } FaSeq_Fault;
+typedef void (*FaParallelForFn)(void *ctx, size_t start, size_t end);
+
+#define FA_PARALLEL_FOR_GRAIN 64
+#define FA_PARALLEL_FOR_MAX_WORKERS 64
 
 static void fa_die_usage(const char *message) {
   fputs(message, stderr);
@@ -27,6 +33,87 @@ static void fa_die_usage(const char *message) {
 static void fa_die_alloc(void) {
   fputs("flowarrow runtime: allocation failed\n", stderr);
   exit(70);
+}
+
+typedef struct {
+  FaParallelForFn fn;
+  void *ctx;
+  size_t next;
+  size_t end;
+  size_t grain;
+  pthread_mutex_t lock;
+} FaParallelForState;
+
+static _Thread_local int fa_parallel_depth = 0;
+
+static size_t fa_parallel_worker_count(void) {
+  const char *env = getenv("FLOWARROW_THREADS");
+  if (env && *env) {
+    char *end = NULL;
+    errno = 0;
+    long value = strtol(env, &end, 10);
+    if (errno == 0 && end != env && value > 0) {
+      return value > FA_PARALLEL_FOR_MAX_WORKERS ? FA_PARALLEL_FOR_MAX_WORKERS : (size_t)value;
+    }
+  }
+  long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+  if (cpus < 1) cpus = 1;
+  return cpus > FA_PARALLEL_FOR_MAX_WORKERS ? FA_PARALLEL_FOR_MAX_WORKERS : (size_t)cpus;
+}
+
+static void *fa_parallel_for_worker(void *arg) {
+  FaParallelForState *state = (FaParallelForState *)arg;
+  fa_parallel_depth++;
+  for (;;) {
+    size_t start;
+    size_t end;
+    pthread_mutex_lock(&state->lock);
+    start = state->next;
+    if (start >= state->end) {
+      pthread_mutex_unlock(&state->lock);
+      break;
+    }
+    end = start + state->grain;
+    if (end > state->end) end = state->end;
+    state->next = end;
+    pthread_mutex_unlock(&state->lock);
+    state->fn(state->ctx, start, end);
+  }
+  fa_parallel_depth--;
+  return NULL;
+}
+
+static void fa_parallel_for(size_t start, size_t end, size_t grain, FaParallelForFn fn, void *ctx) {
+  if (end <= start) return;
+  if (grain == 0) grain = FA_PARALLEL_FOR_GRAIN;
+  size_t count = end - start;
+  size_t workers = fa_parallel_worker_count();
+  size_t chunks = (count + grain - 1) / grain;
+  if (fa_parallel_depth > 0 || workers <= 1 || chunks <= 1) {
+    fn(ctx, start, end);
+    return;
+  }
+  if (workers > chunks) workers = chunks;
+
+  FaParallelForState state;
+  state.fn = fn;
+  state.ctx = ctx;
+  state.next = start;
+  state.end = end;
+  state.grain = grain;
+  if (pthread_mutex_init(&state.lock, NULL) != 0) {
+    fn(ctx, start, end);
+    return;
+  }
+
+  pthread_t threads[FA_PARALLEL_FOR_MAX_WORKERS];
+  size_t spawned = 0;
+  for (; spawned + 1 < workers; spawned++) {
+    if (pthread_create(&threads[spawned], NULL, fa_parallel_for_worker, &state) != 0) break;
+  }
+  fa_parallel_for_worker(&state);
+  for (size_t i = 0; i < spawned; i++) pthread_join(threads[i], NULL);
+  pthread_mutex_destroy(&state.lock);
 }
 
 static FaUnit fa_unit(void) {

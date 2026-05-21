@@ -72,7 +72,11 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
         .map_err(|error| format!("failed to write `{}`: {error}", runtime_path.display()))?;
 
     let mut clang = Command::new("clang");
-    clang.arg("-O3").arg(&llvm_path).arg(&runtime_path);
+    clang
+        .arg("-O3")
+        .arg("-pthread")
+        .arg(&llvm_path)
+        .arg(&runtime_path);
     if runtime_c.contains("jpeglib.h") || runtime_c.contains("png.h") {
         for flag in cv_compiler_flags(&runtime_c)? {
             clang.arg(flag);

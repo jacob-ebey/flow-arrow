@@ -89,6 +89,8 @@ enum ReductionTerm {
 struct TypedCodegen<'a> {
     module: &'a Module,
     temp: usize,
+    parallel_helper: usize,
+    parallel_helpers: String,
     callables: HashMap<String, &'a Callable>,
     signatures: HashMap<String, Signature>,
     stdlib_names: HashMap<String, String>,
@@ -101,6 +103,8 @@ impl<'a> TypedCodegen<'a> {
         let mut codegen = Self {
             module,
             temp: 0,
+            parallel_helper: 0,
+            parallel_helpers: String::new(),
             callables: HashMap::new(),
             signatures: HashMap::new(),
             stdlib_names: HashMap::new(),
@@ -160,6 +164,7 @@ impl<'a> TypedCodegen<'a> {
             ));
         }
         out.push('\n');
+        out.push_str(&self.parallel_helpers);
         out.push_str(&bodies);
         out.push_str(
             "int flow_unboxed_main(int argc, char **argv) {\n\
@@ -945,6 +950,32 @@ impl<'a> TypedCodegen<'a> {
         let item_c_ty = self.types.c_type(&output_item_ty);
         let new_fn = self.types.seq_new_name(&output_ty)?;
         let tmp = self.next_temp();
+        if self.is_parallel_safe_name(name, &mut HashSet::new()) {
+            let worker = self.emit_parallel_map_helper(
+                name,
+                &input.ty,
+                &item_ty,
+                &output_ty,
+                &output_item_ty,
+            )?;
+            let ctx_ty = format!("{worker}_Ctx");
+            let ctx = self.next_temp();
+            out.push_str(&format!(
+                "  {c_ty} {tmp} = {new_fn}({}.count);\n",
+                input.code
+            ));
+            out.push_str(&format!("  {ctx_ty} {ctx};\n"));
+            out.push_str(&format!("  {ctx}.input = {};\n", input.code));
+            out.push_str(&format!("  {ctx}.output = {tmp};\n"));
+            out.push_str(&format!(
+                "  fa_parallel_for(0, {}.count, FA_PARALLEL_FOR_GRAIN, {worker}, &{ctx});\n",
+                input.code
+            ));
+            return Ok(Value {
+                code: tmp,
+                ty: output_ty,
+            });
+        }
         let item_tmp = self.next_temp();
         let i = self.next_temp();
         out.push_str(&format!(
@@ -970,6 +1001,47 @@ impl<'a> TypedCodegen<'a> {
             code: tmp,
             ty: output_ty,
         })
+    }
+
+    fn emit_parallel_map_helper(
+        &mut self,
+        name: &str,
+        input_ty: &Ty,
+        item_ty: &Ty,
+        output_ty: &Ty,
+        output_item_ty: &Ty,
+    ) -> Result<String, String> {
+        let id = self.parallel_helper;
+        self.parallel_helper += 1;
+        let worker = format!("fa_parallel_map_worker_{id}");
+        let ctx_ty = format!("{worker}_Ctx");
+        let input_c_ty = self.types.c_type(input_ty);
+        let output_c_ty = self.types.c_type(output_ty);
+        let item_c_ty = self.types.c_type(output_item_ty);
+
+        let mut helper = String::new();
+        helper.push_str(&format!(
+            "typedef struct {{ {input_c_ty} input; {output_c_ty} output; }} {ctx_ty};\n"
+        ));
+        helper.push_str(&format!(
+            "static void {worker}(void *ctx_ptr, size_t start, size_t end) {{\n"
+        ));
+        helper.push_str(&format!("  {ctx_ty} *ctx = ({ctx_ty} *)ctx_ptr;\n"));
+        helper.push_str("  for (size_t i = start; i < end; i++) {\n");
+        helper.push_str(&format!("    {item_c_ty} item;\n"));
+        self.emit_assign_call(
+            &mut helper,
+            "item",
+            output_item_ty,
+            name,
+            "ctx->input.items[i]",
+            item_ty,
+        )?;
+        helper.push_str("    ctx->output.items[i] = item;\n");
+        helper.push_str("  }\n");
+        helper.push_str("}\n\n");
+        self.parallel_helpers.push_str(&helper);
+        Ok(worker)
     }
 
     fn emit_filter(&mut self, out: &mut String, name: &str, input: Value) -> Result<Value, String> {
@@ -2201,6 +2273,74 @@ impl<'a> TypedCodegen<'a> {
         self.canonical_name(name) == "length"
     }
 
+    fn is_parallel_safe_name(&self, name: &str, visiting: &mut HashSet<String>) -> bool {
+        if let Some(callable) = self.callables.get(name) {
+            return self.is_parallel_safe_callable(callable, visiting);
+        }
+        self.is_parallel_safe_builtin(&self.canonical_name(name))
+    }
+
+    fn is_parallel_safe_callable(
+        &self,
+        callable: &Callable,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        if !visiting.insert(callable.name.clone()) {
+            return false;
+        }
+        let safe = callable.chains.iter().all(|chain| {
+            self.is_parallel_safe_endpoint(&chain.source, visiting)
+                && chain
+                    .stages
+                    .iter()
+                    .all(|stage| self.is_parallel_safe_stage(stage, visiting))
+        });
+        visiting.remove(&callable.name);
+        safe
+    }
+
+    fn is_parallel_safe_stage(&self, stage: &Stage, visiting: &mut HashSet<String>) -> bool {
+        match stage {
+            Stage::Endpoint(endpoint) => self.is_parallel_safe_endpoint(endpoint, visiting),
+            Stage::Map(name) | Stage::Filter(name) => self.is_parallel_safe_name(name, visiting),
+            Stage::FaultMap { node, .. } => self.is_parallel_safe_name(node, visiting),
+            Stage::Repeat { count, node } => {
+                self.is_parallel_safe_endpoint(count, visiting)
+                    && self.is_parallel_safe_name(node, visiting)
+            }
+            Stage::Reduce { op, identity } | Stage::Scan { op, identity } => {
+                self.is_parallel_safe_endpoint(identity, visiting)
+                    && self.is_parallel_safe_name(op, visiting)
+            }
+        }
+    }
+
+    fn is_parallel_safe_endpoint(
+        &self,
+        endpoint: &Endpoint,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        match endpoint {
+            Endpoint::Name(name) => self.is_parallel_safe_name(name, visiting),
+            Endpoint::Tuple(items) | Endpoint::Seq(items) => items
+                .iter()
+                .all(|item| self.is_parallel_safe_endpoint(item, visiting)),
+            Endpoint::Variable(_)
+            | Endpoint::Int(_)
+            | Endpoint::Real(_)
+            | Endpoint::Bool(_)
+            | Endpoint::String(_)
+            | Endpoint::Unit => true,
+        }
+    }
+
+    fn is_parallel_safe_builtin(&self, name: &str) -> bool {
+        !matches!(
+            name,
+            "read_file" | "write_file" | "read_stdin" | "write_stdout" | "write_stderr"
+        )
+    }
+
     fn call_output_type(&self, name: &str, input: &Ty) -> Result<Ty, String> {
         if let Some(signature) = self.signatures.get(name) {
             if matches!(input, Ty::Faultable(_)) && !matches!(signature.output, Ty::Faultable(_)) {
@@ -3002,5 +3142,25 @@ define i32 @main(i32 %argc, ptr %argv) {\n\
         assert!(!runtime_c.contains("FaValue"));
         assert!(!runtime_c.contains("fa_map("));
         assert!(!runtime_c.contains("fa_reduce("));
+    }
+
+    #[test]
+    fn pure_maps_emit_parallel_workers() {
+        let module = checked_module(
+            r#"
+                import std.cli { Args }
+                import std.math { abs }
+
+                program main(args: Args) -> exit_code: Int {
+                    [-1, -2, -3] -> map abs -> $values
+                    0 -> $exit_code
+                }
+            "#,
+        );
+
+        let runtime_c = emit_runtime_c(&module).expect("runtime c");
+
+        assert!(runtime_c.contains("fa_parallel_map_worker_0"));
+        assert!(runtime_c.contains("fa_parallel_for(0,"));
     }
 }
