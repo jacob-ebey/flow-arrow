@@ -102,6 +102,15 @@ impl Server {
                         send_response(&mut writer, id, result)?;
                     }
                 }
+                "textDocument/inlayHint" => {
+                    if let Some(id) = id.as_ref() {
+                        let result = self
+                            .document_analysis(params)
+                            .map(|analysis| inlay_hints_result(&analysis, range_param(params)))
+                            .unwrap_or_else(|| "[]".to_string());
+                        send_response(&mut writer, id, result)?;
+                    }
+                }
                 "textDocument/documentSymbol" => {
                     if let Some(id) = id.as_ref() {
                         let result = self
@@ -152,6 +161,7 @@ fn initialize_result() -> String {
         "\"completionProvider\":{\"resolveProvider\":false,\"triggerCharacters\":[\".\",\"$\"]},",
         "\"definitionProvider\":true,",
         "\"hoverProvider\":true,",
+        "\"inlayHintProvider\":true,",
         "\"documentSymbolProvider\":true",
         "},\"serverInfo\":{\"name\":\"flowarrow-lsp\",\"version\":\"0.1.0\"}}"
     )
@@ -235,6 +245,21 @@ fn position_param(params: &Json) -> Option<Position> {
     Some(Position {
         line: position.get("line")?.as_u32()?,
         character: position.get("character")?.as_u32()?,
+    })
+}
+
+fn range_param(params: &Json) -> Option<Range> {
+    let range = params.get("range")?;
+    Some(Range {
+        start: json_position(range.get("start")?)?,
+        end: json_position(range.get("end")?)?,
+    })
+}
+
+fn json_position(value: &Json) -> Option<Position> {
+    Some(Position {
+        line: value.get("line")?.as_u32()?,
+        character: value.get("character")?.as_u32()?,
     })
 }
 
@@ -940,17 +965,22 @@ impl Analysis {
     }
 
     fn collect_bindings(&self, start: usize, end: usize, variables: &mut Vec<VariableSymbol>) {
-        for index in start..end {
-            let TokenKind::Variable(name) = &self.tokens[index].kind else {
+        let mut index = start;
+        while index < end {
+            if matches!(self.tokens[index].kind, TokenKind::Arrow)
+                && let Some((_, next, bindings)) = self.binding_target_at(index + 1)
+            {
+                for (name, range) in bindings {
+                    variables.push(VariableSymbol {
+                        name,
+                        range,
+                        detail: "value".to_string(),
+                    });
+                }
+                index = next;
                 continue;
-            };
-            if index > start && matches!(self.tokens[index - 1].kind, TokenKind::Arrow) {
-                variables.push(VariableSymbol {
-                    name: name.clone(),
-                    range: self.tokens[index].range,
-                    detail: "value".to_string(),
-                });
             }
+            index += 1;
         }
     }
 
@@ -1089,8 +1119,52 @@ impl Analysis {
                 let (range, next) = self.name_range_at(index)?;
                 Some((range, next, false))
             }
-            TokenKind::Variable(_) => Some((self.tokens[index].range, index + 1, true)),
+            TokenKind::Variable(_) => {
+                let (range, next, _) = self.binding_target_at(index)?;
+                Some((range, next, true))
+            }
+            TokenKind::Symbol('(') => {
+                let (range, next, _) = self.binding_target_at(index)?;
+                Some((range, next, true))
+            }
             _ => Some((self.tokens[index].range, index + 1, false)),
+        }
+    }
+
+    fn binding_target_at(&self, index: usize) -> Option<(Range, usize, Vec<(String, Range)>)> {
+        match self.tokens.get(index)? {
+            LspToken {
+                kind: TokenKind::Variable(name),
+                range,
+            } => Some((*range, index + 1, vec![(name.clone(), *range)])),
+            LspToken {
+                kind: TokenKind::Symbol('('),
+                range,
+            } => {
+                let mut cursor = index + 1;
+                let (_, next, mut bindings) = self.binding_target_at(cursor)?;
+                cursor = next;
+                if !self.is_symbol(cursor, ',') {
+                    return None;
+                }
+                while self.is_symbol(cursor, ',') {
+                    let (_, next, item_bindings) = self.binding_target_at(cursor + 1)?;
+                    bindings.extend(item_bindings);
+                    cursor = next;
+                }
+                if !self.is_symbol(cursor, ')') {
+                    return None;
+                }
+                Some((
+                    Range {
+                        start: range.start,
+                        end: self.tokens[cursor].range.end,
+                    },
+                    cursor + 1,
+                    bindings,
+                ))
+            }
+            _ => None,
         }
     }
 
@@ -1374,10 +1448,13 @@ impl Analysis {
         }
         for callable in &self.callables {
             for variable in &callable.variables {
+                let detail = self
+                    .semantic_variable_type(&callable.name, &variable.name)
+                    .unwrap_or(&variable.detail);
                 completions.push(Completion {
                     label: format!("${}", variable.name),
                     kind: CompletionKind::Variable,
-                    detail: format!("{} {}", callable.name, variable.detail),
+                    detail: format!("{} {detail}", callable.name),
                 });
             }
         }
@@ -1836,7 +1913,7 @@ fn definition_result(analysis: &Analysis, position: Position) -> Option<String> 
 fn hover_result(analysis: &Analysis, position: Position) -> Option<String> {
     if let Some(callable) = analysis.callable_at(position) {
         if let Some(stage) = analysis.semantic_stage_at(callable, position) {
-            if stage.is_arrow || !stage.label.starts_with('$') {
+            if stage.is_arrow || (!stage.label.starts_with('$') && !stage.label.starts_with('(')) {
                 return Some(hover_json(&format!(
                     "{}: {} -> {}",
                     stage.label, stage.input, stage.output
@@ -1880,6 +1957,31 @@ fn hover_json(contents: &str) -> String {
         "{{\"contents\":{{\"kind\":\"markdown\",\"value\":{}}}}}",
         json_string(&format!("```flow\n{contents}\n```"))
     )
+}
+
+fn inlay_hints_result(analysis: &Analysis, requested_range: Option<Range>) -> String {
+    let mut hints = Vec::new();
+    for callable in &analysis.callables {
+        for variable in &callable.variables {
+            if variable.detail != "value" {
+                continue;
+            }
+            if let Some(range) = requested_range
+                && !range.contains(variable.range.start)
+            {
+                continue;
+            }
+            let Some(ty) = analysis.semantic_variable_type(&callable.name, &variable.name) else {
+                continue;
+            };
+            hints.push(format!(
+                "{{\"position\":{},\"label\":{},\"kind\":1,\"paddingLeft\":false,\"paddingRight\":true}}",
+                position_json(variable.range.end),
+                json_string(&format!(": {ty}"))
+            ));
+        }
+    }
+    format!("[{}]", hints.join(","))
 }
 
 fn document_symbols_result(analysis: &Analysis) -> String {
@@ -2224,6 +2326,58 @@ program main(args: Args) -> exit_code: Int {
         let source_hover =
             hover_result(&analysis, position_of(source, "[\"1\"]")).expect("source hover");
         assert!(source_hover.contains(r#"[\"1\"]: Seq[Bytes]"#));
+    }
+
+    #[test]
+    fn lsp_infers_destructured_binding_types() {
+        let source = r#"import std.cli { Args }
+import std.fault { expect, ok }
+
+program main(args: Args) -> exit_code: Int {
+    (1, "x") -> ok -> ($left, $right)
+    $left -> expect -> $exit_code
+}
+"#;
+        let analysis = Analysis::new("file:///tmp/main.flow".to_string(), source.to_string());
+        let callable = analysis
+            .callables
+            .iter()
+            .find(|callable| callable.name == "main")
+            .expect("main scope");
+        assert!(
+            callable
+                .variables
+                .iter()
+                .any(|variable| variable.name == "left")
+        );
+        assert!(
+            callable
+                .variables
+                .iter()
+                .any(|variable| variable.name == "right")
+        );
+
+        let right_hover =
+            hover_result(&analysis, position_of(source, "$right")).expect("right hover");
+        assert!(right_hover.contains("$right: Faultable[Bytes]"));
+
+        let arrow_hover =
+            hover_result(&analysis, position_of(source, "-> ($left")).expect("arrow hover");
+        assert!(
+            arrow_hover
+                .contains("($left, $right): Faultable[(Int,Bytes)] -> Faultable[(Int,Bytes)]")
+        );
+
+        let right_completion = analysis
+            .completion_symbols()
+            .into_iter()
+            .find(|completion| completion.label == "$right")
+            .expect("right completion");
+        assert!(right_completion.detail.contains("Faultable[Bytes]"));
+
+        let hints = inlay_hints_result(&analysis, None);
+        assert!(hints.contains(": Faultable[Int]"));
+        assert!(hints.contains(": Faultable[Bytes]"));
     }
 
     fn position_of(source: &str, needle: &str) -> Position {
