@@ -103,6 +103,7 @@ intermediate bindings into edge labels for a denser operation-first view.
 | ----------------------------- | ------------------------------------------------------ |
 | `add-numbers-from-stdin/`     | Boundary I/O, dynamic-size sequences, parallel reduce. |
 | `add-numbers-from-args/`      | Command-line argument parsing and parallel reduce.     |
+| `concurrency/`                | Pure parallel map, independent reductions, deterministic join. |
 | `parse-and-sum-lines/`        | Minimal pressure test for parse faults and graph-visible fault semantics. |
 | `99-bottles/`                 | Pure string generation via `range_step` + `map` + concat reduce. |
 | `fibonacci/`                  | Stdin integer parsing and FlowArrow Fibonacci iteration. |

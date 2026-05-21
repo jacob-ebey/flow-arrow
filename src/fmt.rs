@@ -910,6 +910,10 @@ program main(args: Args) -> exit_code: Int {
                 include_str!("../examples/add-numbers-from-stdin/main.flow"),
             ),
             (
+                "examples/concurrency/main.flow",
+                include_str!("../examples/concurrency/main.flow"),
+            ),
+            (
                 "examples/fibonacci/main.flow",
                 include_str!("../examples/fibonacci/main.flow"),
             ),
