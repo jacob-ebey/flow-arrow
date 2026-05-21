@@ -33,7 +33,7 @@ enum Ty {
     Bool,
     Bytes,
     Args,
-    Stream,
+    Stream(Box<Ty>),
     Fault,
     Faultable(Box<Ty>),
     Seq(Box<Ty>),
@@ -327,6 +327,9 @@ impl<'a> TypedCodegen<'a> {
             Ty::Seq(item) => Ok(Ty::Seq(Box::new(
                 self.resolve_alias_type(*item, raw, resolved, resolving)?,
             ))),
+            Ty::Stream(item) => Ok(Ty::Stream(Box::new(
+                self.resolve_alias_type(*item, raw, resolved, resolving)?,
+            ))),
             Ty::OneOf(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
@@ -397,6 +400,7 @@ impl<'a> TypedCodegen<'a> {
                 .ok_or_else(|| format!("unknown type `{name}`")),
             Ty::Faultable(item) => Ok(Ty::Faultable(Box::new(self.resolve_declared_type(*item)?))),
             Ty::Seq(item) => Ok(Ty::Seq(Box::new(self.resolve_declared_type(*item)?))),
+            Ty::Stream(item) => Ok(Ty::Stream(Box::new(self.resolve_declared_type(*item)?))),
             Ty::OneOf(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
@@ -2237,7 +2241,9 @@ impl<'a> TypedCodegen<'a> {
         out.push_str(&format!(
             "  if ({input}.f1 < 0 || {input}.f2 < {input}.f1 || (size_t){input}.f2 > {input}.f0.count) fa_die_usage(\"slice: index out of range\");\n"
         ));
-        out.push_str(&format!("  {target} = {new_fn}((size_t)({input}.f2 - {input}.f1));\n"));
+        out.push_str(&format!(
+            "  {target} = {new_fn}((size_t)({input}.f2 - {input}.f1));\n"
+        ));
         out.push_str(&format!(
             "  for (size_t {i} = 0; {i} < {target}.count; {i}++) {target}.items[{i}] = {input}.f0.items[(size_t){input}.f1 + {i}];\n"
         ));
@@ -3117,7 +3123,7 @@ impl TypeRegistry {
             Ty::Bool => "bool".to_string(),
             Ty::Bytes => "FaBytes".to_string(),
             Ty::Args => "FaArgs".to_string(),
-            Ty::Stream => "FaStream".to_string(),
+            Ty::Stream(_) => "FaStream".to_string(),
             Ty::Fault => "FaFault".to_string(),
             Ty::Var(_) => "FaUnit".to_string(),
             Ty::Seq(item) => {
@@ -3254,7 +3260,7 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "write_stdout" | "write_stderr" => Ok(Ty::Int),
         "read_file" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "write_file" => Ok(Ty::Faultable(Box::new(Ty::Int))),
-        "open_file" => Ok(Ty::Faultable(Box::new(Ty::Stream))),
+        "open_file" => Ok(Ty::Faultable(Box::new(Ty::Stream(Box::new(Ty::Bytes))))),
         "read_at" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "size" | "copy_to_file" | "close" => Ok(Ty::Faultable(Box::new(Ty::Int))),
         "split_lines" | "split_on" => Ok(Ty::Seq(Box::new(Ty::Bytes))),
@@ -3519,7 +3525,7 @@ fn unwrap_faultable_tuple(input: &Ty) -> Option<Ty> {
 fn contains_faultable_ty(input: &Ty) -> bool {
     match input {
         Ty::Faultable(_) => true,
-        Ty::Seq(item) => contains_faultable_ty(item),
+        Ty::Seq(item) | Ty::Stream(item) => contains_faultable_ty(item),
         Ty::Tuple(items) => items.iter().any(contains_faultable_ty),
         Ty::OneOf(items) => items.iter().any(contains_faultable_ty),
         _ => false,
@@ -3577,7 +3583,7 @@ fn is_predefined_type_name(name: &str) -> bool {
             | "FaFaultable_Int"
             | "FaFaultable_Real"
             | "FaFaultable_Bytes"
-            | "FaFaultable_Stream"
+            | "FaFaultable_Stream_Bytes"
             | "FaSeq_Real"
             | "FaFaultable_Seq_Real"
     )
@@ -3870,6 +3876,11 @@ impl TypeParser {
             self.expect(']')?;
             return Ok(Ty::Faultable(Box::new(item)));
         }
+        if name.rsplit('.').next() == Some("Stream") && self.eat('[') {
+            let item = self.parse()?;
+            self.expect(']')?;
+            return Ok(Ty::Stream(Box::new(item)));
+        }
         let base_name = name.rsplit('.').next().unwrap_or(&name);
         Ok(match base_name {
             "Unit" | "void" => Ty::Unit,
@@ -3878,7 +3889,6 @@ impl TypeParser {
             "Bool" | "i1" => Ty::Bool,
             "Bytes" | "ptr" => Ty::Bytes,
             "Args" => Ty::Args,
-            "Stream" => Ty::Stream,
             "Fault" => Ty::Fault,
             _ => Ty::Var(name),
         })
@@ -3943,7 +3953,7 @@ fn type_suffix(ty: &Ty) -> String {
         Ty::Bool => "Bool".to_string(),
         Ty::Bytes => "Bytes".to_string(),
         Ty::Args => "Args".to_string(),
-        Ty::Stream => "Stream".to_string(),
+        Ty::Stream(item) => format!("Stream_{}", type_suffix(item)),
         Ty::Fault => "Fault".to_string(),
         Ty::Faultable(inner) => format!("Faultable_{}", type_suffix(inner)),
         Ty::Seq(item) => format!("Seq_{}", type_suffix(item)),
@@ -3961,7 +3971,7 @@ fn type_suffix(ty: &Ty) -> String {
 
 fn type_depth(ty: &Ty) -> usize {
     match ty {
-        Ty::Seq(item) | Ty::Faultable(item) => 1 + type_depth(item),
+        Ty::Seq(item) | Ty::Stream(item) | Ty::Faultable(item) => 1 + type_depth(item),
         Ty::Tuple(items) | Ty::OneOf(items) => 1 + items.iter().map(type_depth).max().unwrap_or(0),
         _ => 0,
     }
@@ -4016,7 +4026,7 @@ impl std::fmt::Display for Ty {
             Ty::Bool => write!(f, "Bool"),
             Ty::Bytes => write!(f, "Bytes"),
             Ty::Args => write!(f, "Args"),
-            Ty::Stream => write!(f, "Stream"),
+            Ty::Stream(item) => write!(f, "Stream[{item}]"),
             Ty::Fault => write!(f, "Fault"),
             Ty::Faultable(item) => write!(f, "Faultable[{item}]"),
             Ty::Seq(item) => write!(f, "Seq[{item}]"),

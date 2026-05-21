@@ -13,9 +13,9 @@ Initial modules:
 | [`std.bytes`](./bytes.md) | Byte/text splitting, concatenation, joining |
 | [`std.cli`](./cli.md) | Command-line argument and flag helpers |
 | [`std.cv`](./cv.md) | OpenCV-lite image codecs, transforms, and matrix views |
-| [`std.fs`](./fs.md) | File byte I/O |
+| [`std.fs`](./fs.md) | File byte and file stream boundary I/O |
 | [`std.io`](./io.md) | Stdin/stdout/stderr boundary I/O |
-| [`std.stream`](./stream.md) | Stream handles for large file artifacts |
+| [`std.stream`](./stream.md) | Generic `Stream[T]` type |
 | [`std.real`](./real.md) | `Real` parsing and formatting |
 | [`std.int`](./int.md) | `Int` parsing and formatting |
 | [`std.math`](./math.md) | Arithmetic and comparisons |

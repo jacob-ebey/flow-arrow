@@ -24,7 +24,7 @@ enum Type {
     Bool,
     Bytes,
     Args,
-    Stream,
+    Stream(Box<Type>),
     Fault,
     Faultable(Box<Type>),
     Seq(Box<Type>),
@@ -66,7 +66,7 @@ impl Type {
     fn contains_faultable(&self) -> bool {
         match self {
             Type::Faultable(_) => true,
-            Type::Seq(item) => item.contains_faultable(),
+            Type::Seq(item) | Type::Stream(item) => item.contains_faultable(),
             Type::Tuple(items) => items.iter().any(Type::contains_faultable),
             Type::OneOf(items) => items.iter().any(Type::contains_faultable),
             _ => false,
@@ -84,6 +84,7 @@ impl Type {
         match self {
             Type::Faultable(item) => item.strip_faultable(),
             Type::Seq(item) => Type::Seq(Box::new(item.strip_faultable())),
+            Type::Stream(item) => Type::Stream(Box::new(item.strip_faultable())),
             Type::Tuple(items) => Type::Tuple(items.iter().map(Type::strip_faultable).collect()),
             Type::OneOf(items) => Type::OneOf(items.iter().map(Type::strip_faultable).collect()),
             other => other.clone(),
@@ -199,7 +200,7 @@ impl<'a> Checker<'a> {
         }
         match symbol.kind {
             SymbolKind::Type => {
-                let ty = parse_type(symbol.name)?;
+                let ty = stdlib_type_symbol(symbol.name)?;
                 if self.types.insert(name.to_string(), ty).is_some() {
                     return Err(format!("duplicate type import `{name}`"));
                 }
@@ -292,6 +293,9 @@ impl<'a> Checker<'a> {
                 self.resolve_type_alias_type(*item, raw, resolved, resolving)?,
             ))),
             Type::Seq(item) => Ok(Type::Seq(Box::new(
+                self.resolve_type_alias_type(*item, raw, resolved, resolving)?,
+            ))),
+            Type::Stream(item) => Ok(Type::Stream(Box::new(
                 self.resolve_type_alias_type(*item, raw, resolved, resolving)?,
             ))),
             Type::OneOf(items) => {
@@ -427,6 +431,7 @@ impl<'a> Checker<'a> {
                 self.resolve_declared_type(*item)?,
             ))),
             Type::Seq(item) => Ok(Type::Seq(Box::new(self.resolve_declared_type(*item)?))),
+            Type::Stream(item) => Ok(Type::Stream(Box::new(self.resolve_declared_type(*item)?))),
             Type::OneOf(items) => {
                 let mut resolved = Vec::with_capacity(items.len());
                 for item in items {
@@ -448,6 +453,12 @@ impl<'a> Checker<'a> {
     fn validate_declared_type(&self, ty: &Type) -> Result<(), String> {
         match ty {
             Type::Faultable(item) | Type::Seq(item) => self.validate_declared_type(item),
+            Type::Stream(item) => {
+                if !self.types.values().any(is_stream_constructor) {
+                    return Err("unknown type `Stream`".to_string());
+                }
+                self.validate_declared_type(item)
+            }
             Type::OneOf(items) => {
                 for item in items {
                     self.validate_declared_type(item)?;
@@ -652,9 +663,10 @@ impl<'a> Checker<'a> {
                 let mut vars = HashMap::new();
                 match match_types(&signature.input, &actual_input, &mut vars) {
                     Ok(()) => {
-                        let plain_output = substitute(&signature.output, &vars).ok_or_else(|| {
-                            format!("`{name}` output type contains unresolved type variables")
-                        })?;
+                        let plain_output =
+                            substitute(&signature.output, &vars).ok_or_else(|| {
+                                format!("`{name}` output type contains unresolved type variables")
+                            })?;
                         output = Some(
                             if input_faultable && !matches!(plain_output, Type::Faultable(_)) {
                                 Type::Faultable(Box::new(plain_output))
@@ -671,8 +683,7 @@ impl<'a> Checker<'a> {
         let output = output.ok_or_else(|| {
             format!(
                 "`{name}` input type mismatch: {}",
-                last_error
-                    .unwrap_or_else(|| format!("expected callable input, found `{input}`"))
+                last_error.unwrap_or_else(|| format!("expected callable input, found `{input}`"))
             )
         })?;
         Ok(output)
@@ -874,6 +885,18 @@ fn primitive_types() -> HashMap<String, Type> {
     ])
 }
 
+fn stdlib_type_symbol(name: &str) -> Result<Type, String> {
+    if name == "Stream" {
+        Ok(Type::Stream(Box::new(Type::Var("V".to_string()))))
+    } else {
+        parse_type(name)
+    }
+}
+
+fn is_stream_constructor(ty: &Type) -> bool {
+    matches!(ty, Type::Stream(item) if matches!(item.as_ref(), Type::Var(_)))
+}
+
 fn stdlib_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, String> {
     if symbol.module == "std.math" {
         match symbol.name {
@@ -1018,6 +1041,7 @@ fn match_types(
         }
         (Type::Faultable(expected), Type::Faultable(actual)) => match_types(expected, actual, vars),
         (Type::Seq(expected), Type::Seq(actual)) => match_types(expected, actual, vars),
+        (Type::Stream(expected), Type::Stream(actual)) => match_types(expected, actual, vars),
         (Type::OneOf(expected), actual) => {
             let mut errors = Vec::new();
             for expected in expected {
@@ -1058,6 +1082,7 @@ fn substitute(ty: &Type, vars: &HashMap<String, Type>) -> Option<Type> {
         Type::Var(name) => vars.get(name).cloned(),
         Type::Faultable(item) => Some(Type::Faultable(Box::new(substitute(item, vars)?))),
         Type::Seq(item) => Some(Type::Seq(Box::new(substitute(item, vars)?))),
+        Type::Stream(item) => Some(Type::Stream(Box::new(substitute(item, vars)?))),
         Type::OneOf(items) => {
             let mut out = Vec::with_capacity(items.len());
             for item in items {
@@ -1143,6 +1168,11 @@ impl TypeParser {
             self.expect(']')?;
             return Ok(Type::Faultable(Box::new(item)));
         }
+        if name.rsplit('.').next() == Some("Stream") && self.eat('[') {
+            let item = self.parse_union_type()?;
+            self.expect(']')?;
+            return Ok(Type::Stream(Box::new(item)));
+        }
         Ok(match name.as_str() {
             "Unit" => Type::Unit,
             "Int" => Type::Int,
@@ -1150,7 +1180,6 @@ impl TypeParser {
             "Bool" => Type::Bool,
             "Bytes" => Type::Bytes,
             "Args" => Type::Args,
-            "Stream" => Type::Stream,
             "Fault" => Type::Fault,
             "i1" => Type::Bool,
             "i8" | "i16" | "i32" | "i64" => Type::Int,
@@ -1205,7 +1234,7 @@ impl fmt::Display for Type {
             Type::Bool => write!(f, "Bool"),
             Type::Bytes => write!(f, "Bytes"),
             Type::Args => write!(f, "Args"),
-            Type::Stream => write!(f, "Stream"),
+            Type::Stream(item) => write!(f, "Stream[{item}]"),
             Type::Fault => write!(f, "Fault"),
             Type::Faultable(item) => write!(f, "Faultable[{item}]"),
             Type::Seq(item) => write!(f, "Seq[{item}]"),

@@ -4,11 +4,29 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn stream_type_is_generic_over_item_type() {
+    let source = r#"
+        import std.cli { Args }
+        import std.stream { Stream }
+
+        node passthrough(stream: Stream[Int]) -> out: Stream[Int] {
+            $stream -> $out
+        }
+
+        program main(args: Args) -> exit_code: Int {
+            0 -> $exit_code
+        }
+    "#;
+
+    support::build_source("stream-generic-type", source);
+}
+
+#[test]
 fn std_stream_copy_file_runs_without_bytes_materialization() {
     let source = r#"
         import std.cli { Args, argv }
+        import std.fs { open_file, copy_to_file }
         import std.seq { head, tail }
-        import std.stream { open_file, copy_to_file }
 
         program main(args: Args) -> exit_code: Faultable[Int] {
             $args -> argv -> $paths
@@ -44,9 +62,9 @@ fn std_stream_read_at_reads_a_slice_without_consuming_the_stream() {
     let source = r#"
         import std.bytes { concat_bytes }
         import std.cli { Args, argv }
+        import std.fs { open_file, read_at }
         import std.io { write_stdout }
         import std.seq { head }
-        import std.stream { open_file, read_at }
 
         program main(args: Args) -> exit_code: Faultable[Int] {
             $args -> argv -> head -> $input_path

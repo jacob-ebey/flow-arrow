@@ -216,9 +216,9 @@ impl Resolver {
             }
             ImportClause::Items(items) => {
                 for item in items {
-                    let internal = exports
-                        .get(&item.name)
-                        .ok_or_else(|| format!("local module `{path}` does not export `{}`", item.name))?;
+                    let internal = exports.get(&item.name).ok_or_else(|| {
+                        format!("local module `{path}` does not export `{}`", item.name)
+                    })?;
                     let name = item.alias.as_deref().unwrap_or(&item.name);
                     insert_reference(references, name.to_string(), internal.clone())?;
                 }
