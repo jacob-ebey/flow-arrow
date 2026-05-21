@@ -7,12 +7,14 @@ fn std_real_nodes_run() {
         import std.cli { Args }
         import std.io { write_stdout }
         import std.math { add }
-        import std.real { parse_real, format_real }
+        import std.real { parse_real, format_real, from_int }
 
         program main(args: Args) -> exit_code: Faultable[Int] {
             "2.5" -> parse_real -> $parsed
             ($parsed, 0.5) -> add -> $value
-            $value -> format_real -> $text
+            0 -> from_int -> $zero
+            ($value, $zero) -> add -> $same_value
+            $same_value -> format_real -> $text
             [$text, "\n"] -> concat_bytes -> $output
             $output -> write_stdout -> $exit_code
         }

@@ -19,7 +19,7 @@ fn std_cv_jpeg_pipeline_decodes_grayscales_and_encodes() {
         import std.cv {{ save_jpeg }}
 
         program main(args: Args) -> exit_code: Faultable[Int] {{
-            ((2, 1), [[(255, (0, 0)), (0, (255, 0))]]) -> $image
+            ((2, 1), [[(1.0, (0.0, 0.0)), (0.0, (1.0, 0.0))]]) -> $image
             ("{input_path_text}", $image) -> save_jpeg -> $exit_code
         }}
     "#
@@ -69,8 +69,8 @@ fn std_cv_jpeg_pipeline_decodes_grayscales_and_encodes() {
             $green_blue -> second -> $blue
             ($red, $green) -> sub -> abs -> $rg_delta
             ($green, $blue) -> sub -> abs -> $gb_delta
-            ($rg_delta, 3) -> le -> $rg_ok
-            ($gb_delta, 3) -> le -> $gb_ok
+            ($rg_delta, 0.012) -> le -> $rg_ok
+            ($gb_delta, 0.012) -> le -> $gb_ok
             ($rg_ok, $gb_ok) -> and -> $ok
         }}
     "#
@@ -131,7 +131,7 @@ fn std_cv_generic_load_detects_png_bmp_ppm_and_pgm() {
         import std.cv {{ save_bmp, save_pgm, save_png, save_ppm }}
 
         program main(args: Args) -> exit_code: Faultable[Int] {{
-            ((2, 1), [[(255, (0, 0)), (0, (255, 0))]]) -> $image
+            ((2, 1), [[(1.0, (0.0, 0.0)), (0.0, (1.0, 0.0))]]) -> $image
             ("{png_path_text}", $image) -> save_png -> $png_status
             ("{bmp_path_text}", $image) -> save_bmp -> $bmp_status
             ("{ppm_path_text}", $image) -> save_ppm -> $ppm_status
@@ -168,17 +168,23 @@ fn std_cv_generic_load_detects_png_bmp_ppm_and_pgm() {
     );
 
     for (name, image_path, expected_red, expected_green, expected_blue) in [
-        ("png", &png_path, 255, 0, 0),
-        ("bmp", &bmp_path, 255, 0, 0),
-        ("ppm", &ppm_path, 255, 0, 0),
-        ("pgm", &pgm_path, 76, 76, 76),
+        ("png", &png_path, "1.0", "0.0", "0.0"),
+        ("bmp", &bmp_path, "1.0", "0.0", "0.0"),
+        ("ppm", &ppm_path, "1.0", "0.0", "0.0"),
+        (
+            "pgm",
+            &pgm_path,
+            "0.2980392156862745",
+            "0.2980392156862745",
+            "0.2980392156862745",
+        ),
     ] {
         let image_path_text = image_path.to_string_lossy();
         let validator = format!(
             r#"
             import std.cli {{ Args }}
             import std.cv {{ height, load, pixels, width }}
-            import std.math {{ eq }}
+            import std.math {{ abs, eq, le, sub }}
             import std.predicates {{ and }}
             import std.seq {{ head }}
             import std.tuple {{ first, second }}
@@ -193,9 +199,12 @@ fn std_cv_generic_load_detects_png_bmp_ppm_and_pgm() {
                 $pixel -> first -> $red
                 $pixel -> second -> first -> $green
                 $pixel -> second -> second -> $blue
-                ($red, {expected_red}) -> eq -> $red_ok
-                ($green, {expected_green}) -> eq -> $green_ok
-                ($blue, {expected_blue}) -> eq -> $blue_ok
+                ($red, {expected_red}) -> sub -> abs -> $red_delta
+                ($green, {expected_green}) -> sub -> abs -> $green_delta
+                ($blue, {expected_blue}) -> sub -> abs -> $blue_delta
+                ($red_delta, 0.004) -> le -> $red_ok
+                ($green_delta, 0.004) -> le -> $green_ok
+                ($blue_delta, 0.004) -> le -> $blue_ok
                 ($width_ok, $height_ok) -> and -> $shape_ok
                 ($shape_ok, $red_ok) -> and -> $s1
                 ($s1, $green_ok) -> and -> $s2
@@ -252,13 +261,13 @@ fn std_cv_exposes_channel_matrices_for_matrix_pipelines() {
         import std.predicates { and }
 
         program main(args: Args) -> exit_code: Int {
-            ((2, 1), [[(255, (0, 0)), (0, (255, 0))]]) -> $image
+            ((2, 1), [[(1.0, (0.0, 0.0)), (0.0, (1.0, 0.0))]]) -> $image
             $image -> red_matrix -> $red
-            ($red, [[255.0, 0.0]]) -> matrix_equals -> $red_ok
+            ($red, [[1.0, 0.0]]) -> matrix_equals -> $red_ok
             ($red, 1.0) -> add_scalar -> $red_plus_one
-            ($red_plus_one, [[256.0, 1.0]]) -> matrix_equals -> $matrix_pipeline_ok
+            ($red_plus_one, [[2.0, 1.0]]) -> matrix_equals -> $matrix_pipeline_ok
             $image -> luma_matrix -> $luma
-            ($luma, [[76.0, 149.0]]) -> matrix_equals -> $luma_ok
+            ($luma, [[0.299, 0.587]]) -> matrix_equals -> $luma_ok
             ($red_ok, $matrix_pipeline_ok) -> and -> $s1
             ($s1, $luma_ok) -> and -> $ok
             ($ok, 0, 1) -> select -> $exit_code

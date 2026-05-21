@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn type_aliases_resolve_in_typecheck_and_codegen() {
         let source = r#"
-            type Pixel = (Int,(Int,Int))
+            type Pixel = (Real,(Real,Real))
             type Row = Seq[Pixel]
             type Size = (Int,Int)
             type Image = (Size,Seq[Row])
@@ -383,7 +383,7 @@ mod tests {
             }
 
             program main(args: Args) -> exit_code: Int {
-                ((1, 1), [[(1, (2, 3))]]) -> passthrough -> $image
+                ((1, 1), [[(0.1, (0.2, 0.3))]]) -> passthrough -> $image
                 0 -> $exit_code
             }
         "#;
@@ -430,9 +430,9 @@ mod tests {
             }
 
             program main(args: Args) -> exit_code: Int {
-                ((1, 1), [[(20, (40, 60))]]) -> process -> $image
+                ((1, 1), [[(0.2, (0.4, 0.6))]]) -> process -> $image
                 $image -> image_size -> $size
-                (20, (40, 60)) -> keep_pixel -> $pixel
+                (0.2, (0.4, 0.6)) -> keep_pixel -> $pixel
                 0 -> $exit_code
             }
         "#;

@@ -2,9 +2,9 @@
 #include <png.h>
 #include <setjmp.h>
 
-typedef FaTuple_Tuple_Int_Int_Seq_Seq_Tuple_Int_Tuple_Int_Int FaCvImage;
-typedef FaFaultable_Tuple_Tuple_Int_Int_Seq_Seq_Tuple_Int_Tuple_Int_Int FaCvImageResult;
-typedef FaTuple_Int_Tuple_Int_Int FaCvPixel;
+typedef FaTuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real FaCvImage;
+typedef FaFaultable_Tuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real FaCvImageResult;
+typedef FaTuple_Real_Tuple_Real_Real FaCvPixel;
 
 typedef struct {
   struct jpeg_error_mgr pub;
@@ -42,9 +42,9 @@ static FaCvImage fa_cv_image_new(size_t width, size_t height) {
   FaCvImage image;
   image.f0.f0 = (int64_t)width;
   image.f0.f1 = (int64_t)height;
-  image.f1 = FaSeq_Seq_Tuple_Int_Tuple_Int_Int_new(height);
+  image.f1 = FaSeq_Seq_Tuple_Real_Tuple_Real_Real_new(height);
   for (size_t y = 0; y < height; y++) {
-    image.f1.items[y] = FaSeq_Tuple_Int_Tuple_Int_Int_new(width);
+    image.f1.items[y] = FaSeq_Tuple_Real_Tuple_Real_Real_new(width);
   }
   return image;
 }
@@ -53,8 +53,18 @@ static FaCvPixel *fa_cv_pixel_at(FaCvImage *image, size_t y, size_t x) {
   return &image->f1.items[y].items[x];
 }
 
-static bool fa_cv_channel_ok(int64_t value) {
-  return value >= 0 && value <= 255;
+static bool fa_cv_channel_ok(double value) {
+  return isfinite(value) && value >= 0.0 && value <= 1.0;
+}
+
+static double fa_cv_from_u8(unsigned char value) {
+  return (double)value / 255.0;
+}
+
+static unsigned char fa_cv_to_u8(double value) {
+  if (value <= 0.0) return 0;
+  if (value >= 1.0) return 255;
+  return (unsigned char)floor(value * 255.0 + 0.5);
 }
 
 static bool fa_cv_mul_overflows(size_t a, size_t b, size_t *out) {
@@ -132,12 +142,12 @@ static bool fa_cv_prepare_image(
     }
     for (size_t x = 0; x < *width; x++) {
       FaCvPixel pixel = image.f1.items[y].items[x];
-      int64_t r = pixel.f0;
-      int64_t g = pixel.f1.f0;
-      int64_t b = pixel.f1.f1;
+      double r = pixel.f0;
+      double g = pixel.f1.f0;
+      double b = pixel.f1.f1;
       if (!fa_cv_channel_ok(r) || !fa_cv_channel_ok(g) || !fa_cv_channel_ok(b)) {
         char message[128];
-        snprintf(message, sizeof(message), "%s: pixel channel outside 0..255", op);
+        snprintf(message, sizeof(message), "%s: sRGB channel outside 0.0..1.0", op);
         *fault = fa_fault_cstr(message);
         return false;
       }
@@ -147,8 +157,8 @@ static bool fa_cv_prepare_image(
 }
 
 static unsigned char fa_cv_luma(FaCvPixel pixel) {
-  int64_t total = pixel.f0 * 299 + pixel.f1.f0 * 587 + pixel.f1.f1 * 114;
-  return (unsigned char)(total / 1000);
+  double total = pixel.f0 * 0.299 + pixel.f1.f0 * 0.587 + pixel.f1.f1 * 0.114;
+  return fa_cv_to_u8(total);
 }
 
 static FaCvImageResult fa_cv_decode_jpeg(FaBytes bytes) {
@@ -196,9 +206,9 @@ static FaCvImageResult fa_cv_decode_jpeg(FaBytes bytes) {
     jpeg_read_scanlines(&cinfo, row, 1);
     for (size_t x = 0; x < width; x++) {
       FaCvPixel *pixel = fa_cv_pixel_at(&image, (size_t)y, x);
-      pixel->f0 = row[0][x * 3];
-      pixel->f1.f0 = row[0][x * 3 + 1];
-      pixel->f1.f1 = row[0][x * 3 + 2];
+      pixel->f0 = fa_cv_from_u8(row[0][x * 3]);
+      pixel->f1.f0 = fa_cv_from_u8(row[0][x * 3 + 1]);
+      pixel->f1.f1 = fa_cv_from_u8(row[0][x * 3 + 2]);
     }
   }
   jpeg_finish_decompress(&cinfo);
@@ -253,9 +263,9 @@ static FaFaultable_Bytes fa_cv_encode_jpeg(FaCvImage image) {
     size_t y = cinfo.next_scanline;
     for (size_t x = 0; x < width; x++) {
       FaCvPixel pixel = image.f1.items[y].items[x];
-      row[x * 3] = (unsigned char)pixel.f0;
-      row[x * 3 + 1] = (unsigned char)pixel.f1.f0;
-      row[x * 3 + 2] = (unsigned char)pixel.f1.f1;
+      row[x * 3] = fa_cv_to_u8(pixel.f0);
+      row[x * 3 + 1] = fa_cv_to_u8(pixel.f1.f0);
+      row[x * 3 + 2] = fa_cv_to_u8(pixel.f1.f1);
     }
     JSAMPROW row_pointer[1] = { row };
     jpeg_write_scanlines(&cinfo, row_pointer, 1);
@@ -305,9 +315,9 @@ static FaCvImageResult fa_cv_decode_png(FaBytes bytes) {
     for (size_t x = 0; x < width; x++) {
       size_t i = y * width + x;
       FaCvPixel *pixel = fa_cv_pixel_at(&image, y, x);
-      pixel->f0 = buffer[i * 4];
-      pixel->f1.f0 = buffer[i * 4 + 1];
-      pixel->f1.f1 = buffer[i * 4 + 2];
+      pixel->f0 = fa_cv_from_u8(buffer[i * 4]);
+      pixel->f1.f0 = fa_cv_from_u8(buffer[i * 4 + 1]);
+      pixel->f1.f1 = fa_cv_from_u8(buffer[i * 4 + 2]);
     }
   }
   png_image_free(&png);
@@ -333,9 +343,9 @@ static FaFaultable_Bytes fa_cv_encode_png(FaCvImage image) {
     for (size_t x = 0; x < width; x++) {
       size_t i = y * width + x;
       FaCvPixel pixel = image.f1.items[y].items[x];
-      pixels[i * 3] = (unsigned char)pixel.f0;
-      pixels[i * 3 + 1] = (unsigned char)pixel.f1.f0;
-      pixels[i * 3 + 2] = (unsigned char)pixel.f1.f1;
+      pixels[i * 3] = fa_cv_to_u8(pixel.f0);
+      pixels[i * 3 + 1] = fa_cv_to_u8(pixel.f1.f0);
+      pixels[i * 3 + 2] = fa_cv_to_u8(pixel.f1.f1);
     }
   }
 
@@ -443,9 +453,9 @@ static FaCvImageResult fa_cv_decode_bmp(FaBytes bytes) {
     for (size_t x = 0; x < width; x++) {
       const unsigned char *px = row + x * bytes_per_pixel;
       FaCvPixel *pixel = fa_cv_pixel_at(&image, y, x);
-      pixel->f0 = px[2];
-      pixel->f1.f0 = px[1];
-      pixel->f1.f1 = px[0];
+      pixel->f0 = fa_cv_from_u8(px[2]);
+      pixel->f1.f0 = fa_cv_from_u8(px[1]);
+      pixel->f1.f1 = fa_cv_from_u8(px[0]);
     }
   }
   return fa_cv_image_ok(image);
@@ -494,9 +504,9 @@ static FaFaultable_Bytes fa_cv_encode_bmp(FaCvImage image) {
     unsigned char *row = out + 54 + dst_y * row_stride;
     for (size_t x = 0; x < width; x++) {
       FaCvPixel pixel = image.f1.items[y].items[x];
-      row[x * 3] = (unsigned char)pixel.f1.f1;
-      row[x * 3 + 1] = (unsigned char)pixel.f1.f0;
-      row[x * 3 + 2] = (unsigned char)pixel.f0;
+      row[x * 3] = fa_cv_to_u8(pixel.f1.f1);
+      row[x * 3 + 1] = fa_cv_to_u8(pixel.f1.f0);
+      row[x * 3 + 2] = fa_cv_to_u8(pixel.f0);
     }
   }
   (void)count;
@@ -579,14 +589,14 @@ static FaCvImageResult fa_cv_decode_pnm(FaBytes bytes) {
       size_t i = y * width + x;
       FaCvPixel *pixel = fa_cv_pixel_at(&image, y, x);
       if (gray) {
-        int64_t v = data[pos + i];
+        double v = (double)data[pos + i] / (double)maxval;
         pixel->f0 = v;
         pixel->f1.f0 = v;
         pixel->f1.f1 = v;
       } else {
-        pixel->f0 = data[pos + i * 3];
-        pixel->f1.f0 = data[pos + i * 3 + 1];
-        pixel->f1.f1 = data[pos + i * 3 + 2];
+        pixel->f0 = (double)data[pos + i * 3] / (double)maxval;
+        pixel->f1.f0 = (double)data[pos + i * 3 + 1] / (double)maxval;
+        pixel->f1.f1 = (double)data[pos + i * 3 + 2] / (double)maxval;
       }
     }
   }
@@ -622,9 +632,9 @@ static FaFaultable_Bytes fa_cv_encode_ppm(FaCvImage image) {
     for (size_t x = 0; x < width; x++) {
       size_t i = y * width + x;
       FaCvPixel pixel = image.f1.items[y].items[x];
-      pixels[i * 3] = (unsigned char)pixel.f0;
-      pixels[i * 3 + 1] = (unsigned char)pixel.f1.f0;
-      pixels[i * 3 + 2] = (unsigned char)pixel.f1.f1;
+      pixels[i * 3] = fa_cv_to_u8(pixel.f0);
+      pixels[i * 3 + 1] = fa_cv_to_u8(pixel.f1.f0);
+      pixels[i * 3 + 2] = fa_cv_to_u8(pixel.f1.f1);
     }
   }
   out[total_len] = '\0';

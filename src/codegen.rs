@@ -1297,6 +1297,7 @@ impl<'a> TypedCodegen<'a> {
             )),
             "parse_int" => out.push_str(&format!("  {target} = fa_parse_int({input});\n")),
             "parse_real" => out.push_str(&format!("  {target} = fa_parse_real({input});\n")),
+            "from_int" => out.push_str(&format!("  {target} = (double){input};\n")),
             "format_int" => {
                 self.emit_format_faultable_or_plain(out, target, input, input_ty, "fa_format_int")?
             }
@@ -2392,6 +2393,7 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         | "bit_shl" | "bit_shr" => Ok(Ty::Int),
         "parse_int" => Ok(Ty::Faultable(Box::new(Ty::Int))),
         "parse_real" => Ok(Ty::Faultable(Box::new(Ty::Real))),
+        "from_int" => Ok(Ty::Real),
         "format_int" | "format_real" => match input {
             Ty::Faultable(_) => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
             _ => Ok(Ty::Bytes),
@@ -2529,8 +2531,8 @@ fn cv_image_ty() -> Ty {
 
 fn cv_pixel_seq_ty() -> Ty {
     Ty::Seq(Box::new(Ty::Tuple(vec![
-        Ty::Int,
-        Ty::Tuple(vec![Ty::Int, Ty::Int]),
+        Ty::Real,
+        Ty::Tuple(vec![Ty::Real, Ty::Real]),
     ])))
 }
 

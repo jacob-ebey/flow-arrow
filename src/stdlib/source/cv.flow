@@ -1,4 +1,4 @@
-import std.bytes { bytes_to_codes, byte_length, codes_to_bytes }
+import std.bytes { bytes_to_codes, byte_length }
 import std.fs { read_file, write_file }
 import std.math {
     abs as _scalar_abs,
@@ -11,6 +11,7 @@ import std.math {
     neg as _scalar_neg,
     sub as _scalar_sub,
 }
+import std.real { from_int }
 import std.seq { broadcast_right, flatten as seq_flatten, zip }
 import std.tuple { first, second }
 import std.cv.native {
@@ -27,7 +28,7 @@ import std.cv.native {
 }
 
 type Size = (Int,Int)
-type Pixel = (Int,(Int,Int))
+type Pixel = (Real,(Real,Real))
 type Image = (Size,Seq[Seq[Pixel]])
 
 node dimensions(image: Image) -> shape: Size {
@@ -56,41 +57,41 @@ node map_pixels(inputs: (Image,Seq[Seq[Pixel]])) -> image: Image {
     ($shape, $values) -> $image
 }
 
-node _clamp_channel(value: Int) -> out: Int {
-    ($value, 0) -> _scalar_max -> $low
-    ($low, 255) -> _scalar_min -> $out
+node _clamp_channel(value: Real) -> out: Real {
+    ($value, 0.0) -> _scalar_max -> $low
+    ($low, 1.0) -> _scalar_min -> $out
 }
 
-node _gray_code_to_rgb_pixel(code: Int) -> pixel: Pixel {
-    $code -> _clamp_channel -> $channel
+node _gray_value_to_srgb_pixel(value: Real) -> pixel: Pixel {
+    $value -> _clamp_channel -> $channel
     ($channel, ($channel, $channel)) -> $pixel
 }
 
-node _rgb_pixel_to_luma_code(pixel: Pixel) -> code: Int {
+node _gray_code_to_srgb_pixel(code: Int) -> pixel: Pixel {
+    $code -> from_int -> $real_code
+    ($real_code, 255.0) -> _scalar_div -> _gray_value_to_srgb_pixel -> $pixel
+}
+
+node _srgb_pixel_to_luma(pixel: Pixel) -> luma: Real {
     $pixel -> first -> $red
     $pixel -> second -> $green_blue
     $green_blue -> first -> $green
     $green_blue -> second -> $blue
-    ($red, 299) -> _scalar_mul -> $red_weighted
-    ($green, 587) -> _scalar_mul -> $green_weighted
-    ($blue, 114) -> _scalar_mul -> $blue_weighted
+    ($red, 0.299) -> _scalar_mul -> $red_weighted
+    ($green, 0.587) -> _scalar_mul -> $green_weighted
+    ($blue, 0.114) -> _scalar_mul -> $blue_weighted
     ($red_weighted, $green_weighted) -> _scalar_add -> $rg
-    ($rg, $blue_weighted) -> _scalar_add -> $total
-    ($total, 1000) -> _scalar_div -> $code
+    ($rg, $blue_weighted) -> _scalar_add -> $luma
 }
 
-node _rgb_pixel_to_gray_pixel(pixel: Pixel) -> out: Pixel {
-    $pixel -> _rgb_pixel_to_luma_code -> _gray_code_to_rgb_pixel -> $out
+node _srgb_pixel_to_gray_pixel(pixel: Pixel) -> out: Pixel {
+    $pixel -> _srgb_pixel_to_luma -> _gray_value_to_srgb_pixel -> $out
 }
 
 node normalize(bytes: Bytes) -> image: Image {
     $bytes -> byte_length -> $width
-    $bytes -> bytes_to_codes -> map _gray_code_to_rgb_pixel -> $values
+    $bytes -> bytes_to_codes -> map _gray_code_to_srgb_pixel -> $values
     (($width, 1), [$values]) -> $image
-}
-
-node _image_to_luma_bytes(image: Image) -> bytes: Bytes {
-    $image -> pixels -> map _rgb_pixel_to_luma_code -> codes_to_bytes -> $bytes
 }
 
 node grayscale(image: Image) -> out: Image {
@@ -99,7 +100,7 @@ node grayscale(image: Image) -> out: Image {
 }
 
 node _grayscale_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
-    $row -> map _rgb_pixel_to_gray_pixel -> $out
+    $row -> map _srgb_pixel_to_gray_pixel -> $out
 }
 
 node _invert_pixel(pixel: Pixel) -> out: Pixel {
@@ -107,9 +108,9 @@ node _invert_pixel(pixel: Pixel) -> out: Pixel {
     $pixel -> second -> $green_blue
     $green_blue -> first -> $green
     $green_blue -> second -> $blue
-    (255, $red) -> _scalar_sub -> $out_red
-    (255, $green) -> _scalar_sub -> $out_green
-    (255, $blue) -> _scalar_sub -> $out_blue
+    (1.0, $red) -> _scalar_sub -> $out_red
+    (1.0, $green) -> _scalar_sub -> $out_green
+    (1.0, $blue) -> _scalar_sub -> $out_blue
     ($out_red, ($out_green, $out_blue)) -> $out
 }
 
@@ -122,15 +123,15 @@ node _invert_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
     $row -> map _invert_pixel -> $out
 }
 
-node _threshold_pixel(inputs: (Pixel,Int)) -> out: Pixel {
-    $inputs -> first -> _rgb_pixel_to_luma_code -> $luma
+node _threshold_pixel(inputs: (Pixel,Real)) -> out: Pixel {
+    $inputs -> first -> _srgb_pixel_to_luma -> $luma
     $inputs -> second -> $threshold
     ($luma, $threshold) -> _scalar_gt -> $above
-    ($above, 255, 0) -> select -> $channel
-    $channel -> _gray_code_to_rgb_pixel -> $out
+    ($above, 1.0, 0.0) -> select -> $channel
+    $channel -> _gray_value_to_srgb_pixel -> $out
 }
 
-node threshold(inputs: (Image,Int)) -> out: Image {
+node threshold(inputs: (Image,Real)) -> out: Image {
     $inputs -> first -> $image
     $inputs -> second -> $cutoff
     $image -> pixel_rows -> $rows
@@ -138,17 +139,17 @@ node threshold(inputs: (Image,Int)) -> out: Image {
     ($image, $values) -> map_pixels -> $out
 }
 
-node _threshold_row(inputs: (Seq[Pixel],Int)) -> out: Seq[Pixel] {
+node _threshold_row(inputs: (Seq[Pixel],Real)) -> out: Seq[Pixel] {
     $inputs -> first -> $row
     $inputs -> second -> $cutoff
     ($row, $cutoff) -> broadcast_right -> map _threshold_pixel -> $out
 }
 
-node _brighten_channel(inputs: (Int,Int)) -> out: Int {
+node _brighten_channel(inputs: (Real,Real)) -> out: Real {
     $inputs -> _scalar_add -> _clamp_channel -> $out
 }
 
-node _brighten_pixel(inputs: (Pixel,Int)) -> out: Pixel {
+node _brighten_pixel(inputs: (Pixel,Real)) -> out: Pixel {
     $inputs -> first -> $pixel
     $inputs -> second -> $amount
     $pixel -> first -> $red
@@ -161,7 +162,7 @@ node _brighten_pixel(inputs: (Pixel,Int)) -> out: Pixel {
     ($out_red, ($out_green, $out_blue)) -> $out
 }
 
-node brighten(inputs: (Image,Int)) -> out: Image {
+node brighten(inputs: (Image,Real)) -> out: Image {
     $inputs -> first -> $image
     $inputs -> second -> $amount
     $image -> pixel_rows -> $rows
@@ -169,28 +170,27 @@ node brighten(inputs: (Image,Int)) -> out: Image {
     ($image, $values) -> map_pixels -> $out
 }
 
-node _brighten_row(inputs: (Seq[Pixel],Int)) -> out: Seq[Pixel] {
+node _brighten_row(inputs: (Seq[Pixel],Real)) -> out: Seq[Pixel] {
     $inputs -> first -> $row
     $inputs -> second -> $amount
     ($row, $amount) -> broadcast_right -> map _brighten_pixel -> $out
 }
 
-node darken(inputs: (Image,Int)) -> out: Image {
+node darken(inputs: (Image,Real)) -> out: Image {
     $inputs -> first -> $image
     $inputs -> second -> _scalar_neg -> $amount
     ($image, $amount) -> brighten -> $out
 }
 
-node _contrast_channel(inputs: (Int,Int)) -> out: Int {
+node _contrast_channel(inputs: (Real,Real)) -> out: Real {
     $inputs -> first -> $channel
     $inputs -> second -> $factor
-    ($channel, 128) -> _scalar_sub -> $centered
+    ($channel, 0.5) -> _scalar_sub -> $centered
     ($centered, $factor) -> _scalar_mul -> $scaled
-    ($scaled, 100) -> _scalar_div -> $normalized
-    ($normalized, 128) -> _scalar_add -> _clamp_channel -> $out
+    ($scaled, 0.5) -> _scalar_add -> _clamp_channel -> $out
 }
 
-node _contrast_pixel(inputs: (Pixel,Int)) -> out: Pixel {
+node _contrast_pixel(inputs: (Pixel,Real)) -> out: Pixel {
     $inputs -> first -> $pixel
     $inputs -> second -> $factor
     $pixel -> first -> $red
@@ -203,7 +203,7 @@ node _contrast_pixel(inputs: (Pixel,Int)) -> out: Pixel {
     ($out_red, ($out_green, $out_blue)) -> $out
 }
 
-node contrast(inputs: (Image,Int)) -> out: Image {
+node contrast(inputs: (Image,Real)) -> out: Image {
     $inputs -> first -> $image
     $inputs -> second -> $factor
     $image -> pixel_rows -> $rows
@@ -211,42 +211,38 @@ node contrast(inputs: (Image,Int)) -> out: Image {
     ($image, $values) -> map_pixels -> $out
 }
 
-node _contrast_row(inputs: (Seq[Pixel],Int)) -> out: Seq[Pixel] {
+node _contrast_row(inputs: (Seq[Pixel],Real)) -> out: Seq[Pixel] {
     $inputs -> first -> $row
     $inputs -> second -> $factor
     ($row, $factor) -> broadcast_right -> map _contrast_pixel -> $out
 }
 
 node _red_channel_pixel(pixel: Pixel) -> out: Pixel {
-    $pixel -> first -> _gray_code_to_rgb_pixel -> $out
+    $pixel -> first -> _gray_value_to_srgb_pixel -> $out
 }
 
 node _green_channel_pixel(pixel: Pixel) -> out: Pixel {
-    $pixel -> second -> first -> _gray_code_to_rgb_pixel -> $out
+    $pixel -> second -> first -> _gray_value_to_srgb_pixel -> $out
 }
 
 node _blue_channel_pixel(pixel: Pixel) -> out: Pixel {
-    $pixel -> second -> second -> _gray_code_to_rgb_pixel -> $out
-}
-
-node _to_real(value: Int) -> out: Real {
-    ($value, 0.0) -> _scalar_add -> $out
+    $pixel -> second -> second -> _gray_value_to_srgb_pixel -> $out
 }
 
 node _red_value(pixel: Pixel) -> out: Real {
-    $pixel -> first -> _to_real -> $out
+    $pixel -> first -> $out
 }
 
 node _green_value(pixel: Pixel) -> out: Real {
-    $pixel -> second -> first -> _to_real -> $out
+    $pixel -> second -> first -> $out
 }
 
 node _blue_value(pixel: Pixel) -> out: Real {
-    $pixel -> second -> second -> _to_real -> $out
+    $pixel -> second -> second -> $out
 }
 
 node _luma_value(pixel: Pixel) -> out: Real {
-    $pixel -> _rgb_pixel_to_luma_code -> _to_real -> $out
+    $pixel -> _srgb_pixel_to_luma -> $out
 }
 
 node _red_matrix_row(row: Seq[Pixel]) -> out: Seq[Real] {
@@ -308,7 +304,7 @@ node _blue_channel_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
     $row -> map _blue_channel_pixel -> $out
 }
 
-node _sepia_channel(inputs: (Int,(Int,(Int,(Int,(Int,Int)))))) -> out: Int {
+node _sepia_channel(inputs: (Real,(Real,(Real,(Real,(Real,Real)))))) -> out: Real {
     $inputs -> first -> $red
     $inputs -> second -> first -> $green
     $inputs -> second -> second -> first -> $blue
@@ -321,7 +317,7 @@ node _sepia_channel(inputs: (Int,(Int,(Int,(Int,(Int,Int)))))) -> out: Int {
     ($blue, $blue_weight) -> _scalar_mul -> $blue_part
     ($red_part, $green_part) -> _scalar_add -> $rg
     ($rg, $blue_part) -> _scalar_add -> $total
-    ($total, 1000) -> _scalar_div -> _clamp_channel -> $out
+    $total -> _clamp_channel -> $out
 }
 
 node _sepia_pixel(pixel: Pixel) -> out: Pixel {
@@ -329,9 +325,9 @@ node _sepia_pixel(pixel: Pixel) -> out: Pixel {
     $pixel -> second -> $green_blue
     $green_blue -> first -> $green
     $green_blue -> second -> $blue
-    ($red, ($green, ($blue, (393, (769, 189))))) -> _sepia_channel -> $out_red
-    ($red, ($green, ($blue, (349, (686, 168))))) -> _sepia_channel -> $out_green
-    ($red, ($green, ($blue, (272, (534, 131))))) -> _sepia_channel -> $out_blue
+    ($red, ($green, ($blue, (0.393, (0.769, 0.189))))) -> _sepia_channel -> $out_red
+    ($red, ($green, ($blue, (0.349, (0.686, 0.168))))) -> _sepia_channel -> $out_green
+    ($red, ($green, ($blue, (0.272, (0.534, 0.131))))) -> _sepia_channel -> $out_blue
     ($out_red, ($out_green, $out_blue)) -> $out
 }
 

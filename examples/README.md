@@ -9,7 +9,7 @@ The initial stdlib surface is documented in [`docs/std/`](../docs/std/):
 import std.bytes { split_lines, concat_bytes, join_bytes, trim, split_on, strip_prefix, strip_suffix }
 import std.cli { Args, argv }
 import std.io { read_stdin, write_stdout }
-import std.real { parse_real, format_real }
+import std.real { parse_real, format_real, from_int }
 import std.int { parse_int, format_int }
 import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, min, max }
 import std.predicates { not_empty, is_empty, and, or, xor, not, all, any }
@@ -25,6 +25,7 @@ parse_int         : Bytes -> Faultable[Int]
 parse_real        : Bytes -> Faultable[Real]
 format_int        : Int   -> Bytes                 # propagates Faultable[Int] -> Faultable[Bytes]
 format_real       : Real  -> Bytes                 # propagates Faultable[Real] -> Faultable[Bytes]
+from_int          : Int   -> Real
 concat_bytes      : Seq[Bytes] -> Bytes              # associative; identity: ""
 join_bytes        : (Seq[Bytes], Bytes) -> Bytes     # joins with separator
 trim              : Bytes -> Bytes                   # strips leading/trailing ASCII whitespace

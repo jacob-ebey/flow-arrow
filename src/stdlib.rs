@@ -206,6 +206,7 @@ pub const SYMBOLS: &[StdSymbol] = &[
     io::WRITE_STDERR,
     real::PARSE_REAL,
     real::FORMAT_REAL,
+    real::FROM_INT,
     int::PARSE_INT,
     int::FORMAT_INT,
     int::BIT_AND,
@@ -315,6 +316,7 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "not_empty"
             | "format_int"
             | "format_real"
+            | "from_int"
             | "not"
             | "trim"
             | "bytes_to_codes"

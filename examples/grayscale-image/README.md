@@ -14,7 +14,7 @@ It shows the source-backed CV pipeline end to end:
 
 1. `argv` provides the two file paths as dataflow values.
 2. `load` reads and decodes JPEG, PNG, BMP, PGM, or PPM input into the
-   standard `std.cv` RGB image format.
+   standard `std.cv` sRGB image format.
 3. `grayscale` operates on that normalized image format.
 4. `save_jpeg` encodes the grayscale image and writes it to the output path.
 

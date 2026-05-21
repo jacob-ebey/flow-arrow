@@ -7,6 +7,7 @@ Pure parsing and formatting utilities for `Real` values.
 ```text
 parse_real  : Bytes -> Faultable[Real]
 format_real : Real  -> Bytes
+from_int    : Int   -> Real
 ```
 
 ## Semantics
@@ -31,13 +32,25 @@ Formats a `Real` as deterministic ASCII bytes.
 - `NaN` and infinities are not part of the initial portable profile and
   must be rejected by earlier validation or target-specific extensions.
 
+### `from_int`
+
+Converts an `Int` to the corresponding `Real`. This is intended for
+explicit numeric normalization, for example turning byte channel samples
+into `0.0..1.0` values.
+
 ## Examples
 
 ```flow
-import std.real { parse_real, format_real }
+import std.math { div }
+import std.real { parse_real, format_real, from_int }
 
 node parse_then_format(input: Bytes) -> output: Faultable[Bytes] {
     $input -> parse_real -> $n
     $n -> format_real -> $output
+}
+
+node byte_to_unit(value: Int) -> out: Real {
+    $value -> from_int -> $real
+    ($real, 255.0) -> div -> $out
 }
 ```

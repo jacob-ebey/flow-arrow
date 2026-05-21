@@ -3,17 +3,19 @@
 OpenCV-lite image loading, saving, and pixel transforms.
 
 The CV stdlib exports `Size`, `Pixel`, and `Image` aliases for its
-normalized RGB image shape:
+normalized sRGB image shape:
 
 ```text
 Size = (Int,Int)
-Pixel = (Int,(Int,Int))
+Pixel = (Real,(Real,Real))
 Image = (Size,Seq[Seq[Pixel]])
 ```
 
 `Size` is `(width,height)`. The outer sequence is image rows,
-each inner sequence is a scanline, and pixels are RGB triples written as
-`(red,(green,blue))`.
+each inner sequence is a scanline, and pixels are sRGB triples written as
+`(red,(green,blue))`. Channel values are normalized `Real` values in
+`0.0..1.0`; codec nodes convert to and from 8-bit file samples at the
+native boundary.
 
 The row-matrix shape makes image geometry explicit. For numeric matrix
 pipelines, use the channel matrix views, which return `Seq[Seq[Real]]`
@@ -75,10 +77,10 @@ byte-to-image adapters and tests.
 ```text
 grayscale     : Image -> Image
 invert        : Image -> Image
-threshold     : (Image,Int) -> Image
-brighten      : (Image,Int) -> Image
-darken        : (Image,Int) -> Image
-contrast      : (Image,Int) -> Image
+threshold     : (Image,Real) -> Image
+brighten      : (Image,Real) -> Image
+darken        : (Image,Real) -> Image
+contrast      : (Image,Real) -> Image
 red_channel   : Image -> Image
 green_channel : Image -> Image
 blue_channel  : Image -> Image
@@ -88,8 +90,8 @@ sub           : (Image,Image) -> Image
 absdiff       : (Image,Image) -> Image
 ```
 
-Channel values are clamped to `0..255` where transforms can overflow.
-`contrast` uses `100` as neutral scale.
+Channel values are clamped to `0.0..1.0` where transforms can overflow.
+`contrast` uses `1.0` as neutral scale.
 
 ## Matrix Views
 
