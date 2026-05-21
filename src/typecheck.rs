@@ -473,6 +473,7 @@ impl<'a> Checker<'a> {
                     MatchTarget::Node(node) => self.symbol_effect(node) == Effect::Io,
                     MatchTarget::Value(_) => false,
                 }),
+                Stage::Bind(_) => false,
                 Stage::Endpoint(_) => false,
             })
         })
@@ -671,18 +672,21 @@ impl<'a> Checker<'a> {
             let is_last = index + 1 == chain.stages.len();
             let input_type = value_type.clone();
             let (label, output_type) = match stage {
-                Stage::Endpoint(Endpoint::Variable(name)) if is_last => {
-                    if contains_empty_seq(&value_type) {
-                        return Err("empty sequence literals need a type context".to_string());
+                Stage::Bind(target) if is_last => {
+                    let bindings = binding_target_types(target, &value_type)?;
+                    for (name, ty) in bindings {
+                        if contains_empty_seq(&ty) {
+                            return Err("empty sequence literals need a type context".to_string());
+                        }
+                        if env.insert(name.clone(), ty.clone()).is_some() {
+                            return Err(format!("value `{name}` is bound more than once"));
+                        }
+                        callable_summary.variables.push(ValueSummary {
+                            name,
+                            ty: ty.to_string(),
+                        });
                     }
-                    if env.insert(name.clone(), value_type.clone()).is_some() {
-                        return Err(format!("value `{name}` is bound more than once"));
-                    }
-                    callable_summary.variables.push(ValueSummary {
-                        name: name.clone(),
-                        ty: value_type.to_string(),
-                    });
-                    (format!("${name}"), value_type.clone())
+                    (format_binding_target_for_error(target), value_type.clone())
                 }
                 Stage::Endpoint(Endpoint::Name(name)) => (
                     name.clone(),
@@ -695,6 +699,9 @@ impl<'a> Checker<'a> {
                 }
                 Stage::Endpoint(_) => {
                     return Err("non-name endpoints may only appear as source values".to_string());
+                }
+                Stage::Bind(_) => {
+                    return Err("binding targets may only appear as final stages".to_string());
                 }
                 Stage::Map(name) => (
                     format!("map {name}"),
@@ -777,12 +784,14 @@ impl<'a> Checker<'a> {
         for (index, stage) in chain.stages.iter().enumerate() {
             let is_last = index + 1 == chain.stages.len();
             match stage {
-                Stage::Endpoint(Endpoint::Variable(name)) if is_last => {
-                    if contains_empty_seq(&value_type) {
-                        return Err("empty sequence literals need a type context".to_string());
-                    }
-                    if env.insert(name.clone(), value_type.clone()).is_some() {
-                        return Err(format!("value `{name}` is bound more than once"));
+                Stage::Bind(target) if is_last => {
+                    for (name, ty) in binding_target_types(target, &value_type)? {
+                        if contains_empty_seq(&ty) {
+                            return Err("empty sequence literals need a type context".to_string());
+                        }
+                        if env.insert(name.clone(), ty).is_some() {
+                            return Err(format!("value `{name}` is bound more than once"));
+                        }
                     }
                 }
                 Stage::Endpoint(Endpoint::Name(name)) => {
@@ -795,6 +804,9 @@ impl<'a> Checker<'a> {
                 }
                 Stage::Endpoint(_) => {
                     return Err("non-name endpoints may only appear as source values".to_string());
+                }
+                Stage::Bind(_) => {
+                    return Err("binding targets may only appear as final stages".to_string());
                 }
                 Stage::Map(name) => {
                     value_type = self.apply_map(callable, name, &value_type)?;
@@ -905,6 +917,9 @@ impl<'a> Checker<'a> {
                     )?;
                 }
                 Stage::Endpoint(Endpoint::Variable(_)) => {
+                    return Err("inline evaluations cannot bind values".to_string());
+                }
+                Stage::Bind(_) => {
                     return Err("inline evaluations cannot bind values".to_string());
                 }
                 Stage::Endpoint(_) => {
@@ -1346,10 +1361,85 @@ fn single_or_tuple(mut items: Vec<Type>) -> Type {
     }
 }
 
+fn binding_target_types(
+    target: &BindingTarget,
+    value_type: &Type,
+) -> Result<Vec<(String, Type)>, String> {
+    match target {
+        BindingTarget::Variable(name) => Ok(vec![(name.clone(), value_type.clone())]),
+        BindingTarget::Tuple(items) => {
+            let field_types = match value_type {
+                Type::Tuple(field_types) if field_types.len() == items.len() => field_types.clone(),
+                Type::Faultable(inner) => {
+                    let Type::Tuple(field_types) = inner.as_ref() else {
+                        return Err(format!(
+                            "binding target `{}` expected tuple input, found `{value_type}`",
+                            format_binding_target_for_error(target)
+                        ));
+                    };
+                    if field_types.len() != items.len() {
+                        return Err(format!(
+                            "binding target `{}` expected {} tuple fields, found {}",
+                            format_binding_target_for_error(target),
+                            items.len(),
+                            field_types.len()
+                        ));
+                    }
+                    field_types
+                        .iter()
+                        .map(faultable_projection_type)
+                        .collect::<Vec<_>>()
+                }
+                Type::Tuple(field_types) => {
+                    return Err(format!(
+                        "binding target `{}` expected {} tuple fields, found {}",
+                        format_binding_target_for_error(target),
+                        items.len(),
+                        field_types.len()
+                    ));
+                }
+                _ => {
+                    return Err(format!(
+                        "binding target `{}` expected tuple input, found `{value_type}`",
+                        format_binding_target_for_error(target)
+                    ));
+                }
+            };
+
+            let mut bindings = Vec::new();
+            for (item, field_type) in items.iter().zip(field_types.iter()) {
+                bindings.extend(binding_target_types(item, field_type)?);
+            }
+            Ok(bindings)
+        }
+    }
+}
+
+fn faultable_projection_type(ty: &Type) -> Type {
+    match ty {
+        Type::Faultable(_) => ty.clone(),
+        other => Type::Faultable(Box::new(other.clone())),
+    }
+}
+
 fn format_match_target(target: &MatchTarget) -> String {
     match target {
         MatchTarget::Node(node) => node.clone(),
         MatchTarget::Value(endpoint) => format_endpoint_for_error(endpoint),
+    }
+}
+
+fn format_binding_target_for_error(target: &BindingTarget) -> String {
+    match target {
+        BindingTarget::Variable(name) => format!("${name}"),
+        BindingTarget::Tuple(items) => format!(
+            "({})",
+            items
+                .iter()
+                .map(format_binding_target_for_error)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -1376,6 +1466,7 @@ fn format_endpoint_for_error(endpoint: &Endpoint) -> String {
 fn format_stage_for_error(stage: &Stage) -> String {
     match stage {
         Stage::Endpoint(endpoint) => format_endpoint_for_error(endpoint),
+        Stage::Bind(target) => format_binding_target_for_error(target),
         Stage::Map(name) => format!("map {name}"),
         Stage::FaultMap { node, .. } => format!("fault map {node}"),
         Stage::Filter(name) => format!("filter {name}"),

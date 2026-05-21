@@ -12,7 +12,7 @@ import std.int { format_int }
 import std.io { write_stdout }
 import std.sqlite as sqlite
 import std.stream as stream
-import std.tuple { first, second }
+import std.tuple { first }
 
 program main(args: Args) -> exit_code: Faultable[Int] {
     () -> sqlite.open_memory -> $conn0
@@ -23,9 +23,7 @@ program main(args: Args) -> exit_code: Faultable[Int] {
     ($conn1, "INSERT INTO todos (title) VALUES (?)", ["implement sqlite runtime" -> sqlite.text]) -> sqlite.exec -> first -> $conn3
     ($conn2, $conn3)                                                                              -> first       -> $conn4
 
-    ($conn4, "SELECT id, title FROM todos ORDER BY id", []) -> sqlite.query  -> $query
-    $query                                                  -> first         -> $conn5
-    $query                                                  -> second        -> $rows
+    ($conn4, "SELECT id, title FROM todos ORDER BY id", []) -> sqlite.query  -> ($conn5, $rows)
     $rows                                                   -> map todo_line -> stream.to_seq -> concat_bytes -> $output
 
     $output -> write_stdout -> $written

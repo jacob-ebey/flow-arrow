@@ -446,6 +446,7 @@ fn format_aligned_chain(parts: &[String], widths: &[usize]) -> String {
 fn format_stage(stage: &Stage) -> String {
     match stage {
         Stage::Endpoint(endpoint) => format_endpoint(endpoint),
+        Stage::Bind(target) => format_binding_target(target),
         Stage::Map(name) => format!("map {name}"),
         Stage::FaultMap { node, ok, fault } => {
             format!("fault map {node} {{ ok -> ${ok}, fault -> ${fault} }}")
@@ -464,6 +465,20 @@ fn format_stage(stage: &Stage) -> String {
                 .map(format_match_arm)
                 .collect::<Vec<_>>()
                 .join(" ")
+        ),
+    }
+}
+
+fn format_binding_target(target: &BindingTarget) -> String {
+    match target {
+        BindingTarget::Variable(name) => format!("${name}"),
+        BindingTarget::Tuple(items) => format!(
+            "({})",
+            items
+                .iter()
+                .map(format_binding_target)
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     }
 }
@@ -703,6 +718,19 @@ $value->wrap->$right}"#,
             r#"node split(input: (Seq[Real], Seq[Real]), value: Int | Real) -> (left: Seq[Real], right: Faultable[Int]) {
     $input -> first -> $left
     $value -> wrap  -> $right
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn formats_tuple_binding_targets() {
+        assert_formats(
+            r#"program main(args:Args)->exit_code:Int{(1,2)->pair->($left,$right)
+$left->$exit_code}"#,
+            r#"program main(args: Args) -> exit_code: Int {
+    (1, 2) -> pair -> ($left, $right)
+    $left  -> $exit_code
 }
 "#,
         );

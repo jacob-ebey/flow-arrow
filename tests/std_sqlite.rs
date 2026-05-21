@@ -12,16 +12,15 @@ const SQLITE_SOURCE: &str = r#"
     import std.io { write_stdout }
     import std.sqlite as sqlite
     import std.stream as stream
-    import std.tuple { first, second }
+    import std.tuple { first }
 
     program main(args: Args) -> exit_code: Faultable[Int] {
         () -> sqlite.open_memory -> $conn0
         ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", []) -> sqlite.exec -> first -> $conn1
         ($conn1, "INSERT INTO todos (title) VALUES (?)", ["alpha" -> sqlite.text]) -> sqlite.exec -> first -> $conn2
         ($conn2, "INSERT INTO todos (title) VALUES (?)", ["beta" -> sqlite.text]) -> sqlite.exec -> first -> $conn3
-        ($conn3, "SELECT id, title FROM todos ORDER BY id", []) -> sqlite.query -> $query
-        $query -> first -> $conn4
-        $query -> second -> map todo_line -> stream.to_seq -> concat_bytes -> $output
+        ($conn3, "SELECT id, title FROM todos ORDER BY id", []) -> sqlite.query -> ($conn4, $rows)
+        $rows -> map todo_line -> stream.to_seq -> concat_bytes -> $output
         $output -> write_stdout -> $written
         $conn4 -> sqlite.close -> $exit_code
     }
@@ -138,7 +137,7 @@ fn std_sqlite_runtime_query_all_values_and_transactions_run() {
         import std.real { format_real }
         import std.seq { head, length }
         import std.sqlite as sqlite
-        import std.tuple { first, second }
+        import std.tuple { first }
 
         program main(args: Args) -> exit_code: Faultable[Int] {
             () -> sqlite.open_memory -> $conn0
@@ -149,9 +148,7 @@ fn std_sqlite_runtime_query_all_values_and_transactions_run() {
             $conn4 -> sqlite.begin_immediate -> $conn5
             ($conn5, "INSERT INTO sample (id, score, name, payload, optional) VALUES (?, ?, ?, ?, ?)", [7 -> sqlite.int, 2.5 -> sqlite.real, "seven" -> sqlite.text, "blob-bytes" -> sqlite.blob, () -> sqlite.null]) -> sqlite.exec -> first -> $conn6
             $conn6 -> sqlite.commit -> $conn7
-            ($conn7, "SELECT id, score, name, payload, optional FROM sample ORDER BY id", []) -> sqlite.query_all -> $result
-            $result -> first -> $conn8
-            $result -> second -> $rows
+            ($conn7, "SELECT id, score, name, payload, optional FROM sample ORDER BY id", []) -> sqlite.query_all -> ($conn8, $rows)
             $rows -> length -> format_int -> $count
             $rows -> head -> expect -> row_summary -> $summary
             ["rows=", $count, "\n", $summary] -> concat_bytes -> $output

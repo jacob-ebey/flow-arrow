@@ -96,8 +96,8 @@ impl MermaidEmitter {
         for (index, stage) in chain.stages.iter().enumerate() {
             let is_last = index + 1 == chain.stages.len();
             match stage {
-                Stage::Endpoint(Endpoint::Variable(name)) if is_last => {
-                    self.bind_variable(name, &current, env)?;
+                Stage::Bind(target) if is_last => {
+                    self.bind_target(target, &current, env, None)?;
                 }
                 Stage::Endpoint(Endpoint::Name(name)) => {
                     let operation = self.operation_node(name, "call", "    ");
@@ -111,6 +111,9 @@ impl MermaidEmitter {
                 }
                 Stage::Endpoint(_) => {
                     return Err("non-name endpoints may only appear as source values".to_string());
+                }
+                Stage::Bind(_) => {
+                    return Err("binding targets may only appear as final stages".to_string());
                 }
                 Stage::Map(name) => {
                     let operation = self.collection_node(&format!("map {name}"), "map", "    ");
@@ -230,6 +233,40 @@ impl MermaidEmitter {
             return Err(format!("value `{name}` is bound more than once"));
         }
         Ok(())
+    }
+
+    fn bind_target(
+        &mut self,
+        target: &BindingTarget,
+        current: &[NodeRef],
+        env: &mut HashMap<String, Vec<NodeRef>>,
+        edge_label: Option<&str>,
+    ) -> Result<(), String> {
+        match target {
+            BindingTarget::Variable(name) => {
+                if let Some(edge_label) = edge_label {
+                    let value_label = format!("${name}");
+                    let variable = self.variable_node(&value_label, Some(&value_label), "    ");
+                    self.edges(current, &variable, Some(edge_label), "    ");
+                    if env.insert(name.to_string(), vec![variable]).is_some() {
+                        return Err(format!("value `{name}` is bound more than once"));
+                    }
+                    Ok(())
+                } else {
+                    self.bind_variable(name, current, env)
+                }
+            }
+            BindingTarget::Tuple(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    let label = match edge_label {
+                        Some(prefix) => format!("{prefix}.f{index}"),
+                        None => format!("f{index}"),
+                    };
+                    self.bind_target(item, current, env, Some(&label))?;
+                }
+                Ok(())
+            }
+        }
     }
 
     fn bind_fault_result(
@@ -581,6 +618,7 @@ fn endpoint_label(endpoint: &Endpoint) -> String {
 fn stage_label(stage: &Stage) -> String {
     match stage {
         Stage::Endpoint(endpoint) => endpoint_label(endpoint),
+        Stage::Bind(target) => binding_target_label(target),
         Stage::Map(name) => format!("map {name}"),
         Stage::FaultMap { node, .. } => format!("fault map {node}"),
         Stage::Filter(name) => format!("filter {name}"),
@@ -588,6 +626,20 @@ fn stage_label(stage: &Stage) -> String {
         Stage::Reduce { op, .. } => format!("reduce {op}"),
         Stage::Scan { op, .. } => format!("scan {op}"),
         Stage::Match { .. } => "match".to_string(),
+    }
+}
+
+fn binding_target_label(target: &BindingTarget) -> String {
+    match target {
+        BindingTarget::Variable(name) => format!("${name}"),
+        BindingTarget::Tuple(items) => format!(
+            "({})",
+            items
+                .iter()
+                .map(binding_target_label)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 

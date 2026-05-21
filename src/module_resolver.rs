@@ -442,6 +442,7 @@ fn rewrite_stages(stages: &mut [Stage], references: &HashMap<String, String>) {
 fn rewrite_stage(stage: &mut Stage, references: &HashMap<String, String>) {
     match stage {
         Stage::Endpoint(endpoint) => rewrite_endpoint(endpoint, references),
+        Stage::Bind(_) => {}
         Stage::Map(name)
         | Stage::Filter(name)
         | Stage::Scan { op: name, .. }

@@ -322,6 +322,7 @@ impl<'a> TypedCodegen<'a> {
                         MatchGuard::Call { node, .. } if self.is_cv_runtime_name(node)
                     )
             }),
+            Stage::Bind(_) => false,
             Stage::Endpoint(_) => false,
         }
     }
@@ -357,6 +358,7 @@ impl<'a> TypedCodegen<'a> {
                         MatchGuard::Call { node, .. } if self.is_http_runtime_name(node)
                     )
             }),
+            Stage::Bind(_) => false,
             Stage::Endpoint(_) => false,
         }
     }
@@ -411,6 +413,7 @@ impl<'a> TypedCodegen<'a> {
                         MatchGuard::Call { node, .. } if self.is_sqlite_runtime_name(node)
                     )
             }),
+            Stage::Bind(_) => false,
             Stage::Endpoint(_) => false,
         }
     }
@@ -937,10 +940,8 @@ impl<'a> TypedCodegen<'a> {
             let stage = &chain.stages[index];
             let is_last = index + 1 == chain.stages.len();
             match stage {
-                Stage::Endpoint(Endpoint::Variable(name)) if is_last => {
-                    if env.insert(name.clone(), value.clone()).is_some() {
-                        return Err(format!("value `{name}` is bound more than once"));
-                    }
+                Stage::Bind(target) if is_last => {
+                    self.emit_bind_target(out, target, value.clone(), env)?;
                 }
                 Stage::Endpoint(Endpoint::Name(name)) => {
                     if let Some(Stage::Endpoint(Endpoint::Name(next))) = chain.stages.get(index + 1)
@@ -1015,6 +1016,9 @@ impl<'a> TypedCodegen<'a> {
                 Stage::Endpoint(_) => {
                     return Err("non-name endpoints may only appear as source values".to_string());
                 }
+                Stage::Bind(_) => {
+                    return Err("binding targets may only appear as final stages".to_string());
+                }
                 Stage::Map(name) => {
                     value = self.emit_map(out, name, value.clone())?;
                 }
@@ -1050,6 +1054,95 @@ impl<'a> TypedCodegen<'a> {
                 }
             }
             index += 1;
+        }
+        Ok(())
+    }
+
+    fn emit_bind_target(
+        &mut self,
+        out: &mut String,
+        target: &BindingTarget,
+        value: Value,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<(), String> {
+        match target {
+            BindingTarget::Variable(name) => {
+                if env.insert(name.clone(), value).is_some() {
+                    return Err(format!("value `{name}` is bound more than once"));
+                }
+            }
+            BindingTarget::Tuple(targets) => match value.ty.clone() {
+                Ty::Tuple(items) if items.len() == targets.len() => {
+                    for (index, (target, item_ty)) in targets.iter().zip(items.iter()).enumerate() {
+                        self.emit_bind_target(
+                            out,
+                            target,
+                            Value {
+                                code: format!("{}.f{index}", value.code),
+                                ty: item_ty.clone(),
+                            },
+                            env,
+                        )?;
+                    }
+                }
+                Ty::Faultable(inner) => {
+                    let Ty::Tuple(items) = inner.as_ref() else {
+                        return Err(format!(
+                            "binding target `{}` expected tuple input, found `{}`",
+                            format_binding_target_for_error(target),
+                            value.ty
+                        ));
+                    };
+                    if items.len() != targets.len() {
+                        return Err(format!(
+                            "binding target `{}` expected {} tuple fields, found {}",
+                            format_binding_target_for_error(target),
+                            targets.len(),
+                            items.len()
+                        ));
+                    }
+                    for (index, (target, item_ty)) in targets.iter().zip(items.iter()).enumerate() {
+                        let projected_ty = faultable_projection_ty(item_ty);
+                        let projected_c_ty = self.types.c_type(&projected_ty);
+                        let tmp = self.next_temp();
+                        out.push_str(&format!("  {projected_c_ty} {tmp};\n"));
+                        if matches!(item_ty, Ty::Faultable(_)) {
+                            out.push_str(&format!(
+                                "  if ({}.is_fault) {{ {tmp}.is_fault = true; {tmp}.fault = {}.fault; }} else {{ {tmp} = {}.value.f{index}; }}\n",
+                                value.code, value.code, value.code
+                            ));
+                        } else {
+                            out.push_str(&format!(
+                                "  if ({}.is_fault) {{ {tmp}.is_fault = true; {tmp}.fault = {}.fault; }} else {{ {tmp}.is_fault = false; {tmp}.value = {}.value.f{index}; }}\n",
+                                value.code, value.code, value.code
+                            ));
+                        }
+                        self.emit_bind_target(
+                            out,
+                            target,
+                            Value {
+                                code: tmp,
+                                ty: projected_ty,
+                            },
+                            env,
+                        )?;
+                    }
+                }
+                Ty::Tuple(items) => {
+                    return Err(format!(
+                        "binding target `{}` expected {} tuple fields, found {}",
+                        format_binding_target_for_error(target),
+                        targets.len(),
+                        items.len()
+                    ));
+                }
+                other => {
+                    return Err(format!(
+                        "binding target `{}` expected tuple input, found `{other}`",
+                        format_binding_target_for_error(target)
+                    ));
+                }
+            },
         }
         Ok(())
     }
@@ -1202,6 +1295,9 @@ impl<'a> TypedCodegen<'a> {
                             value = self.emit_call(out, name, value)?;
                         }
                         Stage::Endpoint(Endpoint::Variable(_)) => {
+                            return Err("inline evaluations cannot bind values".to_string());
+                        }
+                        Stage::Bind(_) => {
                             return Err("inline evaluations cannot bind values".to_string());
                         }
                         Stage::Endpoint(_) => {
@@ -1422,6 +1518,9 @@ impl<'a> TypedCodegen<'a> {
                     value_ty = self.call_output_type(name, &value_ty)?;
                 }
                 Stage::Endpoint(Endpoint::Variable(_)) => {
+                    return Err("inline evaluations cannot bind values".to_string());
+                }
+                Stage::Bind(_) => {
                     return Err("inline evaluations cannot bind values".to_string());
                 }
                 Stage::Endpoint(_) => {
@@ -3965,6 +4064,7 @@ impl<'a> TypedCodegen<'a> {
     fn is_parallel_safe_stage(&self, stage: &Stage, visiting: &mut HashSet<String>) -> bool {
         match stage {
             Stage::Endpoint(endpoint) => self.is_parallel_safe_endpoint(endpoint, visiting),
+            Stage::Bind(_) => true,
             Stage::Map(name) | Stage::Filter(name) => self.is_parallel_safe_name(name, visiting),
             Stage::FaultMap { node, .. } => self.is_parallel_safe_name(node, visiting),
             Stage::Repeat { count, node } => {
@@ -4015,6 +4115,7 @@ impl<'a> TypedCodegen<'a> {
                         Stage::Endpoint(endpoint) => {
                             self.is_parallel_safe_endpoint(endpoint, visiting)
                         }
+                        Stage::Bind(_) => true,
                         Stage::Map(name)
                         | Stage::Filter(name)
                         | Stage::Repeat { node: name, .. }
@@ -4772,6 +4873,13 @@ fn unwrap_faultable_tuple(input: &Ty) -> Option<Ty> {
     saw_faultable.then_some(Ty::Tuple(unwrapped))
 }
 
+fn faultable_projection_ty(ty: &Ty) -> Ty {
+    match ty {
+        Ty::Faultable(_) => ty.clone(),
+        other => Ty::Faultable(Box::new(other.clone())),
+    }
+}
+
 fn contains_faultable_ty(input: &Ty) -> bool {
     match input {
         Ty::Faultable(_) => true,
@@ -4968,14 +5076,14 @@ fn compare_expr(name: &str, input: &str) -> String {
 fn stages_binding_output<'a>(chain: &'a Chain, output: &str) -> Option<&'a [Stage]> {
     let (last, stages) = chain.stages.split_last()?;
     match last {
-        Stage::Endpoint(Endpoint::Variable(name)) if name == output => Some(stages),
+        Stage::Bind(BindingTarget::Variable(name)) if name == output => Some(stages),
         _ => None,
     }
 }
 
 fn final_variable(chain: &Chain) -> Option<&str> {
     match chain.stages.last()? {
-        Stage::Endpoint(Endpoint::Variable(name)) => Some(name),
+        Stage::Bind(BindingTarget::Variable(name)) => Some(name),
         _ => None,
     }
 }
@@ -5002,6 +5110,7 @@ fn fuse_single_use_chains(callable: &Callable) -> Vec<Chain> {
                         }
                     }
                     Stage::Endpoint(_)
+                    | Stage::Bind(_)
                     | Stage::Map(_)
                     | Stage::Filter(_)
                     | Stage::FaultMap { .. } => {}
@@ -5081,6 +5190,7 @@ fn count_endpoint_vars(endpoint: &Endpoint, uses: &mut HashMap<String, usize>) {
                             }
                         }
                     }
+                    Stage::Bind(_) => {}
                     _ => {}
                 }
             }
@@ -5302,6 +5412,20 @@ impl TypeParser {
 
 fn type_name(ty: &Ty) -> String {
     format!("Fa{}", sanitize_symbol(&type_suffix(ty)))
+}
+
+fn format_binding_target_for_error(target: &BindingTarget) -> String {
+    match target {
+        BindingTarget::Variable(name) => format!("${name}"),
+        BindingTarget::Tuple(items) => format!(
+            "({})",
+            items
+                .iter()
+                .map(format_binding_target_for_error)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 fn type_suffix(ty: &Ty) -> String {

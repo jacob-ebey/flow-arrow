@@ -81,6 +81,7 @@ pub enum Endpoint {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stage {
     Endpoint(Endpoint),
+    Bind(BindingTarget),
     Map(String),
     FaultMap {
         node: String,
@@ -103,6 +104,12 @@ pub enum Stage {
     Match {
         arms: Vec<MatchArm>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BindingTarget {
+    Variable(String),
+    Tuple(Vec<BindingTarget>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

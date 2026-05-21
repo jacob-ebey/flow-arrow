@@ -302,8 +302,37 @@ impl Parser {
             Some(_) => Ok(Stage::Endpoint(Endpoint::Name(
                 self.parse_qualified_ident()?,
             ))),
+            _ if matches!(self.peek(), Token::Variable(_) | Token::LParen) => {
+                Ok(Stage::Bind(self.parse_binding_target()?))
+            }
             _ => Ok(Stage::Endpoint(self.parse_endpoint()?)),
         }
+    }
+
+    fn parse_binding_target(&mut self) -> Result<BindingTarget, SourceDiagnostic> {
+        match self.peek().clone() {
+            Token::Variable(name) => {
+                self.bump();
+                Ok(BindingTarget::Variable(name))
+            }
+            Token::LParen => self.parse_binding_tuple(),
+            Token::Ident(name) => {
+                Err(self.error_here(format!("expected variable `$` prefix for binding `{name}`")))
+            }
+            other => Err(self.error_here(format!("expected binding target, found {other:?}"))),
+        }
+    }
+
+    fn parse_binding_tuple(&mut self) -> Result<BindingTarget, SourceDiagnostic> {
+        self.expect(Token::LParen)?;
+        let first = self.parse_binding_target()?;
+        self.expect(Token::Comma)?;
+        let mut items = vec![first, self.parse_binding_target()?];
+        while self.eat(Token::Comma) {
+            items.push(self.parse_binding_target()?);
+        }
+        self.expect(Token::RParen)?;
+        Ok(BindingTarget::Tuple(items))
     }
 
     fn parse_match_stage(&mut self) -> Result<Stage, SourceDiagnostic> {

@@ -150,10 +150,11 @@ $total   -> format_real               -> $total_bytes
 ```
 
 Tuple joins and sequence literals use tight delimiters with `, ` between
-items:
+items. Tuple binding targets use the same spacing:
 
 ```flow
 ($left, $right) -> add -> $sum
+$pair -> ($left, $right)
 [$sum, "\n"] -> concat_bytes -> $output
 ```
 

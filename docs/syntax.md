@@ -213,11 +213,16 @@ A block is an unordered collection of dataflow edges expressed as chains.
 ```ebnf
 block          ::= "{" chain* "}"
 
-chain          ::= endpoint ("->" stage)+
+chain          ::= endpoint ("->" stage)* "->" binding_target
 
 stage          ::= node_ref
-                 | variable_ref
                  | combinator
+
+binding_target ::= variable_ref
+                 | tuple_binding
+
+tuple_binding  ::= "(" binding_target "," binding_target
+                       ("," binding_target)* ")"
 ```
 
 Each `chain` declares a path through the dependency graph. Successive
@@ -225,7 +230,8 @@ Each `chain` declares a path through the dependency graph. Successive
 edges `$a -> f` and `f -> $b`. Chains within a block may appear in any
 order; ordering carries no semantic meaning.
 
-A chain must terminate at an endpoint that **binds** a name (see §7).
+A chain must terminate at a target that **binds** one or more names
+(see §7).
 
 ---
 
@@ -250,7 +256,8 @@ node_ref       ::= IDENT ("." IDENT)*
 - `literal` — a constant value used as an input.
 
 A bare `IDENT` used as the **target** of a `->` denotes a node
-application. A `$IDENT` target binds or references a value (§7).
+application. A `$IDENT` target binds or references a value (§7), and a
+tuple-shaped final target destructures a tuple into multiple bindings.
 
 ### 5.1 Tuples (joins)
 
@@ -260,6 +267,13 @@ tuple          ::= "(" endpoint "," endpoint ("," endpoint)* ")"
 
 A tuple of arity ≥ 2 represents the multi-input edge into the next
 stage. `($a, $b) -> h -> $y` means `h` waits for both `$a` and `$b`.
+
+Tuple binding targets destructure tuple outputs at the end of a chain:
+`$pair -> ($left, $right)` is equivalent to binding `$pair -> first ->
+$left` and `$pair -> second -> $right`, except it does not require
+importing tuple selector nodes. If the upstream value is `Faultable[(A,
+B)]`, the destructured bindings have types `Faultable[A]` and
+`Faultable[B]`.
 
 ### 5.2 Fanouts
 
@@ -447,8 +461,8 @@ These are parsed where a node reference is expected.
 
 Within a single `node_decl` or `program_decl`:
 
-1. Each `$IDENT` appearing as the **rightmost stage** of a chain or
-   fanout arm is a **binding occurrence**: it introduces a new value.
+1. Each `$IDENT` appearing in the final binding target of a chain is a
+   **binding occurrence**: it introduces a new value.
 2. A name may be bound **exactly once** (single static assignment).
 3. Every other `$IDENT` is a value use: it must resolve either to an
    input port of the enclosing node or a name bound elsewhere in the same
@@ -518,8 +532,11 @@ type_args      ::= "[" type_arg ("," type_arg)* "]"
 type_arg       ::= type | INT | IDENT
 
 block          ::= "{" chain* "}"
-chain          ::= endpoint ("->" stage)+
-stage          ::= node_ref | variable_ref | combinator
+chain          ::= endpoint ("->" stage)* "->" binding_target
+stage          ::= node_ref | combinator
+binding_target ::= variable_ref | tuple_binding
+tuple_binding  ::= "(" binding_target "," binding_target
+                       ("," binding_target)* ")"
 
 endpoint       ::= inline_endpoint
 inline_endpoint ::= endpoint_atom ("->" stage)*

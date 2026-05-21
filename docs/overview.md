@@ -88,6 +88,15 @@ No branch is ordered before another.
 
 No other dependency exists.
 
+Tuple results can be destructured at the end of a chain:
+
+```flow
+$pair -> ($left, $right)
+```
+
+For `Faultable[(A, B)]`, destructuring binds `Faultable[A]` and
+`Faultable[B]`, matching the behavior of `first` and `second`.
+
 ---
 
 # 5. Named ports
@@ -715,11 +724,13 @@ block       ::= "{" edge* "}"
 
 edge        ::= chain
 
-chain       ::= endpoint "->" stage ("->" stage)*
+chain       ::= endpoint ("->" stage)* "->" binding_target
 
 stage       ::= node_ref
-              | variable_ref
               | combinator
+
+binding_target ::= variable_ref
+                 | "(" binding_target ("," binding_target)+ ")"
 
 endpoint    ::= variable_ref
               | literal

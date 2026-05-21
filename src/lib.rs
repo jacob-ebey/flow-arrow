@@ -715,6 +715,53 @@ mod tests {
     }
 
     #[test]
+    fn typecheck_and_codegen_destructure_tuple_binding() {
+        let source = r#"
+            import std.cli { Args }
+            import std.fault { expect, ok }
+
+            program main(args: Args) -> exit_code: Int {
+                (1, 2) -> ok -> ($left, $right)
+                $left -> expect -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
+        assert!(runtime_c.contains(".value.f0"));
+        assert!(runtime_c.contains(".is_fault"));
+    }
+
+    #[test]
+    fn typecheck_rejects_non_final_tuple_binding() {
+        let source = r#"
+            import std.cli { Args }
+
+            program main(args: Args) -> exit_code: Int {
+                (1, 2) -> ($left, $right) -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("binding targets may only appear as final stages"));
+    }
+
+    #[test]
+    fn typecheck_rejects_tuple_binding_arity_mismatch() {
+        let source = r#"
+            import std.cli { Args }
+
+            program main(args: Args) -> exit_code: Int {
+                (1, 2) -> ($left, $middle, $right)
+                $left -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("expected 3 tuple fields, found 2"));
+    }
+
+    #[test]
     fn typecheck_rejects_untyped_empty_sequence_binding() {
         let source = r#"
             import std.cli { Args }
