@@ -72,7 +72,7 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
         .map_err(|error| format!("failed to write `{}`: {error}", runtime_path.display()))?;
 
     let output = Command::new("clang")
-        .arg("-Oz")
+        .arg("-O3")
         .arg(&llvm_path)
         .arg(&runtime_path)
         .arg("-o")
@@ -192,9 +192,9 @@ mod tests {
         let module = parser::parse(source).expect("parse");
         let llvm = codegen::emit_module(&module).expect("llvm");
         let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
-        assert!(runtime_c.contains("static FaValue flow_node_verse_for"));
-        assert!(runtime_c.contains("fa_map("));
-        assert!(runtime_c.contains("fa_reduce("));
+        assert!(runtime_c.contains("static inline FaBytes flow_node_verse_for"));
+        assert!(runtime_c.contains("for (size_t"));
+        assert!(!runtime_c.contains("FaValue"));
         assert!(llvm.contains("define i32 @main"));
     }
 
@@ -295,7 +295,7 @@ mod tests {
         let module = parser::parse(source).expect("parse");
         typecheck::check_module(&module).expect("typecheck");
         let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
-        assert!(runtime_c.contains("fa_node_sub"));
+        assert!(runtime_c.contains(" - "));
     }
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
         let module = parser::parse(source).expect("parse");
         typecheck::check_module(&module).expect("typecheck");
         let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
-        assert!(runtime_c.contains("fa_node_add"));
+        assert!(!runtime_c.contains("FaValue"));
     }
 
     #[test]
@@ -523,8 +523,8 @@ mod tests {
         let module = parser::parse(source).expect("parse");
         typecheck::check_module(&module).expect("typecheck");
         let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
-        assert!(runtime_c.contains("fa_map("));
-        assert!(runtime_c.contains("FA_REDUCE_ADD"));
+        assert!(runtime_c.contains("for (size_t"));
+        assert!(!runtime_c.contains("FaValue"));
     }
 
     #[test]
@@ -557,9 +557,8 @@ mod tests {
         let source = include_str!("../examples/add-numbers-from-stdin/main.flow");
         let module = parser::parse(source).expect("parse");
         let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
-        assert!(runtime_c.contains("fa_filter("));
-        assert!(runtime_c.contains("fa_map("));
-        assert!(runtime_c.contains("fa_reduce("));
+        assert!(runtime_c.contains("for (size_t"));
+        assert!(!runtime_c.contains("FaValue"));
 
         let build = build_file(Path::new("examples/add-numbers-from-stdin/main.flow"), None)
             .expect("build");

@@ -1,6 +1,7 @@
 use super::*;
 
 const MODULE: &str = "std.int";
+pub const C: &str = include_str!("int.c");
 
 pub const PARSE_INT: StdSymbol = node(MODULE, "parse_int", "Bytes", "Faultable[Int]");
 pub const FORMAT_INT: StdSymbol = node(MODULE, "format_int", "Int", "Bytes");

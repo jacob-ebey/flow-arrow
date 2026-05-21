@@ -12,15 +12,16 @@ cargo bench --bench vector
 
 The vector benchmark generates a FlowArrow program that uses
 `std.vector` to run dot product, squared distance, and squared norm over
-the same vectors for a fixed number of iterations. It builds that
-program once, then samples:
+the same vectors for a fixed number of iterations. It also generates and
+compiles an equivalent Rust program with `rustc -C opt-level=3`. It
+builds both programs once, then samples:
 
-- native Rust code that performs the equivalent scalar loops in-process
+- the compiled Rust executable
 - the compiled FlowArrow executable
 
-The compiled executable is run as a process, so the FlowArrow number
-includes process startup. Increase `--iterations` or vector length when
-you want startup overhead to matter less.
+Both samples are process executions, so process startup is included on
+both sides. Increase `--iterations` or vector length when you want
+startup overhead to matter less.
 
 Options:
 

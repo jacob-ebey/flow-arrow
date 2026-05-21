@@ -1,6 +1,7 @@
 use super::*;
 
 const MODULE: &str = "std.cli";
+pub const C: &str = include_str!("cli.c");
 
 pub const ARGS: StdSymbol = ty(MODULE, "Args");
 pub const ARGV: StdSymbol = node(MODULE, "argv", "Args", "Seq[Bytes]");

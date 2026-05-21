@@ -9,6 +9,7 @@ mod predicates;
 mod real;
 mod seq;
 
+const RUNTIME_C: &str = include_str!("stdlib/runtime.c");
 const VECTOR_FLOW: &str = include_str!("stdlib/source/vector.flow");
 const VECTOR_EXPORTS: &[&str] = &[
     "sum",
@@ -123,6 +124,22 @@ pub const SYMBOLS: &[StdSymbol] = &[
     seq::SHIFT_RIGHT,
     seq::HEAD,
 ];
+
+pub fn emit_runtime_c(out: &mut String) {
+    for part in [
+        RUNTIME_C,
+        cli::C,
+        io::C,
+        int::C,
+        real::C,
+        fault::C,
+        bytes::C,
+        intrinsic::C,
+    ] {
+        out.push_str(part);
+        out.push('\n');
+    }
+}
 
 pub fn module_symbols(module: &str) -> impl Iterator<Item = &'static StdSymbol> + '_ {
     SYMBOLS.iter().filter(move |symbol| symbol.module == module)

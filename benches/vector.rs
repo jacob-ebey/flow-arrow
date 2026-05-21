@@ -1,7 +1,6 @@
 use flowarrow::build_file;
 use std::env;
 use std::fs;
-use std::hint::black_box;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -18,41 +17,57 @@ fn main() {
 
     let root = temp_root();
     fs::create_dir_all(&root).expect("create bench temp dir");
-    let source_path = root.join("vector_bench.flow");
+    let flowarrow_source_path = root.join("vector_bench.flow");
     fs::write(
-        &source_path,
+        &flowarrow_source_path,
         flowarrow_source(&left, &right, config.iterations, expected),
     )
     .expect("write FlowArrow benchmark source");
+    let rust_source_path = root.join("vector_bench.rs");
+    fs::write(
+        &rust_source_path,
+        rust_source(&left, &right, config.iterations, expected),
+    )
+    .expect("write Rust benchmark source");
 
-    let build_start = Instant::now();
-    let build = build_file(&source_path, None).expect("build FlowArrow benchmark");
-    let build_time = build_start.elapsed();
+    let flowarrow_build_start = Instant::now();
+    let flowarrow_build =
+        build_file(&flowarrow_source_path, None).expect("build FlowArrow benchmark");
+    let flowarrow_build_time = flowarrow_build_start.elapsed();
 
-    run_flowarrow_once(&build.executable);
-    black_box(native_kernel(&left, &right, config.iterations));
+    let rust_build_start = Instant::now();
+    let rust_executable = build_rust_executable(&rust_source_path);
+    let rust_build_time = rust_build_start.elapsed();
 
-    let native_samples = sample(config.samples, || {
-        black_box(native_kernel(
-            black_box(&left),
-            black_box(&right),
-            black_box(config.iterations),
-        ));
+    run_executable_once(&rust_executable, "Rust benchmark executable");
+    run_executable_once(
+        &flowarrow_build.executable,
+        "FlowArrow benchmark executable",
+    );
+
+    let rust_samples = sample(config.samples, || {
+        run_executable_once(&rust_executable, "Rust benchmark executable")
     });
-    let flowarrow_samples = sample(config.samples, || run_flowarrow_once(&build.executable));
+    let flowarrow_samples = sample(config.samples, || {
+        run_executable_once(
+            &flowarrow_build.executable,
+            "FlowArrow benchmark executable",
+        )
+    });
 
     println!("vector benchmark");
     println!("  len:        {}", config.len);
     println!("  iterations: {}", config.iterations);
     println!("  samples:    {}", config.samples);
-    println!("  build:      {}", format_duration(build_time));
+    println!("  rust build: {}", format_duration(rust_build_time));
+    println!("  flow build: {}", format_duration(flowarrow_build_time));
     println!();
-    print_summary("rust native", &native_samples);
+    print_summary("rust exe", &rust_samples);
     print_summary("flowarrow", &flowarrow_samples);
     println!();
     println!(
         "  mean ratio: {:.2}x",
-        mean(&flowarrow_samples).as_secs_f64() / mean(&native_samples).as_secs_f64()
+        mean(&flowarrow_samples).as_secs_f64() / mean(&rust_samples).as_secs_f64()
     );
 }
 
@@ -199,6 +214,47 @@ program main(args: Args) -> exit_code: Int {{
     )
 }
 
+fn rust_source(left: &[f64], right: &[f64], iterations: usize, expected: f64) -> String {
+    format!(
+        r#"
+use std::hint::black_box;
+
+static LEFT: &[f64] = &{};
+static RIGHT: &[f64] = &{};
+
+fn kernel(left: &[f64], right: &[f64], iterations: usize) -> f64 {{
+    let mut score = 0.0;
+    for _ in 0..iterations {{
+        let mut dot = 0.0;
+        let mut squared_distance = 0.0;
+        let mut squared_norm = 0.0;
+        for (&a, &b) in left.iter().zip(right) {{
+            dot += a * b;
+            let delta = a - b;
+            squared_distance += delta * delta;
+            squared_norm += a * a;
+        }}
+        score += dot + squared_distance + squared_norm;
+    }}
+    score
+}}
+
+fn main() {{
+    let score = kernel(
+        black_box(LEFT),
+        black_box(RIGHT),
+        black_box({iterations}usize),
+    );
+    let expected = black_box({});
+    std::process::exit(if score == expected {{ 0 }} else {{ 1 }});
+}}
+"#,
+        rust_slice(left),
+        rust_slice(right),
+        flow_real(expected),
+    )
+}
+
 fn flow_seq(values: &[f64]) -> String {
     let mut out = String::from("[");
     for (index, value) in values.iter().enumerate() {
@@ -215,14 +271,47 @@ fn flow_real(value: f64) -> String {
     format!("{value:.17}")
 }
 
-fn run_flowarrow_once(executable: &PathBuf) {
+fn rust_slice(values: &[f64]) -> String {
+    let mut out = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&flow_real(*value));
+    }
+    out.push(']');
+    out
+}
+
+fn build_rust_executable(source: &PathBuf) -> PathBuf {
+    let executable =
+        source.with_file_name(format!("rust_vector_bench{}", std::env::consts::EXE_SUFFIX));
+    let output = Command::new("rustc")
+        .arg("-C")
+        .arg("opt-level=3")
+        .arg("-C")
+        .arg("debuginfo=0")
+        .arg("-C")
+        .arg("panic=abort")
+        .arg(source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("invoke rustc for Rust benchmark executable");
+    assert!(
+        output.status.success(),
+        "rustc failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    executable
+}
+
+fn run_executable_once(executable: &PathBuf, label: &str) {
     let status = Command::new(executable)
         .status()
-        .expect("run FlowArrow benchmark executable");
-    assert!(
-        status.success(),
-        "FlowArrow benchmark executable failed with {status}"
-    );
+        .unwrap_or_else(|error| panic!("run {label}: {error}"));
+    assert!(status.success(), "{label} failed with {status}");
 }
 
 fn sample(mut samples: usize, mut run: impl FnMut()) -> Vec<Duration> {

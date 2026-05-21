@@ -1,6 +1,7 @@
 use super::*;
 
 const MODULE: &str = "std.bytes";
+pub const C: &str = include_str!("bytes.c");
 
 pub const SPLIT_LINES: StdSymbol = node(MODULE, "split_lines", "Bytes", "Seq[Bytes]");
 pub const CONCAT_BYTES: StdSymbol = reducible_node(

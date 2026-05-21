@@ -98,8 +98,8 @@ fn std_vector_source_nodes_run() {
     let runtime_c = fs::read_to_string(build.build_dir.join(".cache/runtime.c")).expect("runtime");
     assert!(runtime_c.contains("flow_node___flow_std_vector_sum"));
     assert!(runtime_c.contains("flow_node___flow_std_vector_dot"));
-    assert!(runtime_c.contains("fa_map("));
-    assert!(runtime_c.contains("fa_reduce("));
+    assert!(runtime_c.contains("for (size_t"));
+    assert!(!runtime_c.contains("FaValue"));
 }
 
 #[test]
