@@ -22,6 +22,7 @@ Initial modules:
 | [`std.math`](./math.md) | Arithmetic and comparisons |
 | [`std.predicates`](./predicates.md) | Reusable predicates |
 | [`std.seq`](./seq.md) | Generic sequence reshaping helpers |
+| [`std.sqlite`](./sqlite.md) | SQLite database boundary I/O |
 | [`std.tuple`](./tuple.md) | Generic tuple projection helpers |
 | [`std.fault`](./fault.md) | Fault diagnostics and fault-status helpers |
 | [`std.vector`](./vector.md) | Source-backed vector operations |

@@ -28,6 +28,9 @@ enum Type {
     HttpListener,
     HttpRequest,
     HttpResponse,
+    SqliteConnection,
+    SqliteRow,
+    SqliteValue,
     Stream(Box<Type>),
     Fault,
     Faultable(Box<Type>),
@@ -979,6 +982,12 @@ fn primitive_types() -> HashMap<String, Type> {
 fn stdlib_type_symbol(name: &str) -> Result<Type, String> {
     if name == "Stream" {
         Ok(Type::Stream(Box::new(Type::Var("V".to_string()))))
+    } else if name == "Connection" {
+        Ok(Type::SqliteConnection)
+    } else if name == "Row" {
+        Ok(Type::SqliteRow)
+    } else if name == "Value" {
+        Ok(Type::SqliteValue)
     } else {
         parse_type(name)
     }
@@ -1284,6 +1293,9 @@ impl TypeParser {
             "Listener" | "http.Listener" => Type::HttpListener,
             "Request" | "http.Request" => Type::HttpRequest,
             "Response" | "http.Response" => Type::HttpResponse,
+            "sqlite.Connection" => Type::SqliteConnection,
+            "sqlite.Row" => Type::SqliteRow,
+            "sqlite.Value" => Type::SqliteValue,
             "i1" => Type::Bool,
             "i8" | "i16" | "i32" | "i64" => Type::Int,
             "f16" | "float" | "double" => Type::Real,
@@ -1341,6 +1353,9 @@ impl fmt::Display for Type {
             Type::HttpListener => write!(f, "http.Listener"),
             Type::HttpRequest => write!(f, "http.Request"),
             Type::HttpResponse => write!(f, "http.Response"),
+            Type::SqliteConnection => write!(f, "sqlite.Connection"),
+            Type::SqliteRow => write!(f, "sqlite.Row"),
+            Type::SqliteValue => write!(f, "sqlite.Value"),
             Type::Stream(item) => write!(f, "Stream[{item}]"),
             Type::Fault => write!(f, "Fault"),
             Type::Faultable(item) => write!(f, "Faultable[{item}]"),

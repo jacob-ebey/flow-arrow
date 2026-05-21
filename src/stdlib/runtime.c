@@ -132,6 +132,13 @@ static void fa_exit_fault(FaFault fault) {
   exit(65);
 }
 
+static int fa_stream_close(FaStream *stream, FaFault *fault) {
+  if (stream->closed) return 0;
+  stream->closed = true;
+  if (stream->close) return stream->close(stream->state, fault);
+  return 0;
+}
+
 static FaSeq_Bytes FaSeq_Bytes_new(size_t count) {
   FaSeq_Bytes seq;
   seq.count = count;

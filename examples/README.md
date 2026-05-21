@@ -17,6 +17,8 @@ import std.predicates { not_empty, is_empty, and, or, xor, not, all, any }
 import std.fault { Fault, has_faults, format_faults }
 import std.seq { head, tail }
 import std.cv { load, save_jpeg, grayscale }
+import std.sqlite as sqlite
+import std.stream as stream
 ```
 
 ```text
@@ -43,6 +45,10 @@ write_stderr      : Bytes -> Int
 http.listen       : http.ServerConfig -> Faultable[http.Listener]
 http.requests     : http.Listener -> Stream[http.Request]
 http.serve        : (http.Listener, Stream[http.Response]) -> Faultable[Int]
+sqlite.open       : Bytes -> Faultable[sqlite.Connection]
+sqlite.exec       : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, Int)]
+sqlite.query      : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, Stream[sqlite.Row])]
+stream.to_seq     : Stream[V] -> Faultable[Seq[V]]
 
 # Arithmetic
 add               : (Int|Real, Int|Real) -> Int|Real # associative
@@ -108,3 +114,4 @@ libraries to build.
 | Example | What it explores |
 | --- | --- |
 | `http-server/` | `std.http` server shape backed by H2O: listener boundary, request stream, pure response mapping, and explicit serving boundary. |
+| `sqlite-todos/` | `std.sqlite` database boundary: prepared statements, row streams, row/value extraction, and explicit stream materialization. |

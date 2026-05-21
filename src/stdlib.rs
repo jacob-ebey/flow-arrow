@@ -11,6 +11,7 @@ mod math;
 mod predicates;
 mod real;
 mod seq;
+mod sqlite;
 mod stream;
 mod tuple;
 
@@ -180,6 +181,8 @@ pub const SYMBOLS: &[StdSymbol] = &[
     cli::ARGS,
     fault::FAULT,
     stream::STREAM,
+    stream::TO_SEQ,
+    stream::DRAIN,
     bytes::SPLIT_LINES,
     bytes::CONCAT_BYTES,
     bytes::JOIN_BYTES,
@@ -233,6 +236,37 @@ pub const SYMBOLS: &[StdSymbol] = &[
     http::TEXT,
     http::JSON,
     http::NOT_FOUND,
+    sqlite::CONNECTION,
+    sqlite::ROW,
+    sqlite::VALUE,
+    sqlite::OPEN,
+    sqlite::OPEN_READONLY,
+    sqlite::OPEN_MEMORY,
+    sqlite::CLOSE,
+    sqlite::BUSY_TIMEOUT,
+    sqlite::FOREIGN_KEYS,
+    sqlite::BEGIN,
+    sqlite::BEGIN_IMMEDIATE,
+    sqlite::COMMIT,
+    sqlite::ROLLBACK,
+    sqlite::NULL,
+    sqlite::INT,
+    sqlite::REAL,
+    sqlite::TEXT,
+    sqlite::BLOB,
+    sqlite::EXEC,
+    sqlite::QUERY,
+    sqlite::QUERY_ALL,
+    sqlite::COLUMN_COUNT,
+    sqlite::COLUMN_NAME,
+    sqlite::VALUE_AT,
+    sqlite::VALUE_NAMED,
+    sqlite::KIND,
+    sqlite::IS_NULL,
+    sqlite::AS_INT,
+    sqlite::AS_REAL,
+    sqlite::AS_TEXT,
+    sqlite::AS_BLOB,
     real::PARSE_REAL,
     real::FORMAT_REAL,
     real::FROM_INT,
@@ -357,6 +391,16 @@ pub fn emit_http_runtime_c(out: &mut String) {
     out.push('\n');
 }
 
+pub fn emit_sqlite_runtime_h(out: &mut String) {
+    let mut emitted_headers = Vec::new();
+    push_c_headers(out, sqlite::H, &mut emitted_headers);
+}
+
+pub fn emit_sqlite_runtime_c(out: &mut String) {
+    push_c_fragment(out, sqlite::C);
+    out.push('\n');
+}
+
 fn push_c_headers(out: &mut String, headers: &[&'static str], emitted: &mut Vec<&'static str>) {
     for header in headers {
         if emitted.contains(header) {
@@ -462,6 +506,16 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "bit_shl"
             | "bit_shr"
             | "collect"
+            | "column_count"
+            | "column_name"
+            | "value_at"
+            | "value_named"
+            | "kind"
+            | "is_null"
+            | "as_int"
+            | "as_real"
+            | "as_text"
+            | "as_blob"
     )
 }
 

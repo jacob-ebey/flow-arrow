@@ -82,6 +82,10 @@ static FaFaultable_Stream_Bytes fa_open_file(FaBytes path) {
   stream.path = path;
   stream.state = NULL;
   stream.map_fn = NULL;
+  stream.next = NULL;
+  stream.close = NULL;
+  stream.item_size = 0;
+  stream.closed = false;
   return FaFaultable_Stream_Bytes_ok(stream);
 }
 
@@ -160,6 +164,11 @@ static FaFaultable_Int fa_copy_stream_to_file(FaStream stream, FaBytes output_pa
 }
 
 static FaFaultable_Int fa_close_stream(FaStream stream) {
+  FaFault fault;
+  if (stream.close) {
+    if (fa_stream_close(&stream, &fault) != 0) return FaFaultable_Int_fault(fault);
+    return FaFaultable_Int_ok(0);
+  }
   if (!stream.file) return FaFaultable_Int_fault(fa_fault_cstr("close: stream is already closed"));
   if (fclose(stream.file) != 0) {
     return FaFaultable_Int_fault(fa_io_fault(stream.path, "close"));

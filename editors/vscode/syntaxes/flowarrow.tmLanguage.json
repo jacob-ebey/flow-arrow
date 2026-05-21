@@ -386,7 +386,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.flowarrow",
-          "match": "\\b(?:Args|Bool|Bytes|Fault|Faultable|Image|Int|Kernel|Matrix|Real|Seq|Stream|Vec|double|i64)\\b"
+          "match": "\\b(?:Args|Bool|Bytes|Connection|Fault|Faultable|Image|Int|Kernel|Matrix|Real|Row|Seq|Stream|Value|Vec|double|i64)\\b"
         },
         {
           "name": "meta.type.annotation.flowarrow",

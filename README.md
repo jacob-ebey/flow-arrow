@@ -29,11 +29,16 @@ Optional native dependencies:
     those dependency headers on common installations.
   - Without H2O installed, non-HTTP builds and tests still work. Building a
     program that imports `std.http` fails with a clear dependency diagnostic.
+- SQLite 3 development headers and libraries for `std.sqlite`
+  - FlowArrow looks for `sqlite3` through `pkg-config`.
+  - Without SQLite development files installed, non-SQLite builds and tests
+    still work. Building a program that imports `std.sqlite` fails with a clear
+    dependency diagnostic.
 
 On macOS with Homebrew, a typical setup is:
 
 ```sh
-brew install rust llvm pkg-config ripgrep jpeg-turbo libpng h2o
+brew install rust llvm pkg-config ripgrep jpeg-turbo libpng h2o sqlite
 ```
 
 If Homebrew installs `clang` or libraries outside the default search path, make
@@ -43,7 +48,7 @@ On Debian/Ubuntu, the equivalent baseline is:
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y clang pkg-config ripgrep libjpeg-dev libpng-dev
+sudo apt-get install -y clang pkg-config ripgrep libjpeg-dev libpng-dev libsqlite3-dev
 ```
 
 H2O package names vary by distribution. If no packaged `libh2o` development
@@ -130,6 +135,12 @@ pkg-config --cflags --libs openssl
 pkg-config --cflags --libs libuv
 ```
 
+Check SQLite for `std.sqlite`:
+
+```sh
+pkg-config --cflags --libs sqlite3
+```
+
 The HTTP example typechecks everywhere:
 
 ```sh
@@ -146,6 +157,14 @@ examples/http-server/build/<host-target>/main
 Use the matching directory under `examples/http-server/build/`. The server
 listens on `0.0.0.0:8080` and can be checked with
 `curl http://127.0.0.1:8080/health` or a browser.
+
+The SQLite example builds and runs when SQLite is available through
+`pkg-config`:
+
+```sh
+cargo run -- build examples/sqlite-todos/main.flow
+examples/sqlite-todos/build/<host-target>/main
+```
 
 ## Repository Map
 

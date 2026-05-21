@@ -37,6 +37,9 @@ enum Ty {
     HttpListener,
     HttpRequest,
     HttpResponse,
+    SqliteConnection,
+    SqliteRow,
+    SqliteValue,
     Stream(Box<Ty>),
     Fault,
     Faultable(Box<Ty>),
@@ -109,6 +112,7 @@ struct TypedCodegen<'a> {
     module: &'a Module,
     temp: usize,
     parallel_helper: usize,
+    stream_helper: usize,
     parallel_helpers: String,
     callables: HashMap<String, &'a Callable>,
     signatures: HashMap<String, Signature>,
@@ -123,6 +127,7 @@ impl<'a> TypedCodegen<'a> {
             module,
             temp: 0,
             parallel_helper: 0,
+            stream_helper: 0,
             parallel_helpers: String::new(),
             callables: HashMap::new(),
             signatures: HashMap::new(),
@@ -142,6 +147,7 @@ impl<'a> TypedCodegen<'a> {
         names.sort();
         let uses_cv_runtime = self.uses_cv_runtime();
         let uses_http_runtime = self.uses_http_runtime();
+        let uses_sqlite_runtime = self.uses_sqlite_runtime();
 
         for name in &names {
             let sig = self
@@ -167,6 +173,44 @@ impl<'a> TypedCodegen<'a> {
             self.types.c_type(&Ty::Stream(Box::new(Ty::HttpRequest)));
             self.types.c_type(&Ty::Stream(Box::new(Ty::HttpResponse)));
         }
+        if uses_sqlite_runtime {
+            self.types.c_type(&Ty::SqliteConnection);
+            self.types.c_type(&Ty::SqliteRow);
+            self.types.c_type(&Ty::SqliteValue);
+            let seq_sqlite_value = Ty::Seq(Box::new(Ty::SqliteValue));
+            let seq_sqlite_row = Ty::Seq(Box::new(Ty::SqliteRow));
+            let stream_sqlite_row = Ty::Stream(Box::new(Ty::SqliteRow));
+            let tuple_conn_bool = Ty::Tuple(vec![Ty::SqliteConnection, Ty::Bool]);
+            let tuple_conn_int = Ty::Tuple(vec![Ty::SqliteConnection, Ty::Int]);
+            let tuple_conn_bytes_params = Ty::Tuple(vec![
+                Ty::SqliteConnection,
+                Ty::Bytes,
+                seq_sqlite_value.clone(),
+            ]);
+            let tuple_conn_stream_row =
+                Ty::Tuple(vec![Ty::SqliteConnection, stream_sqlite_row.clone()]);
+            let tuple_conn_seq_row = Ty::Tuple(vec![Ty::SqliteConnection, seq_sqlite_row.clone()]);
+            let tuple_row_int = Ty::Tuple(vec![Ty::SqliteRow, Ty::Int]);
+            let tuple_row_bytes = Ty::Tuple(vec![Ty::SqliteRow, Ty::Bytes]);
+            self.types.c_type(&tuple_conn_bool);
+            self.types.c_type(&tuple_conn_int);
+            self.types.c_type(&tuple_conn_bytes_params);
+            self.types.c_type(&tuple_conn_stream_row);
+            self.types.c_type(&tuple_conn_seq_row);
+            self.types.c_type(&tuple_row_int);
+            self.types.c_type(&tuple_row_bytes);
+            self.types
+                .c_type(&Ty::Faultable(Box::new(Ty::SqliteConnection)));
+            self.types.c_type(&Ty::Faultable(Box::new(Ty::SqliteValue)));
+            self.types.c_type(&Ty::Faultable(Box::new(tuple_conn_int)));
+            self.types
+                .c_type(&Ty::Faultable(Box::new(tuple_conn_stream_row)));
+            self.types
+                .c_type(&Ty::Faultable(Box::new(tuple_conn_seq_row)));
+            self.types.c_type(&seq_sqlite_value);
+            self.types.c_type(&seq_sqlite_row);
+            self.types.c_type(&stream_sqlite_row);
+        }
         self.types.set_use_cv_header(uses_cv_runtime);
 
         for decl in &self.module.declarations {
@@ -186,6 +230,9 @@ impl<'a> TypedCodegen<'a> {
         if uses_http_runtime {
             stdlib::emit_http_runtime_h(&mut out);
         }
+        if uses_sqlite_runtime {
+            stdlib::emit_sqlite_runtime_h(&mut out);
+        }
         out.push_str(&self.types.emit_typedefs());
         out.push_str(&self.types.emit_helpers());
         if uses_cv_runtime {
@@ -194,6 +241,9 @@ impl<'a> TypedCodegen<'a> {
         }
         if uses_http_runtime {
             stdlib::emit_http_runtime_c(&mut out);
+        }
+        if uses_sqlite_runtime {
+            stdlib::emit_sqlite_runtime_c(&mut out);
         }
         for name in &names {
             let sig = self.signatures.get(name).expect("signature");
@@ -332,6 +382,72 @@ impl<'a> TypedCodegen<'a> {
         )
     }
 
+    fn uses_sqlite_runtime(&self) -> bool {
+        self.module.declarations.iter().any(|decl| {
+            let (Decl::Node(callable) | Decl::Program(callable)) = decl else {
+                return false;
+            };
+            callable
+                .chains
+                .iter()
+                .flat_map(|chain| chain.stages.iter())
+                .any(|stage| self.stage_uses_sqlite_runtime(stage))
+        })
+    }
+
+    fn stage_uses_sqlite_runtime(&self, stage: &Stage) -> bool {
+        match stage {
+            Stage::Endpoint(Endpoint::Name(name))
+            | Stage::Map(name)
+            | Stage::Filter(name)
+            | Stage::Repeat { node: name, .. }
+            | Stage::FaultMap { node: name, .. } => self.is_sqlite_runtime_name(name),
+            Stage::Reduce { op, .. } | Stage::Scan { op, .. } => self.is_sqlite_runtime_name(op),
+            Stage::Match { arms } => arms.iter().any(|arm| {
+                self.is_sqlite_runtime_name(&arm.node)
+                    || matches!(
+                        &arm.guard,
+                        MatchGuard::Call { node, .. } if self.is_sqlite_runtime_name(node)
+                    )
+            }),
+            Stage::Endpoint(_) => false,
+        }
+    }
+
+    fn is_sqlite_runtime_name(&self, name: &str) -> bool {
+        matches!(
+            self.canonical_name(name).as_str(),
+            "sqlite.open"
+                | "sqlite.open_readonly"
+                | "sqlite.open_memory"
+                | "sqlite.close"
+                | "sqlite.busy_timeout"
+                | "sqlite.foreign_keys"
+                | "sqlite.begin"
+                | "sqlite.begin_immediate"
+                | "sqlite.commit"
+                | "sqlite.rollback"
+                | "sqlite.null"
+                | "sqlite.int"
+                | "sqlite.real"
+                | "sqlite.text"
+                | "sqlite.blob"
+                | "sqlite.exec"
+                | "sqlite.query"
+                | "sqlite.query_all"
+                | "sqlite.column_count"
+                | "sqlite.column_name"
+                | "sqlite.value_at"
+                | "sqlite.value_named"
+                | "sqlite.kind"
+                | "sqlite.is_null"
+                | "sqlite.as_int"
+                | "sqlite.as_real"
+                | "sqlite.as_text"
+                | "sqlite.as_blob"
+        )
+    }
+
     fn collect_imports(&mut self) {
         for decl in &self.module.declarations {
             let Decl::Import(import) = decl else {
@@ -343,31 +459,61 @@ impl<'a> TypedCodegen<'a> {
             match &import.clause {
                 ImportClause::Alias(alias) => {
                     for symbol in stdlib::module_symbols(module) {
+                        if symbol.kind == stdlib::SymbolKind::Type {
+                            self.aliases.insert(
+                                format!("{alias}.{}", symbol.name),
+                                self.stdlib_codegen_type(symbol.name),
+                            );
+                        }
                         if symbol.kind == stdlib::SymbolKind::Node
                             && symbol.runtime != RuntimeSupport::Unsupported
                         {
-                            self.stdlib_names.insert(
-                                format!("{alias}.{}", symbol.name),
-                                symbol.name.to_string(),
-                            );
+                            let runtime_name = if symbol.module == "std.sqlite" {
+                                format!("sqlite.{}", symbol.name)
+                            } else {
+                                symbol.name.to_string()
+                            };
+                            self.stdlib_names
+                                .insert(format!("{alias}.{}", symbol.name), runtime_name);
                         }
                     }
                 }
                 ImportClause::Items(items) => {
                     for item in items {
                         if let Some(symbol) = stdlib::find_export(module, &item.name) {
+                            if symbol.kind == stdlib::SymbolKind::Type {
+                                self.aliases.insert(
+                                    item.alias.as_deref().unwrap_or(&item.name).to_string(),
+                                    self.stdlib_codegen_type(symbol.name),
+                                );
+                            }
                             if symbol.kind == stdlib::SymbolKind::Node
                                 && symbol.runtime != RuntimeSupport::Unsupported
                             {
+                                let runtime_name = if symbol.module == "std.sqlite" {
+                                    format!("sqlite.{}", symbol.name)
+                                } else {
+                                    symbol.name.to_string()
+                                };
                                 self.stdlib_names.insert(
                                     item.alias.as_deref().unwrap_or(&item.name).to_string(),
-                                    symbol.name.to_string(),
+                                    runtime_name,
                                 );
                             }
                         }
                     }
                 }
             }
+        }
+    }
+
+    fn stdlib_codegen_type(&self, name: &str) -> Ty {
+        match name {
+            "Stream" => Ty::Stream(Box::new(Ty::Var("V".to_string()))),
+            "Connection" => Ty::SqliteConnection,
+            "Row" => Ty::SqliteRow,
+            "Value" => Ty::SqliteValue,
+            _ => parse_type(name).unwrap_or_else(|_| Ty::Var(name.to_string())),
         }
     }
 
@@ -1248,14 +1394,35 @@ impl<'a> TypedCodegen<'a> {
         }
         if let Ty::Stream(item_ty) = input.ty.clone() {
             let output_item_ty = self.call_output_type(name, &item_ty)?;
-            let output_ty = Ty::Stream(Box::new(output_item_ty));
+            let output_ty = Ty::Stream(Box::new(output_item_ty.clone()));
             let c_ty = self.types.c_type(&output_ty);
             let tmp = self.next_temp();
             out.push_str(&format!("  {c_ty} {tmp} = {input};\n", input = input.code));
+            let helper = self.emit_stream_map_helper(name, &item_ty, &output_item_ty)?;
+            let ctx_ty = format!("{helper}_Ctx");
+            let ctx = self.next_temp();
+            out.push_str(&format!("  if ({tmp}.next) {{\n"));
             out.push_str(&format!(
-                "  {tmp}.map_fn = (void *){};\n",
+                "    {ctx_ty} *{ctx} = ({ctx_ty} *)calloc(1, sizeof({ctx_ty}));\n"
+            ));
+            out.push_str(&format!("    if (!{ctx}) fa_die_alloc();\n"));
+            out.push_str(&format!("    {ctx}->upstream = {};\n", input.code));
+            out.push_str(&format!("    {ctx}->closed = false;\n"));
+            out.push_str(&format!("    {tmp}.state = {ctx};\n"));
+            out.push_str(&format!("    {tmp}.map_fn = NULL;\n"));
+            out.push_str(&format!("    {tmp}.next = {helper}_next;\n"));
+            out.push_str(&format!("    {tmp}.close = {helper}_close;\n"));
+            out.push_str(&format!(
+                "    {tmp}.item_size = sizeof({});\n",
+                self.types.c_type(&output_item_ty)
+            ));
+            out.push_str(&format!("    {tmp}.closed = false;\n"));
+            out.push_str("  } else {\n");
+            out.push_str(&format!(
+                "    {tmp}.map_fn = (void *){};\n",
                 user_fn_name(name)
             ));
+            out.push_str("  }\n");
             return Ok(Value {
                 code: tmp,
                 ty: output_ty,
@@ -1321,6 +1488,54 @@ impl<'a> TypedCodegen<'a> {
             code: tmp,
             ty: output_ty,
         })
+    }
+
+    fn emit_stream_map_helper(
+        &mut self,
+        name: &str,
+        input_item_ty: &Ty,
+        output_item_ty: &Ty,
+    ) -> Result<String, String> {
+        let helper = format!("fa_stream_map_helper_{}", self.stream_helper);
+        self.stream_helper += 1;
+        let input_c_ty = self.types.c_type(input_item_ty);
+        let output_c_ty = self.types.c_type(output_item_ty);
+        let mut body = String::new();
+        body.push_str(&format!(
+            "typedef struct {{ FaStream upstream; bool closed; }} {helper}_Ctx;\n"
+        ));
+        body.push_str(&format!(
+            "static int {helper}_next(void *ctx_ptr, void *out_item, FaFault *fault) {{\n"
+        ));
+        body.push_str(&format!("  {helper}_Ctx *ctx = ({helper}_Ctx *)ctx_ptr;\n"));
+        body.push_str("  if (!ctx || ctx->closed || !ctx->upstream.next) return 0;\n");
+        body.push_str(&format!("  {input_c_ty} input_item;\n"));
+        body.push_str(
+            "  int status = ctx->upstream.next(ctx->upstream.state, &input_item, fault);\n",
+        );
+        body.push_str("  if (status <= 0) return status;\n");
+        body.push_str(&format!("  {output_c_ty} mapped_item;\n"));
+        self.emit_assign_call(
+            &mut body,
+            "mapped_item",
+            output_item_ty,
+            name,
+            "input_item",
+            input_item_ty,
+        )?;
+        body.push_str(&format!("  *({output_c_ty} *)out_item = mapped_item;\n"));
+        body.push_str("  return 1;\n");
+        body.push_str("}\n");
+        body.push_str(&format!(
+            "static int {helper}_close(void *ctx_ptr, FaFault *fault) {{\n"
+        ));
+        body.push_str(&format!("  {helper}_Ctx *ctx = ({helper}_Ctx *)ctx_ptr;\n"));
+        body.push_str("  if (!ctx || ctx->closed) return 0;\n");
+        body.push_str("  ctx->closed = true;\n");
+        body.push_str("  return fa_stream_close(&ctx->upstream, fault);\n");
+        body.push_str("}\n\n");
+        self.parallel_helpers.push_str(&body);
+        Ok(helper)
     }
 
     fn emit_broadcast_map(
@@ -1923,6 +2138,8 @@ impl<'a> TypedCodegen<'a> {
                 "  {target} = fa_copy_stream_to_file({input}.f0, {input}.f1);\n"
             )),
             "close" => out.push_str(&format!("  {target} = fa_close_stream({input});\n")),
+            "to_seq" => self.emit_stream_to_seq(out, target, output_ty, input, input_ty)?,
+            "drain" => self.emit_stream_drain(out, target, input, input_ty)?,
             "default_config" => out.push_str(&format!("  {target} = fa_http_default_config();\n")),
             "with_tcp_listener" => out.push_str(&format!(
                 "  {target} = fa_http_with_tcp_listener({input}.f0, {input}.f1, {input}.f2);\n"
@@ -1947,6 +2164,64 @@ impl<'a> TypedCodegen<'a> {
             "text" => out.push_str(&format!("  {target} = fa_http_text({input});\n")),
             "json" => out.push_str(&format!("  {target} = fa_http_json({input});\n")),
             "not_found" => out.push_str(&format!("  {target} = fa_http_not_found({input});\n")),
+            "sqlite.open" => out.push_str(&format!("  {target} = fa_sqlite_open({input});\n")),
+            "sqlite.open_readonly" => {
+                out.push_str(&format!("  {target} = fa_sqlite_open_readonly({input});\n"))
+            }
+            "sqlite.open_memory" => {
+                out.push_str(&format!("  {target} = fa_sqlite_open_memory({input});\n"))
+            }
+            "sqlite.close" => out.push_str(&format!("  {target} = fa_sqlite_close({input});\n")),
+            "sqlite.busy_timeout" => {
+                out.push_str(&format!("  {target} = fa_sqlite_busy_timeout({input});\n"))
+            }
+            "sqlite.foreign_keys" => {
+                out.push_str(&format!("  {target} = fa_sqlite_foreign_keys({input});\n"))
+            }
+            "sqlite.begin" => out.push_str(&format!("  {target} = fa_sqlite_begin({input});\n")),
+            "sqlite.begin_immediate" => out.push_str(&format!(
+                "  {target} = fa_sqlite_begin_immediate({input});\n"
+            )),
+            "sqlite.commit" => out.push_str(&format!("  {target} = fa_sqlite_commit({input});\n")),
+            "sqlite.rollback" => {
+                out.push_str(&format!("  {target} = fa_sqlite_rollback({input});\n"))
+            }
+            "sqlite.null" => out.push_str(&format!("  {target} = fa_sqlite_null({input});\n")),
+            "sqlite.int" => out.push_str(&format!("  {target} = fa_sqlite_int({input});\n")),
+            "sqlite.real" => out.push_str(&format!("  {target} = fa_sqlite_real({input});\n")),
+            "sqlite.text" => out.push_str(&format!("  {target} = fa_sqlite_text({input});\n")),
+            "sqlite.blob" => out.push_str(&format!("  {target} = fa_sqlite_blob({input});\n")),
+            "sqlite.exec" => out.push_str(&format!("  {target} = fa_sqlite_exec({input});\n")),
+            "sqlite.query" => out.push_str(&format!("  {target} = fa_sqlite_query({input});\n")),
+            "sqlite.query_all" => {
+                out.push_str(&format!("  {target} = fa_sqlite_query_all({input});\n"))
+            }
+            "sqlite.column_count" => {
+                out.push_str(&format!("  {target} = fa_sqlite_column_count({input});\n"))
+            }
+            "sqlite.column_name" => {
+                out.push_str(&format!("  {target} = fa_sqlite_column_name({input});\n"))
+            }
+            "sqlite.value_at" => {
+                out.push_str(&format!("  {target} = fa_sqlite_value_at({input});\n"))
+            }
+            "sqlite.value_named" => {
+                out.push_str(&format!("  {target} = fa_sqlite_value_named({input});\n"))
+            }
+            "sqlite.kind" => out.push_str(&format!("  {target} = fa_sqlite_kind({input});\n")),
+            "sqlite.is_null" => {
+                out.push_str(&format!("  {target} = fa_sqlite_is_null({input});\n"))
+            }
+            "sqlite.as_int" => out.push_str(&format!("  {target} = fa_sqlite_as_int({input});\n")),
+            "sqlite.as_real" => {
+                out.push_str(&format!("  {target} = fa_sqlite_as_real({input});\n"))
+            }
+            "sqlite.as_text" => {
+                out.push_str(&format!("  {target} = fa_sqlite_as_text({input});\n"))
+            }
+            "sqlite.as_blob" => {
+                out.push_str(&format!("  {target} = fa_sqlite_as_blob({input});\n"))
+            }
             "split_lines" => out.push_str(&format!("  {target} = fa_split_lines({input});\n")),
             "trim" => out.push_str(&format!("  {target} = fa_trim({input});\n")),
             "split_on" => out.push_str(&format!(
@@ -2188,6 +2463,111 @@ impl<'a> TypedCodegen<'a> {
                 ty: ok_ty.as_ref().clone(),
             },
         )?;
+        out.push_str("  }\n");
+        Ok(())
+    }
+
+    fn emit_stream_to_seq(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Stream(item_ty) = input_ty else {
+            return Err("to_seq expected stream input".to_string());
+        };
+        let Ty::Faultable(seq_ty) = output_ty else {
+            return Err("to_seq expected faultable sequence output".to_string());
+        };
+        let Ty::Seq(seq_item_ty) = seq_ty.as_ref() else {
+            return Err("to_seq expected sequence output".to_string());
+        };
+        if seq_item_ty.as_ref() != item_ty.as_ref() {
+            return Err("to_seq stream item/output item mismatch".to_string());
+        }
+        let item_c_ty = self.types.c_type(item_ty);
+        let seq_new = self.types.seq_new_name(seq_ty)?;
+        let cap = self.next_temp();
+        let count = self.next_temp();
+        let items = self.next_temp();
+        let status = self.next_temp();
+        let item = self.next_temp();
+        let fault = self.next_temp();
+        let close_fault = self.next_temp();
+        let i = self.next_temp();
+        out.push_str(&format!("  {target}.is_fault = false;\n"));
+        out.push_str(&format!("  size_t {cap} = 8;\n"));
+        out.push_str(&format!("  size_t {count} = 0;\n"));
+        out.push_str(&format!(
+            "  {item_c_ty} *{items} = ({item_c_ty} *)calloc({cap}, sizeof({item_c_ty}));\n"
+        ));
+        out.push_str(&format!("  if (!{items}) fa_die_alloc();\n"));
+        out.push_str(&format!("  if (!{input}.next) {{\n"));
+        out.push_str(&format!(
+            "    {target}.is_fault = true; {target}.fault = fa_fault_cstr(\"stream.to_seq: stream is not pull-readable\");\n"
+        ));
+        out.push_str("  } else {\n");
+        out.push_str("    for (;;) {\n");
+        out.push_str(&format!(
+            "      if ({count} == {cap}) {{ {cap} *= 2; {item_c_ty} *next_items = ({item_c_ty} *)realloc({items}, {cap} * sizeof({item_c_ty})); if (!next_items) fa_die_alloc(); {items} = next_items; }}\n"
+        ));
+        out.push_str(&format!("      {item_c_ty} {item};\n"));
+        out.push_str(&format!("      FaFault {fault};\n"));
+        out.push_str(&format!(
+            "      int {status} = {input}.next({input}.state, &{item}, &{fault});\n"
+        ));
+        out.push_str(&format!("      if ({status} < 0) {{ {target}.is_fault = true; {target}.fault = {fault}; break; }}\n"));
+        out.push_str(&format!("      if ({status} == 0) break;\n"));
+        out.push_str(&format!("      {items}[{count}++] = {item};\n"));
+        out.push_str("    }\n");
+        out.push_str(&format!("    FaFault {close_fault};\n"));
+        out.push_str(&format!("    if (fa_stream_close(&{input}, &{close_fault}) != 0 && !{target}.is_fault) {{ {target}.is_fault = true; {target}.fault = {close_fault}; }}\n"));
+        out.push_str("  }\n");
+        out.push_str(&format!("  if (!{target}.is_fault) {{\n"));
+        out.push_str(&format!("    {target}.value = {seq_new}({count});\n"));
+        out.push_str(&format!(
+            "    for (size_t {i} = 0; {i} < {count}; {i}++) {target}.value.items[{i}] = {items}[{i}];\n"
+        ));
+        out.push_str("  }\n");
+        out.push_str(&format!("  free({items});\n"));
+        Ok(())
+    }
+
+    fn emit_stream_drain(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        input: &str,
+        input_ty: &Ty,
+    ) -> Result<(), String> {
+        let Ty::Stream(item_ty) = input_ty else {
+            return Err("drain expected stream input".to_string());
+        };
+        let item_c_ty = self.types.c_type(item_ty);
+        let item = self.next_temp();
+        let fault = self.next_temp();
+        let close_fault = self.next_temp();
+        let status = self.next_temp();
+        out.push_str(&format!("  {target}.is_fault = false;\n"));
+        out.push_str(&format!("  {target}.value = 0;\n"));
+        out.push_str(&format!("  if (!{input}.next) {{\n"));
+        out.push_str(&format!(
+            "    {target}.is_fault = true; {target}.fault = fa_fault_cstr(\"stream.drain: stream is not pull-readable\");\n"
+        ));
+        out.push_str("  } else {\n");
+        out.push_str("    for (;;) {\n");
+        out.push_str(&format!("      {item_c_ty} {item};\n"));
+        out.push_str(&format!("      FaFault {fault};\n"));
+        out.push_str(&format!(
+            "      int {status} = {input}.next({input}.state, &{item}, &{fault});\n"
+        ));
+        out.push_str(&format!("      if ({status} < 0) {{ {target}.is_fault = true; {target}.fault = {fault}; break; }}\n"));
+        out.push_str(&format!("      if ({status} == 0) break;\n"));
+        out.push_str("    }\n");
+        out.push_str(&format!("    FaFault {close_fault};\n"));
+        out.push_str(&format!("    if (fa_stream_close(&{input}, &{close_fault}) != 0 && !{target}.is_fault) {{ {target}.is_fault = true; {target}.fault = {close_fault}; }}\n"));
         out.push_str("  }\n");
         Ok(())
     }
@@ -3418,6 +3798,18 @@ impl TypeRegistry {
                 self.types.insert(type_name(ty), ty.clone());
                 "FaHttpResponse".to_string()
             }
+            Ty::SqliteConnection => {
+                self.types.insert(type_name(ty), ty.clone());
+                "FaSqliteConnection".to_string()
+            }
+            Ty::SqliteRow => {
+                self.types.insert(type_name(ty), ty.clone());
+                "FaSqliteRow".to_string()
+            }
+            Ty::SqliteValue => {
+                self.types.insert(type_name(ty), ty.clone());
+                "FaSqliteValue".to_string()
+            }
             Ty::Stream(_) => "FaStream".to_string(),
             Ty::Fault => "FaFault".to_string(),
             Ty::Var(_) => "FaUnit".to_string(),
@@ -3477,7 +3869,7 @@ impl TypeRegistry {
             if self.use_cv_header && is_cv_type_name(&name) {
                 continue;
             }
-            if is_http_runtime_type_name(&name) {
+            if is_http_runtime_type_name(&name) || is_sqlite_runtime_type_name(&name) {
                 continue;
             }
             match ty {
@@ -3487,7 +3879,13 @@ impl TypeRegistry {
                         "typedef struct {{ size_t count; {item_ty} *items; }} {name};\n"
                     ));
                 }
-                Ty::HttpServerConfig | Ty::HttpListener | Ty::HttpRequest | Ty::HttpResponse => {}
+                Ty::HttpServerConfig
+                | Ty::HttpListener
+                | Ty::HttpRequest
+                | Ty::HttpResponse
+                | Ty::SqliteConnection
+                | Ty::SqliteRow
+                | Ty::SqliteValue => {}
                 Ty::Tuple(items) => {
                     out.push_str("typedef struct { ");
                     for (index, item) in items.iter().enumerate() {
@@ -3521,7 +3919,7 @@ impl TypeRegistry {
             if self.use_cv_header && is_cv_type_name(&name) {
                 continue;
             }
-            if is_http_runtime_type_name(&name) {
+            if is_http_runtime_type_name(&name) || is_sqlite_runtime_type_name(&name) {
                 continue;
             }
             match ty {
@@ -3579,6 +3977,18 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "open_file" => Ok(Ty::Faultable(Box::new(Ty::Stream(Box::new(Ty::Bytes))))),
         "read_at" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "size" | "copy_to_file" | "close" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "to_seq" => {
+            let Ty::Stream(item) = input else {
+                return Err("to_seq expected stream input".to_string());
+            };
+            Ok(Ty::Faultable(Box::new(Ty::Seq(item.clone()))))
+        }
+        "drain" => {
+            let Ty::Stream(_) = input else {
+                return Err("drain expected stream input".to_string());
+            };
+            Ok(Ty::Faultable(Box::new(Ty::Int)))
+        }
         "default_config" => Ok(Ty::HttpServerConfig),
         "with_tcp_listener" | "with_tls" | "with_http2" | "with_http3" => Ok(Ty::HttpServerConfig),
         "listen" => Ok(Ty::Faultable(Box::new(Ty::HttpListener))),
@@ -3589,6 +3999,39 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "response" | "with_status" | "with_header" | "text" | "json" | "not_found" => {
             Ok(Ty::HttpResponse)
         }
+        "sqlite.open"
+        | "sqlite.open_readonly"
+        | "sqlite.open_memory"
+        | "sqlite.busy_timeout"
+        | "sqlite.foreign_keys"
+        | "sqlite.begin"
+        | "sqlite.begin_immediate"
+        | "sqlite.commit"
+        | "sqlite.rollback" => Ok(Ty::Faultable(Box::new(Ty::SqliteConnection))),
+        "sqlite.close" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "sqlite.null" | "sqlite.int" | "sqlite.real" | "sqlite.text" | "sqlite.blob" => {
+            Ok(Ty::SqliteValue)
+        }
+        "sqlite.exec" => Ok(Ty::Faultable(Box::new(Ty::Tuple(vec![
+            Ty::SqliteConnection,
+            Ty::Int,
+        ])))),
+        "sqlite.query" => Ok(Ty::Faultable(Box::new(Ty::Tuple(vec![
+            Ty::SqliteConnection,
+            Ty::Stream(Box::new(Ty::SqliteRow)),
+        ])))),
+        "sqlite.query_all" => Ok(Ty::Faultable(Box::new(Ty::Tuple(vec![
+            Ty::SqliteConnection,
+            Ty::Seq(Box::new(Ty::SqliteRow)),
+        ])))),
+        "sqlite.column_count" => Ok(Ty::Int),
+        "sqlite.column_name" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
+        "sqlite.value_at" | "sqlite.value_named" => Ok(Ty::Faultable(Box::new(Ty::SqliteValue))),
+        "sqlite.kind" => Ok(Ty::Bytes),
+        "sqlite.is_null" => Ok(Ty::Bool),
+        "sqlite.as_int" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "sqlite.as_real" => Ok(Ty::Faultable(Box::new(Ty::Real))),
+        "sqlite.as_text" | "sqlite.as_blob" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "split_lines" | "split_on" => Ok(Ty::Seq(Box::new(Ty::Bytes))),
         "trim" | "join_bytes" | "codes_to_bytes" | "format_faults" => Ok(Ty::Bytes),
         "concat_bytes" => match input {
@@ -3932,6 +4375,10 @@ fn is_http_runtime_type_name(name: &str) -> bool {
     matches!(name, "FaTuple_HttpRequest_Bytes_Bytes")
 }
 
+fn is_sqlite_runtime_type_name(name: &str) -> bool {
+    matches!(name, "FaSqliteConnection" | "FaSqliteRow" | "FaSqliteValue")
+}
+
 fn numeric_binary_output(input: &Ty) -> Result<Ty, String> {
     let Ty::Tuple(items) = input else {
         return Err("numeric binary op expected tuple input".to_string());
@@ -4233,6 +4680,15 @@ impl TypeParser {
             self.expect(']')?;
             return Ok(Ty::Stream(Box::new(item)));
         }
+        if name == "sqlite.Connection" {
+            return Ok(Ty::SqliteConnection);
+        }
+        if name == "sqlite.Row" {
+            return Ok(Ty::SqliteRow);
+        }
+        if name == "sqlite.Value" {
+            return Ok(Ty::SqliteValue);
+        }
         let base_name = name.rsplit('.').next().unwrap_or(&name);
         Ok(match base_name {
             "Unit" | "void" => Ty::Unit,
@@ -4313,6 +4769,9 @@ fn type_suffix(ty: &Ty) -> String {
         Ty::HttpListener => "HttpListener".to_string(),
         Ty::HttpRequest => "HttpRequest".to_string(),
         Ty::HttpResponse => "HttpResponse".to_string(),
+        Ty::SqliteConnection => "SqliteConnection".to_string(),
+        Ty::SqliteRow => "SqliteRow".to_string(),
+        Ty::SqliteValue => "SqliteValue".to_string(),
         Ty::Stream(item) => format!("Stream_{}", type_suffix(item)),
         Ty::Fault => "Fault".to_string(),
         Ty::Faultable(inner) => format!("Faultable_{}", type_suffix(inner)),
@@ -4390,6 +4849,9 @@ impl std::fmt::Display for Ty {
             Ty::HttpListener => write!(f, "http.Listener"),
             Ty::HttpRequest => write!(f, "http.Request"),
             Ty::HttpResponse => write!(f, "http.Response"),
+            Ty::SqliteConnection => write!(f, "sqlite.Connection"),
+            Ty::SqliteRow => write!(f, "sqlite.Row"),
+            Ty::SqliteValue => write!(f, "sqlite.Value"),
             Ty::Stream(item) => write!(f, "Stream[{item}]"),
             Ty::Fault => write!(f, "Fault"),
             Ty::Faultable(item) => write!(f, "Faultable[{item}]"),

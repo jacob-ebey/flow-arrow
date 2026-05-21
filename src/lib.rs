@@ -91,6 +91,11 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
             clang.arg(flag);
         }
     }
+    if runtime_c.contains("sqlite3.h") {
+        for flag in sqlite_compiler_flags()? {
+            clang.arg(flag);
+        }
+    }
     let output = clang.arg("-o").arg(&executable).output().map_err(|error| {
         "failed to invoke clang for LLVM backend: ".to_string() + &error.to_string()
     })?;
@@ -198,6 +203,14 @@ fn http_compiler_flags() -> Result<Vec<String>, String> {
     flags.extend(pkg_config_flags_for("std.http", "openssl", "OpenSSL")?);
     flags.extend(pkg_config_flags_for("std.http", "libuv", "libuv")?);
     Ok(dedup_flags(flags))
+}
+
+fn sqlite_compiler_flags() -> Result<Vec<String>, String> {
+    Ok(dedup_flags(pkg_config_flags_for(
+        "std.sqlite",
+        "sqlite3",
+        "SQLite",
+    )?))
 }
 
 fn pkg_config_flags_any(

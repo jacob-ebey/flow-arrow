@@ -60,6 +60,10 @@ static FaStream fa_http_requests(FaHttpListener listener) {
   stream.path = fa_bytes_literal("", 0);
   stream.state = listener.state;
   stream.map_fn = NULL;
+  stream.next = NULL;
+  stream.close = NULL;
+  stream.item_size = 0;
+  stream.closed = false;
   return stream;
 }
 
