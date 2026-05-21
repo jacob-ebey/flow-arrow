@@ -174,10 +174,10 @@
           "match": "\\b(fault)\\s+(map)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
-              "name": "keyword.operator.combinator.flowarrow"
+              "name": "support.function.builtin.flowarrow"
             },
             "2": {
-              "name": "keyword.operator.combinator.flowarrow"
+              "name": "support.function.builtin.flowarrow"
             },
             "3": {
               "name": "entity.name.function.flowarrow"
@@ -189,7 +189,7 @@
           "match": "\\b(map|filter)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
-              "name": "keyword.operator.combinator.flowarrow"
+              "name": "support.function.builtin.flowarrow"
             },
             "2": {
               "name": "entity.name.function.flowarrow"
@@ -201,7 +201,7 @@
           "match": "\\b(reduce|scan)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()\\s*(identity)\\s*(:)",
           "captures": {
             "1": {
-              "name": "keyword.operator.combinator.flowarrow"
+              "name": "support.function.builtin.flowarrow"
             },
             "2": {
               "name": "entity.name.function.flowarrow"
@@ -222,7 +222,7 @@
           "match": "\\b(repeat)\\s*(<)\\s*(\\$)([A-Za-z_][A-Za-z0-9_]*)\\s*(>)\\s*([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
-              "name": "keyword.operator.combinator.flowarrow"
+              "name": "support.function.builtin.flowarrow"
             },
             "2": {
               "name": "punctuation.definition.typeparameters.begin.flowarrow"
@@ -246,7 +246,7 @@
           "match": "\\b(repeat)\\s*(<)\\s*(-?\\d+)\\s*(>)\\s*([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
-              "name": "keyword.operator.combinator.flowarrow"
+              "name": "support.function.builtin.flowarrow"
             },
             "2": {
               "name": "punctuation.definition.typeparameters.begin.flowarrow"
@@ -267,7 +267,7 @@
           "match": "\\b(stencil2d)\\s+(radius)\\s*(<)\\s*(-?\\d+)\\s*(>)\\s*([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
-              "name": "keyword.operator.combinator.flowarrow"
+              "name": "support.function.builtin.flowarrow"
             },
             "2": {
               "name": "keyword.other.radius.flowarrow"
@@ -291,7 +291,7 @@
           "begin": "\\b(grid)\\s*(<)",
           "beginCaptures": {
             "1": {
-              "name": "keyword.operator.combinator.flowarrow"
+              "name": "support.function.builtin.flowarrow"
             },
             "2": {
               "name": "punctuation.definition.typeparameters.begin.flowarrow"
@@ -321,7 +321,7 @@
           ]
         },
         {
-          "name": "keyword.operator.combinator.flowarrow",
+          "name": "support.function.builtin.flowarrow",
           "match": "\\b(?:select|range|range_between|range_step|length)\\b"
         },
         {

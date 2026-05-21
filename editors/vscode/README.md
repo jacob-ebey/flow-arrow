@@ -10,6 +10,9 @@ FlowArrow source files.
   comments, strings, literals, types, punctuation, and the `->` flow arrow.
 - Gives `$`-prefixed variables a dedicated scope so they can be colored
   differently from node references and declaration names.
+- Gives built-in combinators such as `repeat`, `map`, `select`, and
+  `range_step` a dedicated builtin scope so they can be colored separately
+  from variables and ordinary node references.
 - Marks forbidden keywords and assignment-like operators from `docs/syntax.md`
   as illegal tokens.
 - Configures comments, bracket matching, auto-closing pairs, surrounding pairs,
