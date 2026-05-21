@@ -4,3 +4,6 @@ build/
 Cargo.lock
 .flowarrow/
 **/*.vsix
+**/*.jpg
+**/*.jpeg
+**/*.png
