@@ -24,6 +24,10 @@ enum Type {
     Bool,
     Bytes,
     Args,
+    HttpServerConfig,
+    HttpListener,
+    HttpRequest,
+    HttpResponse,
     Stream(Box<Type>),
     Fault,
     Faultable(Box<Type>),
@@ -376,6 +380,9 @@ impl<'a> Checker<'a> {
                 Stage::FaultMap { node, .. } | Stage::Repeat { node, .. } => {
                     self.symbol_effect(node) == Effect::Io
                 }
+                Stage::Match { arms } => arms
+                    .iter()
+                    .any(|arm| self.symbol_effect(&arm.node) == Effect::Io),
                 Stage::Endpoint(_) => false,
             })
         })
@@ -567,6 +574,9 @@ impl<'a> Checker<'a> {
                     let identity_type = self.endpoint_type(identity, env)?;
                     value_type = self.apply_scan(callable, op, &value_type, &identity_type)?;
                 }
+                Stage::Match { arms } => {
+                    value_type = self.apply_match(callable, kind, arms, &value_type, env)?;
+                }
             }
         }
         Ok(())
@@ -692,15 +702,25 @@ impl<'a> Checker<'a> {
     fn apply_map(&self, callable: &Callable, name: &str, input: &Type) -> Result<Type, String> {
         let input_faultable = matches!(input, Type::Faultable(_));
         let unwrapped = input.inner_faultable();
-        let Type::Seq(item_type) = &unwrapped else {
-            return Err(format!("`map {name}` expected Seq input, found `{input}`"));
+        let output = match &unwrapped {
+            Type::Seq(item_type) => {
+                let output = self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
+                Type::Seq(Box::new(output))
+            }
+            Type::Stream(item_type) => {
+                let output = self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
+                Type::Stream(Box::new(output))
+            }
+            _ => {
+                return Err(format!(
+                    "`map {name}` expected Seq or Stream input, found `{input}`"
+                ));
+            }
         };
-        let output = self.apply_node(callable, CallableKind::Node, name, item_type, true)?;
-        let seq = Type::Seq(Box::new(output));
         Ok(if input_faultable {
-            Type::Faultable(Box::new(seq))
+            Type::Faultable(Box::new(output))
         } else {
-            seq
+            output
         })
     }
 
@@ -849,6 +869,68 @@ impl<'a> Checker<'a> {
         })
     }
 
+    fn apply_match(
+        &self,
+        callable: &Callable,
+        kind: CallableKind,
+        arms: &[MatchArm],
+        input: &Type,
+        env: &HashMap<String, Type>,
+    ) -> Result<Type, String> {
+        if arms.is_empty() {
+            return Err("`match` must contain at least one arm".to_string());
+        }
+        if !matches!(arms.last().map(|arm| &arm.guard), Some(MatchGuard::Fallback)) {
+            return Err("`match` must end with a `_` fallback arm".to_string());
+        }
+
+        let mut result = None;
+        for (index, arm) in arms.iter().enumerate() {
+            match &arm.guard {
+                MatchGuard::Fallback if index + 1 != arms.len() => {
+                    return Err("`match` fallback arm must be last".to_string());
+                }
+                MatchGuard::Fallback => {}
+                MatchGuard::Call { node, args } => {
+                    let guard = self
+                        .symbols
+                        .get(node)
+                        .ok_or_else(|| format!("unknown match guard `{node}`"))?;
+                    if guard.kind == CallableKind::Program {
+                        return Err(format!("program `{node}` cannot be used as a match guard"));
+                    }
+                    if guard.effect != Effect::Pure {
+                        return Err(format!("match guard `{node}` must be pure"));
+                    }
+                    let mut input_items = vec![input.clone()];
+                    for arg in args {
+                        input_items.push(self.endpoint_type(arg, env)?);
+                    }
+                    let guard_input = single_or_tuple(input_items);
+                    let guard_output =
+                        self.apply_node(callable, kind, node, &guard_input, false)?;
+                    self.expect_type(
+                        &format!("match guard `{node}` result"),
+                        &guard_output,
+                        &Type::Bool,
+                    )?;
+                }
+            }
+
+            let arm_output = self.apply_node(callable, kind, &arm.node, input, false)?;
+            if let Some(expected) = &result {
+                self.expect_type(
+                    &format!("match arm `{}` result", arm.node),
+                    &arm_output,
+                    expected,
+                )?;
+            } else {
+                result = Some(arm_output);
+            }
+        }
+        result.ok_or_else(|| "`match` must contain at least one arm".to_string())
+    }
+
     fn supports_higher_order_call(&self, node: &CallableInfo) -> bool {
         !node.is_stdlib || stdlib::supports_higher_order_call(&node.runtime_name)
     }
@@ -868,6 +950,10 @@ fn primitive_types() -> HashMap<String, Type> {
         ("Bool".to_string(), Type::Bool),
         ("Bytes".to_string(), Type::Bytes),
         ("Fault".to_string(), Type::Fault),
+        ("ServerConfig".to_string(), Type::HttpServerConfig),
+        ("Listener".to_string(), Type::HttpListener),
+        ("Request".to_string(), Type::HttpRequest),
+        ("Response".to_string(), Type::HttpResponse),
         ("i1".to_string(), Type::Bool),
         ("i8".to_string(), Type::Int),
         ("i16".to_string(), Type::Int),
@@ -895,6 +981,14 @@ fn stdlib_type_symbol(name: &str) -> Result<Type, String> {
 
 fn is_stream_constructor(ty: &Type) -> bool {
     matches!(ty, Type::Stream(item) if matches!(item.as_ref(), Type::Var(_)))
+}
+
+fn single_or_tuple(mut items: Vec<Type>) -> Type {
+    if items.len() == 1 {
+        items.remove(0)
+    } else {
+        Type::Tuple(items)
+    }
 }
 
 fn stdlib_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, String> {
@@ -1181,6 +1275,10 @@ impl TypeParser {
             "Bytes" => Type::Bytes,
             "Args" => Type::Args,
             "Fault" => Type::Fault,
+            "ServerConfig" | "http.ServerConfig" => Type::HttpServerConfig,
+            "Listener" | "http.Listener" => Type::HttpListener,
+            "Request" | "http.Request" => Type::HttpRequest,
+            "Response" | "http.Response" => Type::HttpResponse,
             "i1" => Type::Bool,
             "i8" | "i16" | "i32" | "i64" => Type::Int,
             "f16" | "float" | "double" => Type::Real,
@@ -1234,6 +1332,10 @@ impl fmt::Display for Type {
             Type::Bool => write!(f, "Bool"),
             Type::Bytes => write!(f, "Bytes"),
             Type::Args => write!(f, "Args"),
+            Type::HttpServerConfig => write!(f, "http.ServerConfig"),
+            Type::HttpListener => write!(f, "http.Listener"),
+            Type::HttpRequest => write!(f, "http.Request"),
+            Type::HttpResponse => write!(f, "http.Response"),
             Type::Stream(item) => write!(f, "Stream[{item}]"),
             Type::Fault => write!(f, "Fault"),
             Type::Faultable(item) => write!(f, "Faultable[{item}]"),

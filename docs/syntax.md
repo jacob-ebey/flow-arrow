@@ -54,7 +54,7 @@ and may not be used as identifiers:
 
 ```text
 import    as        node      program   map       reduce
-scan      repeat    select    identity  grid      cell
+scan      repeat    select    match     identity  grid      cell
 stencil2d range     range_between        range_step
 filter    length    fault     ok
 ```
@@ -313,6 +313,7 @@ combinator     ::= map_comb
                  | fault_map_comb
                  | repeat_comb
                  | select_comb
+                 | match_comb
                  | stencil_comb
                  | grid_comb
                  | range_comb
@@ -334,6 +335,16 @@ repeat_comb    ::= "repeat" "<" repeat_count ">" IDENT
 repeat_count   ::= INT | variable_ref
 
 select_comb    ::= "select"
+
+match_comb     ::= "match" "{"
+                   match_arm+
+                   fallback_arm
+                   "}"
+
+match_arm      ::= match_guard "->" node_ref
+match_guard    ::= node_ref "(" match_args? ")"
+match_args     ::= endpoint ("," endpoint)* ","?
+fallback_arm   ::= "_" "->" node_ref
 
 stencil_comb   ::= "stencil2d" "radius" "<" INT ">" IDENT
 
@@ -367,6 +378,14 @@ Notes:
   type `Int`. When `N` is a runtime value, the iteration count varies
   per invocation but the body graph is still static.
 - `select` is invoked as `(predicate, when_true, when_false) -> select`.
+  Both candidate values are ordinary graph inputs and are evaluated
+  eagerly before `select` runs.
+- `match` is invoked as `$value -> match { guard(args...) -> node _ -> fallback }`.
+  The upstream value is implicitly prepended to each guard and selected arm node.
+  Guards must be pure nodes returning `Bool`, are evaluated top-to-bottom, and
+  short-circuit after the first `true` guard. Only the selected arm node is
+  evaluated. All arm nodes must return the same type. A `_` fallback arm is
+  required and must be last.
 - `grid<...>` introduces shape-indexed parallelism. Each `grid_dim`
   may be an integer literal, a compile-time identifier (shape
   variable), or a runtime `Int` value. Topology is fixed; only the
@@ -401,8 +420,10 @@ deferred to runtime.
 The following are therefore still **forbidden**:
 
 - Dynamic dispatch (`op_name -> lookup_op -> op; xs -> map op -> ys`).
-- Data-dependent branching that selects a subgraph (use `select` —
-  both branches are always evaluated, no topology change).
+- Dynamic dispatch where runtime data chooses arbitrary nodes.
+- Data-dependent branching with hidden topology. Use `select` for eager value
+  selection, or `match` for statically listed alternatives where only one arm is
+  evaluated.
 - `take_while`, `find_first`, or any combinator with sequential
   element-to-element dependencies.
 
@@ -457,8 +478,8 @@ or string literals) is **ill-formed**.
 The `=` token is legal only in a top-level `type_alias_decl`; it is not
 an assignment operator and may not appear in value-flow chains.
 
-The single permitted form of conditional selection is the pure
-`select` combinator (§6).
+The permitted forms of conditional choice are the pure eager `select`
+combinator and the static-alternative `match` combinator (§6).
 
 ---
 
@@ -506,7 +527,7 @@ fanout_arm     ::= stage ("->" stage)*
 seq_literal    ::= "[" "]" | "[" endpoint ("," endpoint)* "]"
 
 combinator     ::= map_comb | fault_map_comb | reduce_comb | scan_comb
-                 | repeat_comb | select_comb
+                 | repeat_comb | select_comb | match_comb
                  | stencil_comb | grid_comb
                  | range_comb | filter_comb | length_comb
 
@@ -520,6 +541,11 @@ scan_comb      ::= "scan"   IDENT "(" "identity" ":" endpoint ")"
 repeat_comb    ::= "repeat" "<" repeat_count ">" IDENT
 repeat_count   ::= INT | variable_ref
 select_comb    ::= "select"
+match_comb      ::= "match" "{" match_arm+ fallback_arm "}"
+match_arm       ::= match_guard "->" node_ref
+match_guard     ::= node_ref "(" match_args? ")"
+match_args      ::= endpoint ("," endpoint)* ","?
+fallback_arm    ::= "_" "->" node_ref
 stencil_comb   ::= "stencil2d" "radius" "<" INT ">" IDENT
 grid_comb      ::= "grid" "<" grid_dim ("," grid_dim)* ">" grid_body
 grid_dim       ::= IDENT | INT | variable_ref

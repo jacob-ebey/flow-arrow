@@ -127,6 +127,26 @@ impl MermaidEmitter {
                     self.edges(&identity, &operation, Some("identity"), "    ");
                     current = vec![operation];
                 }
+                Stage::Match { arms } => {
+                    let label = format!(
+                        "match\n{}",
+                        arms.iter()
+                            .map(match_arm_label)
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                    let operation = self.node(&label, "    ");
+                    self.edges(&current, &operation, Some("subject"), "    ");
+                    for arm in arms {
+                        if let MatchGuard::Call { args, .. } = &arm.guard {
+                            for arg in args {
+                                let arg_nodes = self.emit_endpoint(arg, env)?;
+                                self.edges(&arg_nodes, &operation, Some("guard arg"), "    ");
+                            }
+                        }
+                    }
+                    current = vec![operation];
+                }
             }
         }
         Ok(())
@@ -215,6 +235,21 @@ fn endpoint_label(endpoint: &Endpoint) -> String {
         Endpoint::Tuple(items) => endpoint_list_label(items, "(", ")"),
         Endpoint::Seq(items) => endpoint_list_label(items, "[", "]"),
     }
+}
+
+fn match_arm_label(arm: &MatchArm) -> String {
+    let guard = match &arm.guard {
+        MatchGuard::Fallback => "_".to_string(),
+        MatchGuard::Call { node, args } => format!(
+            "{}({})",
+            node,
+            args.iter()
+                .map(endpoint_label)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    format!("{guard} -> {}", arm.node)
 }
 
 fn endpoint_list_label(items: &[Endpoint], open: &str, close: &str) -> String {

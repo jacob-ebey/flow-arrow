@@ -96,4 +96,19 @@ pub enum Stage {
         op: String,
         identity: Endpoint,
     },
+    Match {
+        arms: Vec<MatchArm>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub guard: MatchGuard,
+    pub node: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MatchGuard {
+    Call { node: String, args: Vec<Endpoint> },
+    Fallback,
 }

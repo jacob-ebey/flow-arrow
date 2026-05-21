@@ -33,6 +33,10 @@ enum Ty {
     Bool,
     Bytes,
     Args,
+    HttpServerConfig,
+    HttpListener,
+    HttpRequest,
+    HttpResponse,
     Stream(Box<Ty>),
     Fault,
     Faultable(Box<Ty>),
@@ -137,6 +141,7 @@ impl<'a> TypedCodegen<'a> {
         let mut names = self.callables.keys().cloned().collect::<Vec<_>>();
         names.sort();
         let uses_cv_runtime = self.uses_cv_runtime();
+        let uses_http_runtime = self.uses_http_runtime();
 
         for name in &names {
             let sig = self
@@ -151,6 +156,15 @@ impl<'a> TypedCodegen<'a> {
             self.types.c_type(&image);
             self.types.c_type(&Ty::Faultable(Box::new(image)));
             self.types.c_type(&Ty::Faultable(Box::new(Ty::Bytes)));
+        }
+        if uses_http_runtime {
+            self.types.c_type(&Ty::HttpServerConfig);
+            self.types.c_type(&Ty::HttpListener);
+            self.types.c_type(&Ty::HttpRequest);
+            self.types.c_type(&Ty::HttpResponse);
+            self.types.c_type(&Ty::Faultable(Box::new(Ty::HttpListener)));
+            self.types.c_type(&Ty::Stream(Box::new(Ty::HttpRequest)));
+            self.types.c_type(&Ty::Stream(Box::new(Ty::HttpResponse)));
         }
         self.types.set_use_cv_header(uses_cv_runtime);
 
@@ -168,11 +182,17 @@ impl<'a> TypedCodegen<'a> {
         if self.types.uses_cv_header() {
             stdlib::emit_cv_type_h(&mut out);
         }
+        if uses_http_runtime {
+            stdlib::emit_http_runtime_h(&mut out);
+        }
         out.push_str(&self.types.emit_typedefs());
         out.push_str(&self.types.emit_helpers());
         if uses_cv_runtime {
             stdlib::emit_cv_runtime_h(&mut out);
             stdlib::emit_cv_runtime_c(&mut out);
+        }
+        if uses_http_runtime {
+            stdlib::emit_http_runtime_c(&mut out);
         }
         for name in &names {
             let sig = self.signatures.get(name).expect("signature");
@@ -222,6 +242,19 @@ impl<'a> TypedCodegen<'a> {
         })
     }
 
+    fn uses_http_runtime(&self) -> bool {
+        self.module.declarations.iter().any(|decl| {
+            let (Decl::Node(callable) | Decl::Program(callable)) = decl else {
+                return false;
+            };
+            callable
+                .chains
+                .iter()
+                .flat_map(|chain| chain.stages.iter())
+                .any(|stage| self.stage_uses_http_runtime(stage))
+        })
+    }
+
     fn stage_uses_cv_runtime(&self, stage: &Stage) -> bool {
         match stage {
             Stage::Endpoint(Endpoint::Name(name))
@@ -230,6 +263,13 @@ impl<'a> TypedCodegen<'a> {
             | Stage::Repeat { node: name, .. }
             | Stage::FaultMap { node: name, .. } => self.is_cv_runtime_name(name),
             Stage::Reduce { op, .. } | Stage::Scan { op, .. } => self.is_cv_runtime_name(op),
+            Stage::Match { arms } => arms.iter().any(|arm| {
+                self.is_cv_runtime_name(&arm.node)
+                    || matches!(
+                        &arm.guard,
+                        MatchGuard::Call { node, .. } if self.is_cv_runtime_name(node)
+                    )
+            }),
             Stage::Endpoint(_) => false,
         }
     }
@@ -247,6 +287,47 @@ impl<'a> TypedCodegen<'a> {
                 | "encode_pgm"
                 | "encode_png"
                 | "encode_ppm"
+        )
+    }
+
+    fn stage_uses_http_runtime(&self, stage: &Stage) -> bool {
+        match stage {
+            Stage::Endpoint(Endpoint::Name(name))
+            | Stage::Map(name)
+            | Stage::Filter(name)
+            | Stage::Repeat { node: name, .. }
+            | Stage::FaultMap { node: name, .. } => self.is_http_runtime_name(name),
+            Stage::Reduce { op, .. } | Stage::Scan { op, .. } => self.is_http_runtime_name(op),
+            Stage::Match { arms } => arms.iter().any(|arm| {
+                self.is_http_runtime_name(&arm.node)
+                    || matches!(
+                        &arm.guard,
+                        MatchGuard::Call { node, .. } if self.is_http_runtime_name(node)
+                    )
+            }),
+            Stage::Endpoint(_) => false,
+        }
+    }
+
+    fn is_http_runtime_name(&self, name: &str) -> bool {
+        matches!(
+            self.canonical_name(name).as_str(),
+            "default_config"
+                | "with_tcp_listener"
+                | "with_tls"
+                | "with_http2"
+                | "with_http3"
+                | "listen"
+                | "requests"
+                | "serve"
+                | "route"
+                | "body"
+                | "response"
+                | "with_status"
+                | "with_header"
+                | "text"
+                | "json"
+                | "not_found"
         )
     }
 
@@ -802,6 +883,9 @@ impl<'a> TypedCodegen<'a> {
                     let identity_value = self.emit_endpoint(out, identity, env)?;
                     value = self.emit_scan(out, op, value.clone(), identity_value)?;
                 }
+                Stage::Match { arms } => {
+                    value = self.emit_match(out, arms, value.clone(), env)?;
+                }
             }
             index += 1;
         }
@@ -911,6 +995,91 @@ impl<'a> TypedCodegen<'a> {
         })
     }
 
+    fn emit_match(
+        &mut self,
+        out: &mut String,
+        arms: &[MatchArm],
+        subject: Value,
+        env: &HashMap<String, Value>,
+    ) -> Result<Value, String> {
+        let first = arms
+            .first()
+            .ok_or_else(|| "`match` must contain at least one arm".to_string())?;
+        let output_ty = self.call_output_type(&first.node, &subject.ty)?;
+        let c_ty = self.types.c_type(&output_ty);
+        let target = self.next_temp();
+        out.push_str(&format!("  {c_ty} {target};\n"));
+
+        for (index, arm) in arms.iter().enumerate() {
+            match &arm.guard {
+                MatchGuard::Fallback => {
+                    if index + 1 != arms.len() {
+                        return Err("`match` fallback arm must be last".to_string());
+                    }
+                    if index == 0 {
+                        out.push_str("  {\n");
+                    } else {
+                        out.push_str("  else {\n");
+                    }
+                    self.emit_assign_call(out, &target, &output_ty, &arm.node, &subject.code, &subject.ty)?;
+                    out.push_str("  }\n");
+                }
+                MatchGuard::Call { node, args } => {
+                    if index == 0 {
+                        out.push_str("  {\n");
+                    } else {
+                        out.push_str("  else {\n");
+                    }
+                    let guard_input = self.emit_match_guard_input(out, subject.clone(), args, env)?;
+                    let guard_output_ty = self.call_output_type(node, &guard_input.ty)?;
+                    if guard_output_ty != Ty::Bool {
+                        return Err(format!(
+                            "match guard `{node}` result expected `Bool`, found `{guard_output_ty}`"
+                        ));
+                    }
+                    let guard = self.next_temp();
+                    out.push_str(&format!("  bool {guard};\n"));
+                    self.emit_assign_call(out, &guard, &Ty::Bool, node, &guard_input.code, &guard_input.ty)?;
+                    out.push_str(&format!("  if ({guard}) {{\n"));
+                    self.emit_assign_call(out, &target, &output_ty, &arm.node, &subject.code, &subject.ty)?;
+                    out.push_str("  }\n");
+                }
+            }
+        }
+        for _ in arms.iter().filter(|arm| !matches!(arm.guard, MatchGuard::Fallback)) {
+            out.push_str("  }\n");
+        }
+        Ok(Value {
+            code: target,
+            ty: output_ty,
+        })
+    }
+
+    fn emit_match_guard_input(
+        &mut self,
+        out: &mut String,
+        subject: Value,
+        args: &[Endpoint],
+        env: &HashMap<String, Value>,
+    ) -> Result<Value, String> {
+        if args.is_empty() {
+            return Ok(subject);
+        }
+        let mut values = Vec::with_capacity(args.len() + 1);
+        values.push(subject);
+        for arg in args {
+            values.push(self.emit_endpoint(out, arg, env)?);
+        }
+        let ty = Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect());
+        let c_ty = self.types.c_type(&ty);
+        let tmp = self.next_temp();
+        out.push_str(&format!("  {c_ty} {tmp};\n"));
+        for (index, value) in values.iter().enumerate() {
+            out.push_str(&format!("  {tmp}.f{index} = {};\n", value.code));
+        }
+        Ok(Value { code: tmp, ty })
+    }
+
     fn emit_assign_call(
         &mut self,
         out: &mut String,
@@ -1018,19 +1187,23 @@ impl<'a> TypedCodegen<'a> {
 
     fn emit_map(&mut self, out: &mut String, name: &str, input: Value) -> Result<Value, String> {
         if let Ty::Faultable(inner) = input.ty.clone() {
-            let Ty::Seq(_) = inner.as_ref() else {
-                return Err(format!("`map {name}` expected Seq input"));
+            if !matches!(inner.as_ref(), Ty::Seq(_) | Ty::Stream(_)) {
+                return Err(format!("`map {name}` expected Seq or Stream input"));
             };
             let inner_value = Value {
                 code: format!("{}.value", input.code),
                 ty: inner.as_ref().clone(),
             };
             let mapped_item_ty = match inner.as_ref() {
-                Ty::Seq(item_ty) => self.call_output_type(name, item_ty)?,
+                Ty::Seq(item_ty) | Ty::Stream(item_ty) => self.call_output_type(name, item_ty)?,
                 _ => unreachable!(),
             };
-            let mapped_seq_ty = Ty::Seq(Box::new(mapped_item_ty));
-            let output_ty = Ty::Faultable(Box::new(mapped_seq_ty));
+            let mapped_ty = match inner.as_ref() {
+                Ty::Seq(_) => Ty::Seq(Box::new(mapped_item_ty)),
+                Ty::Stream(_) => Ty::Stream(Box::new(mapped_item_ty)),
+                _ => unreachable!(),
+            };
+            let output_ty = Ty::Faultable(Box::new(mapped_ty));
             let c_ty = self.types.c_type(&output_ty);
             let tmp = self.next_temp();
             out.push_str(&format!("  {c_ty} {tmp};\n"));
@@ -1047,8 +1220,20 @@ impl<'a> TypedCodegen<'a> {
                 ty: output_ty,
             });
         }
+        if let Ty::Stream(item_ty) = input.ty.clone() {
+            let output_item_ty = self.call_output_type(name, &item_ty)?;
+            let output_ty = Ty::Stream(Box::new(output_item_ty));
+            let c_ty = self.types.c_type(&output_ty);
+            let tmp = self.next_temp();
+            out.push_str(&format!("  {c_ty} {tmp} = {input};\n", input = input.code));
+            out.push_str(&format!("  {tmp}.map_fn = (void *){};\n", user_fn_name(name)));
+            return Ok(Value {
+                code: tmp,
+                ty: output_ty,
+            });
+        }
         let Ty::Seq(item_ty) = input.ty.clone() else {
-            return Err(format!("`map {name}` expected Seq input"));
+            return Err(format!("`map {name}` expected Seq or Stream input"));
         };
         let output_item_ty = self.call_output_type(name, &item_ty)?;
         let output_ty = Ty::Seq(Box::new(output_item_ty.clone()));
@@ -1709,6 +1894,30 @@ impl<'a> TypedCodegen<'a> {
                 "  {target} = fa_copy_stream_to_file({input}.f0, {input}.f1);\n"
             )),
             "close" => out.push_str(&format!("  {target} = fa_close_stream({input});\n")),
+            "default_config" => out.push_str(&format!("  {target} = fa_http_default_config();\n")),
+            "with_tcp_listener" => out.push_str(&format!(
+                "  {target} = fa_http_with_tcp_listener({input}.f0, {input}.f1, {input}.f2);\n"
+            )),
+            "with_tls" => out.push_str(&format!(
+                "  {target} = fa_http_with_tls({input}.f0, {input}.f1, {input}.f2);\n"
+            )),
+            "with_http2" => out.push_str(&format!(
+                "  {target} = fa_http_with_http2({input}.f0, {input}.f1);\n"
+            )),
+            "with_http3" => out.push_str(&format!(
+                "  {target} = fa_http_with_http3({input}.f0, {input}.f1);\n"
+            )),
+            "listen" => out.push_str(&format!("  {target} = fa_http_listen({input});\n")),
+            "requests" => out.push_str(&format!("  {target} = fa_http_requests({input});\n")),
+            "serve" => out.push_str(&format!("  {target} = fa_http_serve({input});\n")),
+            "route" => out.push_str(&format!("  {target} = fa_http_route({input});\n")),
+            "body" => out.push_str(&format!("  {target} = fa_http_body({input});\n")),
+            "response" => out.push_str(&format!("  {target} = fa_http_response({input});\n")),
+            "with_status" => out.push_str(&format!("  {target} = fa_http_with_status({input});\n")),
+            "with_header" => out.push_str(&format!("  {target} = fa_http_with_header({input});\n")),
+            "text" => out.push_str(&format!("  {target} = fa_http_text({input});\n")),
+            "json" => out.push_str(&format!("  {target} = fa_http_json({input});\n")),
+            "not_found" => out.push_str(&format!("  {target} = fa_http_not_found({input});\n")),
             "split_lines" => out.push_str(&format!("  {target} = fa_split_lines({input});\n")),
             "trim" => out.push_str(&format!("  {target} = fa_trim({input});\n")),
             "split_on" => out.push_str(&format!(
@@ -3070,6 +3279,18 @@ impl<'a> TypedCodegen<'a> {
                 self.is_parallel_safe_endpoint(identity, visiting)
                     && self.is_parallel_safe_name(op, visiting)
             }
+            Stage::Match { arms } => arms.iter().all(|arm| {
+                self.is_parallel_safe_name(&arm.node, visiting)
+                    && match &arm.guard {
+                        MatchGuard::Call { node, args } => {
+                            self.is_parallel_safe_name(node, visiting)
+                                && args
+                                    .iter()
+                                    .all(|arg| self.is_parallel_safe_endpoint(arg, visiting))
+                        }
+                        MatchGuard::Fallback => true,
+                    }
+            }),
         }
     }
 
@@ -3152,6 +3373,22 @@ impl TypeRegistry {
             Ty::Bool => "bool".to_string(),
             Ty::Bytes => "FaBytes".to_string(),
             Ty::Args => "FaArgs".to_string(),
+            Ty::HttpServerConfig => {
+                self.types.insert(type_name(ty), ty.clone());
+                "FaHttpServerConfig".to_string()
+            }
+            Ty::HttpListener => {
+                self.types.insert(type_name(ty), ty.clone());
+                "FaHttpListener".to_string()
+            }
+            Ty::HttpRequest => {
+                self.types.insert(type_name(ty), ty.clone());
+                "FaHttpRequest".to_string()
+            }
+            Ty::HttpResponse => {
+                self.types.insert(type_name(ty), ty.clone());
+                "FaHttpResponse".to_string()
+            }
             Ty::Stream(_) => "FaStream".to_string(),
             Ty::Fault => "FaFault".to_string(),
             Ty::Var(_) => "FaUnit".to_string(),
@@ -3211,6 +3448,9 @@ impl TypeRegistry {
             if self.use_cv_header && is_cv_type_name(&name) {
                 continue;
             }
+            if is_http_runtime_type_name(&name) {
+                continue;
+            }
             match ty {
                 Ty::Seq(item) => {
                     let item_ty = self.c_type(&item);
@@ -3218,6 +3458,10 @@ impl TypeRegistry {
                         "typedef struct {{ size_t count; {item_ty} *items; }} {name};\n"
                     ));
                 }
+                Ty::HttpServerConfig
+                | Ty::HttpListener
+                | Ty::HttpRequest
+                | Ty::HttpResponse => {}
                 Ty::Tuple(items) => {
                     out.push_str("typedef struct { ");
                     for (index, item) in items.iter().enumerate() {
@@ -3249,6 +3493,9 @@ impl TypeRegistry {
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, ty) in entries {
             if self.use_cv_header && is_cv_type_name(&name) {
+                continue;
+            }
+            if is_http_runtime_type_name(&name) {
                 continue;
             }
             match ty {
@@ -3306,6 +3553,18 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "open_file" => Ok(Ty::Faultable(Box::new(Ty::Stream(Box::new(Ty::Bytes))))),
         "read_at" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "size" | "copy_to_file" | "close" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "default_config" => Ok(Ty::HttpServerConfig),
+        "with_tcp_listener" | "with_tls" | "with_http2" | "with_http3" => {
+            Ok(Ty::HttpServerConfig)
+        }
+        "listen" => Ok(Ty::Faultable(Box::new(Ty::HttpListener))),
+        "requests" => Ok(Ty::Stream(Box::new(Ty::HttpRequest))),
+        "serve" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "route" => Ok(Ty::Bool),
+        "body" => Ok(Ty::Bytes),
+        "response" | "with_status" | "with_header" | "text" | "json" | "not_found" => {
+            Ok(Ty::HttpResponse)
+        }
         "split_lines" | "split_on" => Ok(Ty::Seq(Box::new(Ty::Bytes))),
         "trim" | "join_bytes" | "codes_to_bytes" | "format_faults" => Ok(Ty::Bytes),
         "concat_bytes" => match input {
@@ -3645,6 +3904,10 @@ fn is_cv_type_name(name: &str) -> bool {
     )
 }
 
+fn is_http_runtime_type_name(name: &str) -> bool {
+    matches!(name, "FaTuple_HttpRequest_Bytes_Bytes")
+}
+
 fn numeric_binary_output(input: &Ty) -> Result<Ty, String> {
     let Ty::Tuple(items) = input else {
         return Err("numeric binary op expected tuple input".to_string());
@@ -3777,6 +4040,15 @@ fn fuse_single_use_chains(callable: &Callable) -> Vec<Chain> {
                         count_endpoint_vars(identity, &mut uses);
                     }
                     Stage::Repeat { count, .. } => count_endpoint_vars(count, &mut uses),
+                    Stage::Match { arms } => {
+                        for arm in arms {
+                            if let MatchGuard::Call { args, .. } = &arm.guard {
+                                for arg in args {
+                                    count_endpoint_vars(arg, &mut uses);
+                                }
+                            }
+                        }
+                    }
                     Stage::Endpoint(_)
                     | Stage::Map(_)
                     | Stage::Filter(_)
@@ -3946,6 +4218,10 @@ impl TypeParser {
             "Bytes" | "ptr" => Ty::Bytes,
             "Args" => Ty::Args,
             "Fault" => Ty::Fault,
+            "ServerConfig" => Ty::HttpServerConfig,
+            "Listener" => Ty::HttpListener,
+            "Request" => Ty::HttpRequest,
+            "Response" => Ty::HttpResponse,
             _ => Ty::Var(name),
         })
     }
@@ -4009,6 +4285,10 @@ fn type_suffix(ty: &Ty) -> String {
         Ty::Bool => "Bool".to_string(),
         Ty::Bytes => "Bytes".to_string(),
         Ty::Args => "Args".to_string(),
+        Ty::HttpServerConfig => "HttpServerConfig".to_string(),
+        Ty::HttpListener => "HttpListener".to_string(),
+        Ty::HttpRequest => "HttpRequest".to_string(),
+        Ty::HttpResponse => "HttpResponse".to_string(),
         Ty::Stream(item) => format!("Stream_{}", type_suffix(item)),
         Ty::Fault => "Fault".to_string(),
         Ty::Faultable(inner) => format!("Faultable_{}", type_suffix(inner)),
@@ -4082,6 +4362,10 @@ impl std::fmt::Display for Ty {
             Ty::Bool => write!(f, "Bool"),
             Ty::Bytes => write!(f, "Bytes"),
             Ty::Args => write!(f, "Args"),
+            Ty::HttpServerConfig => write!(f, "http.ServerConfig"),
+            Ty::HttpListener => write!(f, "http.Listener"),
+            Ty::HttpRequest => write!(f, "http.Request"),
+            Ty::HttpResponse => write!(f, "http.Response"),
             Ty::Stream(item) => write!(f, "Stream[{item}]"),
             Ty::Fault => write!(f, "Fault"),
             Ty::Faultable(item) => write!(f, "Faultable[{item}]"),

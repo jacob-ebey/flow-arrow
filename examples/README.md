@@ -9,6 +9,7 @@ The initial stdlib surface is documented in [`docs/std/`](../docs/std/):
 import std.bytes { split_lines, concat_bytes, join_bytes, trim, split_on, strip_prefix, strip_suffix }
 import std.cli { Args, argv }
 import std.io { read_stdin, write_stdout }
+import std.http as http
 import std.real { parse_real, format_real, from_int }
 import std.int { parse_int, format_int }
 import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, min, max }
@@ -39,6 +40,9 @@ argv              : Args -> Seq[Bytes]      # excludes executable name
 read_stdin        : ()    -> Bytes
 write_stdout      : Bytes -> Int
 write_stderr      : Bytes -> Int
+http.listen       : http.ServerConfig -> Faultable[http.Listener]
+http.requests     : http.Listener -> Stream[http.Request]
+http.serve        : (http.Listener, Stream[http.Response]) -> Faultable[Int]
 
 # Arithmetic
 add               : (Int|Real, Int|Real) -> Int|Real # associative
@@ -95,3 +99,12 @@ Mermaid `flowchart TD` diagram.
 | `fibonacci/`                  | Stdin integer parsing and FlowArrow Fibonacci iteration. |
 | `json-parser/`                | Flat JSON array of numbers → JSON summary object, with bracket framing and fault routing. |
 | `grayscale-image/`            | Filepath arguments plus `std.cv` image auto-detect, grayscale conversion, and JPEG encode. |
+
+## Boundary API sketches
+
+These examples exercise newer boundary APIs. Some may require optional system
+libraries to build.
+
+| Example | What it explores |
+| --- | --- |
+| `http-server/` | `std.http` server shape backed by H2O: listener boundary, request stream, pure response mapping, and explicit serving boundary. |

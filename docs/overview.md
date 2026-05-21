@@ -162,6 +162,23 @@ select(predicate, when_true, when_false)
 
 Both candidate values are ordinary graph inputs. The compiler sees the full dependency graph.
 
+FlowArrow also has `match` for static alternatives with runtime-selected
+evaluation:
+
+```flow
+$req -> match {
+    route("GET", "/health") -> health_response
+    route("POST", "/echo")  -> echo_response
+    _                       -> not_found
+} -> $response
+```
+
+Every guard and arm node is visible to the compiler. The upstream value is
+implicitly passed to each guard and selected arm node. Guards are pure `Bool`
+nodes evaluated top-to-bottom, and only the selected arm node is evaluated.
+`match` therefore introduces a control dependency without allowing dynamic
+topology.
+
 ---
 
 # 8. Data-parallel collections
@@ -617,6 +634,12 @@ $x -> repeat<$n> step -> $y      # repeat count may be a literal or runtime Int
 
 # pure selection
 ($predicate, $true_value, $false_value) -> select -> $y
+
+# static alternatives with runtime-selected evaluation
+$x -> match {
+    pred($arg) -> when_true
+    _          -> when_false
+} -> $y
 
 # dynamic-size sequences
 $n -> range -> $idxs

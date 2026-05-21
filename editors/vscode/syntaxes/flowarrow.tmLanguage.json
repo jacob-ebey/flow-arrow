@@ -321,8 +321,17 @@
           ]
         },
         {
+          "name": "meta.combinator.match.flowarrow",
+          "match": "\\b(match)\\b",
+          "captures": {
+            "1": {
+              "name": "support.function.builtin.flowarrow"
+            }
+          }
+        },
+        {
           "name": "support.function.builtin.flowarrow",
-          "match": "\\b(?:select|range|range_between|range_step|length)\\b"
+          "match": "\\b(?:select|match|range|range_between|range_step|length)\\b"
         },
         {
           "name": "keyword.other.identity.flowarrow",
@@ -338,7 +347,7 @@
       "patterns": [
         {
           "name": "meta.stage.node.flowarrow",
-          "match": "(-)(>)\\s*(?!(?:map|reduce|scan|repeat|fault|filter|select|stencil2d|grid|range|range_between|range_step|length)\\b)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+          "match": "(-)(>)\\s*(?!(?:map|reduce|scan|repeat|fault|filter|select|match|stencil2d|grid|range|range_between|range_step|length)\\b)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
           "captures": {
             "1": {
               "name": "keyword.control.flowarrow"
@@ -355,7 +364,7 @@
     },
     "keywords": {
       "name": "keyword.other.reserved.flowarrow",
-      "match": "\\b(?:import|as|type|node|program|cell|fault|ok)\\b"
+      "match": "\\b(?:import|as|type|node|program|cell|fault|ok|match)\\b"
     },
     "booleans": {
       "name": "constant.language.boolean.flowarrow",

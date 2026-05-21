@@ -281,11 +281,57 @@ impl Parser {
                 self.expect(Token::RParen)?;
                 Ok(Stage::Scan { op, identity })
             }
+            Some("match") => self.parse_match_stage(),
             Some(_) => Ok(Stage::Endpoint(Endpoint::Name(
                 self.parse_qualified_ident()?,
             ))),
             _ => Ok(Stage::Endpoint(self.parse_endpoint()?)),
         }
+    }
+
+    fn parse_match_stage(&mut self) -> Result<Stage, String> {
+        self.expect_keyword("match")?;
+        self.expect(Token::LBrace)?;
+        let mut arms = Vec::new();
+        let mut saw_fallback = false;
+        while !self.eat(Token::RBrace) {
+            if saw_fallback {
+                return Err("`match` fallback arm must be last".to_string());
+            }
+            let guard = if self.peek_ident() == Some("_") {
+                self.bump();
+                saw_fallback = true;
+                MatchGuard::Fallback
+            } else {
+                let node = self.parse_qualified_ident()?;
+                self.expect(Token::LParen)?;
+                let mut args = Vec::new();
+                if !self.eat(Token::RParen) {
+                    loop {
+                        args.push(self.parse_endpoint()?);
+                        if self.eat(Token::Comma) {
+                            if self.eat(Token::RParen) {
+                                break;
+                            }
+                        } else {
+                            self.expect(Token::RParen)?;
+                            break;
+                        }
+                    }
+                }
+                MatchGuard::Call { node, args }
+            };
+            self.expect(Token::Arrow)?;
+            let node = self.parse_qualified_ident()?;
+            arms.push(MatchArm { guard, node });
+        }
+        if arms.is_empty() {
+            return Err("`match` must contain at least one arm".to_string());
+        }
+        if !saw_fallback {
+            return Err("`match` must end with a `_` fallback arm".to_string());
+        }
+        Ok(Stage::Match { arms })
     }
 
     fn parse_endpoint(&mut self) -> Result<Endpoint, String> {

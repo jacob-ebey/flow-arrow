@@ -1,0 +1,187 @@
+# FlowArrow Developer Guide
+
+FlowArrow is a Rust compiler and runtime for a static dataflow language. This
+repository contains the parser, typechecker, C runtime/codegen backend, standard
+library registry, examples, tests, docs, and VS Code syntax extension.
+
+## Prerequisites
+
+Required for normal development:
+
+- Rust toolchain with edition 2024 support
+- `clang`
+- `pkg-config`
+
+Recommended:
+
+- `ripgrep` (`rg`) for repository search
+- VS Code, if working on the bundled editor extension
+
+Optional native dependencies:
+
+- `libjpeg` development headers and libraries for `std.cv` JPEG support
+- `libpng` development headers and libraries for `std.cv` PNG support
+- H2O development headers and libraries for `std.http`
+  - FlowArrow looks for `libh2o-evloop` first, then `libh2o`, through
+    `pkg-config`.
+  - FlowArrow also adds `pkg-config` flags for `openssl` and `libuv`, because
+    H2O headers include those dependency headers on common installations.
+  - Without H2O installed, non-HTTP builds and tests still work. Building a
+    program that imports `std.http` fails with a clear dependency diagnostic.
+
+On macOS with Homebrew, a typical setup is:
+
+```sh
+brew install rust llvm pkg-config ripgrep jpeg-turbo libpng h2o
+```
+
+If Homebrew installs `clang` or libraries outside the default search path, make
+sure `clang` and `pkg-config` can see them from your shell.
+
+On Debian/Ubuntu, the equivalent baseline is:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y clang pkg-config ripgrep libjpeg-dev libpng-dev
+```
+
+H2O package names vary by distribution. If no packaged `libh2o` development
+package is available, install H2O separately and expose its `.pc` file through
+`PKG_CONFIG_PATH`.
+
+## Common Commands
+
+Build and test the Rust crate:
+
+```sh
+cargo check
+cargo test
+```
+
+Run a FlowArrow program:
+
+```sh
+cargo run -- run examples/add-numbers-from-args/main.flow 1 2 3
+```
+
+Typecheck without building native code:
+
+```sh
+cargo run -- typecheck examples/http-server/main.flow
+```
+
+Build an example:
+
+```sh
+cargo run -- build examples/add-numbers-from-stdin/main.flow
+```
+
+Print a Mermaid execution graph:
+
+```sh
+cargo run -- graph examples/add-numbers-from-stdin/main.flow
+```
+
+Format a FlowArrow source file:
+
+```sh
+cargo run -- fmt examples/add-numbers-from-stdin/main.flow --check
+cargo run -- fmt examples/add-numbers-from-stdin/main.flow
+```
+
+Run benchmarks:
+
+```sh
+cargo bench
+```
+
+## Build Artifacts
+
+`flowarrow build` writes native outputs under the source file's local build
+directory:
+
+```text
+examples/<name>/build/<host-target>/
+```
+
+The generated LLVM and C runtime are cached in:
+
+```text
+examples/<name>/build/<host-target>/.cache/
+```
+
+These files are generated artifacts. Do not edit them by hand.
+
+## Optional Dependency Checks
+
+Check CV-related libraries:
+
+```sh
+pkg-config --cflags --libs libjpeg
+pkg-config --cflags --libs libpng
+```
+
+Check H2O for `std.http`:
+
+```sh
+pkg-config --cflags --libs libh2o-evloop || pkg-config --cflags --libs libh2o
+pkg-config --cflags --libs openssl
+pkg-config --cflags --libs libuv
+```
+
+The HTTP example currently typechecks everywhere:
+
+```sh
+cargo run -- typecheck examples/http-server/main.flow
+```
+
+It only builds when H2O is available through `pkg-config`:
+
+```sh
+cargo run -- build examples/http-server/main.flow
+```
+
+`std.http` currently exposes the API and H2O-backed runtime stubs. The full H2O
+serving callback/event-loop bridge is still under development.
+
+## Repository Map
+
+- `src/` - compiler, formatter, Mermaid graph emitter, stdlib registry, and C
+  runtime fragments
+- `tests/` - integration tests for stdlib behavior and local imports
+- `examples/` - FlowArrow programs used as design and backend pressure tests
+- `docs/` - language, backend, formatting, faults, and stdlib documentation
+- `benches/` - benchmark notes and benchmark targets
+- `editors/vscode/` - VS Code syntax extension
+
+## VS Code Extension
+
+The extension is local to `editors/vscode`.
+
+Run it in extension-development mode:
+
+```sh
+cd editors/vscode
+code --extensionDevelopmentPath="$(pwd)"
+```
+
+Package it locally if `vsce` is available:
+
+```sh
+cd editors/vscode
+npx @vscode/vsce package
+code --install-extension flowarrow-vscode-0.1.0.vsix
+```
+
+Update the TextMate grammar when adding or removing language keywords,
+combinators, declaration forms, or literal syntax.
+
+## Development Notes
+
+- Keep `docs/syntax.md` in sync with parser changes.
+- Keep `docs/overview.md` in sync with language semantics.
+- Keep `docs/std/` and `src/stdlib.rs` in sync when adding stdlib modules or
+  exports.
+- Update `editors/vscode/syntaxes/flowarrow.tmLanguage.json` for syntax changes.
+- Prefer focused tests for parser/typechecker/codegen behavior, then run the
+  full `cargo test` suite before handing off changes.

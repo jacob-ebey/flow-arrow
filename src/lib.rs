@@ -86,6 +86,11 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
             clang.arg(flag);
         }
     }
+    if runtime_c.contains("h2o.h") {
+        for flag in http_compiler_flags()? {
+            clang.arg(flag);
+        }
+    }
     let output = clang.arg("-o").arg(&executable).output().map_err(|error| {
         "failed to invoke clang for LLVM backend: ".to_string() + &error.to_string()
     })?;
@@ -178,24 +183,47 @@ fn cv_compiler_flags(runtime_c: &str) -> Result<Vec<String>, String> {
     if runtime_c.contains("png.h") {
         flags.extend(pkg_config_flags("libpng", "PNG")?);
     }
-    let mut deduped = Vec::new();
-    for flag in flags {
-        if !deduped.contains(&flag) {
-            deduped.push(flag);
+    Ok(dedup_flags(flags))
+}
+
+fn http_compiler_flags() -> Result<Vec<String>, String> {
+    let mut flags = pkg_config_flags_any(&["libh2o-evloop", "libh2o"], "std.http", "HTTP/H2O")?;
+    flags.extend(pkg_config_flags_for("std.http", "openssl", "OpenSSL")?);
+    flags.extend(pkg_config_flags_for("std.http", "libuv", "libuv")?);
+    Ok(dedup_flags(flags))
+}
+
+fn pkg_config_flags_any(
+    packages: &[&str],
+    feature: &str,
+    label: &str,
+) -> Result<Vec<String>, String> {
+    let mut errors = Vec::new();
+    for package in packages {
+        match pkg_config_flags_for(feature, package, label) {
+            Ok(flags) => return Ok(flags),
+            Err(error) => errors.push(error),
         }
     }
-    let flags = deduped;
-    Ok(flags)
+    Err(format!(
+        "std.http {label} support requires H2O development headers and libraries; tried pkg-config packages `{}`:\n{}",
+        packages.join("`, `"),
+        errors.join("\n")
+    ))
 }
 
 fn pkg_config_flags(package: &str, label: &str) -> Result<Vec<String>, String> {
+    pkg_config_flags_for("std.cv", package, label)
+}
+
+fn pkg_config_flags_for(feature: &str, package: &str, label: &str) -> Result<Vec<String>, String> {
     let output = Command::new("pkg-config")
         .args(["--libs", "--cflags", package])
         .output()
         .map_err(|error| format!("failed to invoke pkg-config for {package}: {error}"))?;
     if !output.status.success() {
         return Err(format!(
-            "std.cv {label} support requires development headers and libraries; pkg-config {package} failed:\n{}{}",
+            "{feature} {label} support requires development headers and libraries; pkg-config {package} failed:\n{}{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         ));
@@ -213,6 +241,16 @@ fn pkg_config_flags(package: &str, label: &str) -> Result<Vec<String>, String> {
         flags.extend(rpaths);
     }
     Ok(flags)
+}
+
+fn dedup_flags(flags: Vec<String>) -> Vec<String> {
+    let mut deduped = Vec::new();
+    for flag in flags {
+        if !deduped.contains(&flag) {
+            deduped.push(flag);
+        }
+    }
+    deduped
 }
 
 #[cfg(test)]
@@ -303,6 +341,190 @@ mod tests {
         "#;
         let module = parser::parse(source).expect("parse");
         typecheck::check_module(&module).expect("typecheck");
+    }
+
+    #[test]
+    fn parses_and_typechecks_match() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { eq }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> match {
+                    eq(0) -> zero
+                    _ -> one
+                } -> $exit_code
+            }
+
+            node zero(x: Int) -> y: Int {
+                0 -> $y
+            }
+
+            node one(x: Int) -> y: Int {
+                1 -> $y
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+    }
+
+    #[test]
+    fn parse_rejects_match_without_fallback() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { eq }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> match {
+                    eq(0) -> zero
+                } -> $exit_code
+            }
+
+            node zero(x: Int) -> y: Int {
+                0 -> $y
+            }
+        "#;
+        let error = parser::parse(source).expect_err("parse should fail");
+        assert!(error.contains("fallback"));
+    }
+
+    #[test]
+    fn parse_rejects_match_fallback_before_last_arm() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { eq }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> match {
+                    _ -> zero
+                    eq(0) -> one
+                } -> $exit_code
+            }
+
+            node zero(x: Int) -> y: Int {
+                0 -> $y
+            }
+
+            node one(x: Int) -> y: Int {
+                1 -> $y
+            }
+        "#;
+        let error = parser::parse(source).expect_err("parse should fail");
+        assert!(error.contains("fallback arm must be last"));
+    }
+
+    #[test]
+    fn typecheck_rejects_match_guard_that_is_not_bool() {
+        let source = r#"
+            import std.cli { Args }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> match {
+                    identity_int() -> zero
+                    _ -> zero
+                } -> $exit_code
+            }
+
+            node identity_int(x: Int) -> y: Int {
+                $x -> $y
+            }
+
+            node zero(x: Int) -> y: Int {
+                0 -> $y
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("match guard `identity_int` result"));
+    }
+
+    #[test]
+    fn typecheck_rejects_match_arm_output_mismatch() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { eq }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> match {
+                    eq(0) -> zero
+                    _ -> bytes
+                } -> $exit_code
+            }
+
+            node zero(x: Int) -> y: Int {
+                0 -> $y
+            }
+
+            node bytes(x: Int) -> y: Bytes {
+                "bad" -> $y
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("match arm `bytes` result"));
+    }
+
+    #[test]
+    fn typecheck_accepts_stream_map_with_pure_node() {
+        let source = r#"
+            import std.cli { Args }
+            import std.fs { open_file }
+
+            program main(args: Args) -> exit_code: Int {
+                "input.txt" -> open_file -> map id_bytes -> $stream
+                0 -> $exit_code
+            }
+
+            node id_bytes(input: Bytes) -> output: Bytes {
+                $input -> $output
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+    }
+
+    #[test]
+    fn typecheck_rejects_stream_map_with_effectful_node() {
+        let source = r#"
+            import std.cli { Args }
+            import std.fs { open_file }
+            import std.io { write_stdout }
+
+            program main(args: Args) -> exit_code: Faultable[Int] {
+                "input.txt" -> open_file -> map write_stdout -> $stream
+                0 -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("cannot be used as a map/filter function"));
+    }
+
+    #[test]
+    fn std_http_import_emits_h2o_runtime() {
+        let source = r#"
+            import std.cli { Args }
+            import std.http as http
+
+            program main(args: Args) -> exit_code: Faultable[Int] {
+                () -> http.default_config -> $config
+                $config -> http.listen -> $listener
+                $listener -> http.requests -> $requests
+                $requests -> map handle -> $responses
+                ($listener, $responses) -> http.serve -> $exit_code
+            }
+
+            node handle(req: http.Request) -> response: http.Response {
+                $req -> http.response -> $response0
+                ($response0, 200) -> http.with_status -> $response1
+                ($response1, "{\"ok\":true}\n") -> http.json -> $response
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
+        assert!(runtime_c.contains("#include <h2o.h>"));
+        assert!(runtime_c.contains("fa_http_serve"));
     }
 
     #[test]
@@ -916,6 +1138,55 @@ mod tests {
         assert_eq!(
             String::from_utf8(output.stdout).expect("utf8"),
             "hello world\n"
+        );
+    }
+
+    #[test]
+    fn llvm_backend_match_skips_unselected_arm_and_later_guard() {
+        let root = unique_temp_root("match-lazy");
+        let path = root.join("main.flow");
+        fs::write(
+            &path,
+            r#"
+                import std.cli { Args }
+                import std.fault { expect }
+                import std.int { parse_int }
+                import std.math { eq }
+
+                program main(args: Args) -> exit_code: Int {
+                    0 -> match {
+                        eq(0) -> zero
+                        bad_guard() -> one
+                        _ -> bad_body
+                    } -> $exit_code
+                }
+
+                node zero(x: Int) -> y: Int {
+                    0 -> $y
+                }
+
+                node one(x: Int) -> y: Int {
+                    1 -> $y
+                }
+
+                node bad_guard(x: Int) -> r: Bool {
+                    "not-an-int" -> parse_int -> expect -> $n
+                    ($n, 0) -> eq -> $r
+                }
+
+                node bad_body(x: Int) -> y: Int {
+                    "not-an-int" -> parse_int -> expect -> $y
+                }
+            "#,
+        )
+        .expect("write source");
+
+        let build = build_file(&path, None).expect("build");
+        let output = Command::new(&build.executable).output().expect("run");
+        assert!(
+            output.status.success(),
+            "match laziness failed: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

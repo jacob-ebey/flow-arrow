@@ -14,6 +14,7 @@ Initial modules:
 | [`std.cli`](./cli.md) | Command-line argument and flag helpers |
 | [`std.cv`](./cv.md) | OpenCV-lite image codecs, transforms, and matrix views |
 | [`std.fs`](./fs.md) | File byte and file stream boundary I/O |
+| [`std.http`](./http.md) | H2O-backed HTTP server boundary I/O |
 | [`std.io`](./io.md) | Stdin/stdout/stderr boundary I/O |
 | [`std.stream`](./stream.md) | Generic `Stream[T]` type |
 | [`std.real`](./real.md) | `Real` parsing and formatting |

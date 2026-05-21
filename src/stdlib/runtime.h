@@ -22,7 +22,7 @@ typedef struct { int _unused; } FaUnit;
 typedef struct { char *bytes; size_t len; } FaBytes;
 typedef struct { FaBytes message; } FaFault;
 typedef struct { int argc; char **argv; } FaArgs;
-typedef struct { FILE *file; int fd; FaBytes path; } FaStream;
+typedef struct { FILE *file; int fd; FaBytes path; void *state; void *map_fn; } FaStream;
 typedef struct { size_t count; FaBytes *items; } FaSeq_Bytes;
 typedef struct { size_t count; int64_t *items; } FaSeq_Int;
 typedef struct { size_t count; double *items; } FaSeq_Real;

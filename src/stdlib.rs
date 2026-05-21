@@ -3,6 +3,7 @@ mod cli;
 mod cv;
 mod fault;
 mod fs;
+mod http;
 mod int;
 mod intrinsic;
 mod io;
@@ -212,6 +213,26 @@ pub const SYMBOLS: &[StdSymbol] = &[
     fs::READ_AT,
     fs::COPY_TO_FILE,
     fs::CLOSE,
+    http::SERVER_CONFIG,
+    http::LISTENER,
+    http::REQUEST,
+    http::RESPONSE,
+    http::DEFAULT_CONFIG,
+    http::WITH_TCP_LISTENER,
+    http::WITH_TLS,
+    http::WITH_HTTP2,
+    http::WITH_HTTP3,
+    http::LISTEN,
+    http::REQUESTS,
+    http::SERVE,
+    http::ROUTE,
+    http::BODY,
+    http::RESPONSE_NODE,
+    http::WITH_STATUS,
+    http::WITH_HEADER,
+    http::TEXT,
+    http::JSON,
+    http::NOT_FOUND,
     real::PARSE_REAL,
     real::FORMAT_REAL,
     real::FROM_INT,
@@ -323,6 +344,16 @@ pub fn emit_cv_runtime_h(out: &mut String) {
 
 pub fn emit_cv_runtime_c(out: &mut String) {
     push_c_fragment(out, cv::C);
+    out.push('\n');
+}
+
+pub fn emit_http_runtime_h(out: &mut String) {
+    let mut emitted_headers = Vec::new();
+    push_c_headers(out, http::H, &mut emitted_headers);
+}
+
+pub fn emit_http_runtime_c(out: &mut String) {
+    push_c_fragment(out, http::C);
     out.push('\n');
 }
 

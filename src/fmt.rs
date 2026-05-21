@@ -275,6 +275,15 @@ impl Formatter {
                 }
                 self.write_comments(INDENT, &comments.leading);
             }
+            if chain
+                .stages
+                .iter()
+                .any(|stage| matches!(stage, Stage::Match { .. }))
+            {
+                self.flush_chain_group(&mut group);
+                self.format_chain_multiline(chain, comments.trailing);
+                continue;
+            }
             group.push(FormattedChain {
                 parts: format_chain_parts(chain),
                 trailing: comments.trailing,
@@ -297,6 +306,27 @@ impl Formatter {
                 line.push_str(&comment);
             }
             self.line(line);
+        }
+    }
+
+    fn format_chain_multiline(&mut self, chain: &Chain, trailing: Option<String>) {
+        let mut first = format!("{INDENT}{}", format_endpoint(&chain.source));
+        if let Some(comment) = trailing {
+            first.push_str("  ");
+            first.push_str(&comment);
+        }
+        self.line(first);
+        for stage in &chain.stages {
+            match stage {
+                Stage::Match { arms } => {
+                    self.line(format!("{INDENT}-> match {{"));
+                    for arm in arms {
+                        self.line(format!("{INDENT}{INDENT}{}", format_match_arm(arm)));
+                    }
+                    self.line(format!("{INDENT}}}"));
+                }
+                other => self.line(format!("{INDENT}-> {}", format_stage(other))),
+            }
         }
     }
 
@@ -429,7 +459,29 @@ fn format_stage(stage: &Stage) -> String {
         Stage::Scan { op, identity } => {
             format!("scan {op}(identity: {})", format_endpoint(identity))
         }
+        Stage::Match { arms } => format!(
+            "match {{ {} }}",
+            arms.iter()
+                .map(format_match_arm)
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
     }
+}
+
+fn format_match_arm(arm: &MatchArm) -> String {
+    let guard = match &arm.guard {
+        MatchGuard::Fallback => "_".to_string(),
+        MatchGuard::Call { node, args } => format!(
+            "{}({})",
+            node,
+            args.iter()
+                .map(format_endpoint)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    format!("{guard} -> {}", arm.node)
 }
 
 fn format_endpoint(endpoint: &Endpoint) -> String {
@@ -664,6 +716,32 @@ $total->scan add(identity: 0.0)->repeat<$total> emit->$exit_code
     ["1", "bad"] -> fault map parse_real { ok -> $numbers, fault -> $faults }
     $numbers     -> filter positive         -> map abs             -> reduce add(identity: 0.0) -> $total
     $total       -> scan add(identity: 0.0) -> repeat<$total> emit -> $exit_code
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn formats_match_stage_as_multiline_block() {
+        assert_formats(
+            r#"program main(args:Args)->exit_code:Int{0->match{eq(0)->zero _->one}->$exit_code}
+node zero(x:Int)->y:Int{0->$y}
+node one(x:Int)->y:Int{1->$y}"#,
+            r#"program main(args: Args) -> exit_code: Int {
+    0
+    -> match {
+        eq(0) -> zero
+        _ -> one
+    }
+    -> $exit_code
+}
+
+node zero(x: Int) -> y: Int {
+    0 -> $y
+}
+
+node one(x: Int) -> y: Int {
+    1 -> $y
 }
 "#,
         );

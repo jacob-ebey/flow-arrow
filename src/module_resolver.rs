@@ -405,6 +405,20 @@ fn rewrite_callable(
                 Stage::FaultMap { node, .. } | Stage::Repeat { node, .. } => {
                     rewrite_name(node, references)
                 }
+                Stage::Match { arms } => {
+                    for arm in arms {
+                        match &mut arm.guard {
+                            MatchGuard::Call { node, args } => {
+                                rewrite_name(node, references);
+                                for arg in args {
+                                    rewrite_endpoint(arg, references);
+                                }
+                            }
+                            MatchGuard::Fallback => {}
+                        }
+                        rewrite_name(&mut arm.node, references);
+                    }
+                }
             }
         }
     }

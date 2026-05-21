@@ -1,0 +1,107 @@
+# http-server
+#
+# Draft API sketch for a future `std.http` module backed by H2O.
+# This example is intentionally not expected to typecheck until `std.http`
+# exists. It is here to make the proposed application shape concrete.
+#
+# Design goals shown here:
+#   - server I/O is explicit boundary dataflow, like std.io and std.fs
+#   - H2O protocol details stay behind `std.http` boundary nodes
+#   - request handling is ordinary pure FlowArrow code
+#   - routing uses a proposed general `match` construct, not HTTP-only syntax
+#   - responses carry enough request identity for multiplexed HTTP/2/3 replies
+#
+# Proposed std.http surface used by this sketch:
+#
+#   http.default_config     : () -> http.ServerConfig
+#   http.with_tcp_listener  : (http.ServerConfig, Bytes, Int) -> http.ServerConfig
+#   http.with_http2         : (http.ServerConfig, Bool) -> http.ServerConfig
+#   http.with_http3         : (http.ServerConfig, Bool) -> http.ServerConfig
+#   http.listen            : http.ServerConfig -> http.Listener
+#   http.requests          : http.Listener -> Stream[http.Request]
+#   http.serve             : (http.Listener, Stream[http.Response]) -> Int
+#
+#   http.route             : (http.Request, Bytes, Bytes) -> Bool
+#   http.body              : http.Request -> Bytes
+#   http.response          : http.Request -> http.Response
+#   http.with_status       : (http.Response, Int) -> http.Response
+#   http.with_header       : (http.Response, Bytes, Bytes) -> http.Response
+#   http.text              : (http.Response, Bytes) -> http.Response
+#   http.json              : (http.Response, Bytes) -> http.Response
+#   http.not_found         : http.Request -> http.Response
+#
+# Proposed language surface used by this sketch:
+#
+#   $value -> match {
+#       guard_node(args...) -> selected_node
+#       _                   -> fallback_node
+#   } -> $result
+#
+# Match arms are statically visible to the compiler. Per input, guards are
+# evaluated in order and only the selected arm body is evaluated.
+#
+# Run shape, once implemented:
+#
+#   $ flowarrow run examples/http-server/main.flow
+#   $ curl -i http://127.0.0.1:8080/health
+#   $ curl -i http://127.0.0.1:8080/hello
+#   $ curl -i http://127.0.0.1:8080/created
+#   $ curl -i -X POST --data 'hello' http://127.0.0.1:8080/echo
+import std.cli { Args }
+import std.bytes { concat_bytes }
+import std.http as http
+
+program main(args: Args) -> exit_code: Faultable[Int] {
+    ()                         -> http.default_config    -> $config0
+    ($config0, "0.0.0.0", 8080) -> http.with_tcp_listener -> $config1
+    ($config1, true)            -> http.with_http2        -> $config2
+    ($config2, false)           -> http.with_http3        -> $config
+
+    $config                 -> http.listen          -> $listener
+    $listener               -> http.requests        -> $requests
+    $requests               -> map handle_request   -> $responses
+    ($listener, $responses) -> http.serve           -> $exit_code
+}
+
+# Pure request router. `match` keeps every route and handler statically visible
+# while avoiding eager evaluation of unselected handler subgraphs.
+node handle_request(req: http.Request) -> response: http.Response {
+    $req -> match {
+        http.route("GET", "/health")  -> health_response
+        http.route("GET", "/hello")   -> hello_response
+        http.route("GET", "/created") -> created_response
+        http.route("POST", "/echo")   -> echo_response
+        _                             -> http.not_found
+    } -> $response
+}
+
+node health_response(req: http.Request) -> response: http.Response {
+    $req                           -> http.response    -> $response0
+    ($response0, 200)              -> http.with_status -> $response1
+    ($response1, "{\"ok\":true}\n") -> http.json        -> $response
+}
+
+node hello_response(req: http.Request) -> response: http.Response {
+    $req                                                   -> http.response    -> $response0
+    ($response0, 200)                                      -> http.with_status -> $response1
+    ($response1, "X-FlowArrow-Example", "hello")           -> http.with_header -> $response2
+    ($response2, "hello from FlowArrow\n")                 -> http.text        -> $response
+}
+
+node created_response(req: http.Request) -> response: http.Response {
+    $req                                                   -> http.response    -> $response0
+    ($response0, 201)                                      -> http.with_status -> $response1
+    ($response1, "Location", "/created/123")               -> http.with_header -> $response2
+    ($response2, "Cache-Control", "no-store")              -> http.with_header -> $response3
+    ($response3, "X-FlowArrow-Example", "custom-headers")  -> http.with_header -> $response4
+    ($response4, "{\"id\":123,\"created\":true}\n")         -> http.json        -> $response
+}
+
+node echo_response(req: http.Request) -> response: http.Response {
+    $req                                            -> http.body        -> $body
+    ["echo: ", $body, "\n"]                         -> concat_bytes     -> $message
+    $req                                            -> http.response    -> $response0
+    ($response0, 200)                               -> http.with_status -> $response1
+    ($response1, "X-FlowArrow-Example", "echo")     -> http.with_header -> $response2
+    ($response2, $message)                          -> http.text        -> $response
+}

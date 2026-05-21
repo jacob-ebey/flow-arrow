@@ -80,6 +80,8 @@ static FaFaultable_Stream_Bytes fa_open_file(FaBytes path) {
   stream.file = file;
   stream.fd = fileno(file);
   stream.path = path;
+  stream.state = NULL;
+  stream.map_fn = NULL;
   return FaFaultable_Stream_Bytes_ok(stream);
 }
 
