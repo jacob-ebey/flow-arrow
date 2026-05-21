@@ -45,6 +45,11 @@ impl Resolver {
         for decl in &module.declarations {
             match decl {
                 Decl::Import(import) if is_flow_std_import(import) => {}
+                Decl::TypeAlias(alias) => declarations.push(Decl::TypeAlias(rewrite_type_alias(
+                    alias.clone(),
+                    &references,
+                    alias.name.clone(),
+                ))),
                 Decl::Node(callable) => declarations.push(Decl::Node(rewrite_callable(
                     callable.clone(),
                     &references,
@@ -102,7 +107,7 @@ impl Resolver {
             .map_err(|error| format!("failed to parse stdlib module `{module}`: {error}"))?;
         let mut references = HashMap::new();
         let mut exports = HashMap::new();
-        let local_names = callable_names(&parsed);
+        let local_names = declaration_names(&parsed);
 
         for name in &local_names {
             let internal = internal_name(module, &name);
@@ -146,6 +151,14 @@ impl Resolver {
 
         for decl in parsed.declarations {
             match decl {
+                Decl::TypeAlias(alias) => {
+                    let name = internal_name(module, &alias.name);
+                    module_declarations.push(Decl::TypeAlias(rewrite_type_alias(
+                        alias,
+                        &references,
+                        name,
+                    )));
+                }
                 Decl::Node(callable) => {
                     let name = internal_name(module, &callable.name);
                     module_declarations.push(Decl::Node(rewrite_callable(
@@ -182,7 +195,10 @@ fn rewrite_builtin_import(
             let mut found = false;
             for symbol in stdlib::module_symbols(module) {
                 found = true;
-                if symbol.kind == stdlib::SymbolKind::Node {
+                if matches!(
+                    symbol.kind,
+                    stdlib::SymbolKind::Node | stdlib::SymbolKind::Type
+                ) {
                     insert_reference(
                         references,
                         format!("{original_alias}.{}", symbol.name),
@@ -198,7 +214,10 @@ fn rewrite_builtin_import(
             for item in items {
                 let symbol = stdlib::find_export(module, &item.name)
                     .ok_or_else(|| format!("module `{module}` does not export `{}`", item.name))?;
-                if symbol.kind == stdlib::SymbolKind::Node {
+                if matches!(
+                    symbol.kind,
+                    stdlib::SymbolKind::Node | stdlib::SymbolKind::Type
+                ) {
                     insert_reference(
                         references,
                         item.alias.as_deref().unwrap_or(&item.name).to_string(),
@@ -217,6 +236,12 @@ fn rewrite_callable(
     name: String,
 ) -> Callable {
     callable.name = name;
+    for port in &mut callable.inputs {
+        port.ty = rewrite_type_text(&port.ty, references);
+    }
+    for port in &mut callable.outputs {
+        port.ty = rewrite_type_text(&port.ty, references);
+    }
     for chain in &mut callable.chains {
         rewrite_endpoint(&mut chain.source, references);
         for stage in &mut chain.stages {
@@ -233,6 +258,16 @@ fn rewrite_callable(
         }
     }
     callable
+}
+
+fn rewrite_type_alias(
+    mut alias: TypeAlias,
+    references: &HashMap<String, String>,
+    name: String,
+) -> TypeAlias {
+    alias.name = name;
+    alias.ty = rewrite_type_text(&alias.ty, references);
+    alias
 }
 
 fn rewrite_endpoint(endpoint: &mut Endpoint, references: &HashMap<String, String>) {
@@ -258,11 +293,47 @@ fn rewrite_name(name: &mut String, references: &HashMap<String, String>) {
     }
 }
 
+fn rewrite_type_text(text: &str, references: &HashMap<String, String>) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut out = String::new();
+    let mut pos = 0usize;
+    while pos < chars.len() {
+        let ch = chars[pos];
+        if ch.is_ascii_alphabetic() || ch == '_' {
+            let start = pos;
+            pos += 1;
+            while pos < chars.len()
+                && (chars[pos].is_ascii_alphanumeric() || chars[pos] == '_' || chars[pos] == '.')
+            {
+                pos += 1;
+            }
+            let name = chars[start..pos].iter().collect::<String>();
+            out.push_str(references.get(&name).map(String::as_str).unwrap_or(&name));
+        } else {
+            out.push(ch);
+            pos += 1;
+        }
+    }
+    out
+}
+
 fn callable_names(module: &Module) -> HashSet<String> {
     module
         .declarations
         .iter()
         .filter_map(|decl| match decl {
+            Decl::Node(callable) | Decl::Program(callable) => Some(callable.name.clone()),
+            Decl::TypeAlias(_) | Decl::Import(_) => None,
+        })
+        .collect()
+}
+
+fn declaration_names(module: &Module) -> HashSet<String> {
+    module
+        .declarations
+        .iter()
+        .filter_map(|decl| match decl {
+            Decl::TypeAlias(alias) => Some(alias.name.clone()),
             Decl::Node(callable) | Decl::Program(callable) => Some(callable.name.clone()),
             Decl::Import(_) => None,
         })

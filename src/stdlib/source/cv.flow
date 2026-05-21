@@ -1,104 +1,536 @@
-import std.bytes { bytes_to_codes, byte_length, codes_to_bytes, strip_prefix }
+import std.bytes { bytes_to_codes, byte_length, codes_to_bytes }
 import std.fs { read_file, write_file }
-import std.math { add, div }
+import std.math {
+    abs as _scalar_abs,
+    add as _scalar_add,
+    div as _scalar_div,
+    gt as _scalar_gt,
+    max as _scalar_max,
+    min as _scalar_min,
+    mul as _scalar_mul,
+    neg as _scalar_neg,
+    sub as _scalar_sub,
+}
+import std.seq { broadcast_right, flatten as seq_flatten, zip }
 import std.tuple { first, second }
 import std.cv.native {
+    decode as _decode_native,
+    decode_bmp as _decode_bmp_native,
     decode_jpeg as _decode_jpeg_native,
+    decode_png as _decode_png_native,
+    decode_pnm as _decode_pnm_native,
+    encode_bmp as _encode_bmp_native,
     encode_jpeg as _encode_jpeg_native,
+    encode_pgm as _encode_pgm_native,
+    encode_png as _encode_png_native,
+    encode_ppm as _encode_ppm_native,
 }
 
-node _png_signature(unit: ()) -> signature: Bytes {
-    [137, 80, 78, 71, 13, 10, 26, 10] -> codes_to_bytes -> $signature
+type Size = (Int,Int)
+type Pixel = (Int,(Int,Int))
+type Image = (Size,Seq[Seq[Pixel]])
+
+node dimensions(image: Image) -> shape: Size {
+    $image -> first -> $shape
 }
 
-node _jpeg_signature(unit: ()) -> signature: Bytes {
-    [255, 216, 255] -> codes_to_bytes -> $signature
+node width(image: Image) -> value: Int {
+    $image -> dimensions -> first -> $value
 }
 
-node _require_prefix(inputs: (Bytes,Bytes)) -> image: Faultable[Bytes] {
-    $inputs -> first -> $bytes
-    $inputs -> second -> $signature
-    ($bytes, $signature) -> strip_prefix -> $checked
-    ($checked, $bytes) -> second -> $image
+node height(image: Image) -> value: Int {
+    $image -> dimensions -> second -> $value
 }
 
-node _gray_code_to_rgb_pixel(code: Int) -> pixel: (Int,(Int,Int)) {
-    ($code, ($code, $code)) -> $pixel
+node pixels(image: Image) -> values: Seq[Pixel] {
+    $image -> second -> seq_flatten -> $values
 }
 
-node _rgb_pixel_to_gray_code(pixel: (Int,(Int,Int))) -> code: Int {
+node pixel_rows(image: Image) -> values: Seq[Seq[Pixel]] {
+    $image -> second -> $values
+}
+
+node map_pixels(inputs: (Image,Seq[Seq[Pixel]])) -> image: Image {
+    $inputs -> first -> dimensions -> $shape
+    $inputs -> second -> $values
+    ($shape, $values) -> $image
+}
+
+node _clamp_channel(value: Int) -> out: Int {
+    ($value, 0) -> _scalar_max -> $low
+    ($low, 255) -> _scalar_min -> $out
+}
+
+node _gray_code_to_rgb_pixel(code: Int) -> pixel: Pixel {
+    $code -> _clamp_channel -> $channel
+    ($channel, ($channel, $channel)) -> $pixel
+}
+
+node _rgb_pixel_to_luma_code(pixel: Pixel) -> code: Int {
     $pixel -> first -> $red
     $pixel -> second -> $green_blue
     $green_blue -> first -> $green
     $green_blue -> second -> $blue
-    ($red, $green) -> add -> $red_green
-    ($red_green, $blue) -> add -> $total
-    ($total, 3) -> div -> $code
+    ($red, 299) -> _scalar_mul -> $red_weighted
+    ($green, 587) -> _scalar_mul -> $green_weighted
+    ($blue, 114) -> _scalar_mul -> $blue_weighted
+    ($red_weighted, $green_weighted) -> _scalar_add -> $rg
+    ($rg, $blue_weighted) -> _scalar_add -> $total
+    ($total, 1000) -> _scalar_div -> $code
 }
 
-node _rgb_pixel_to_gray_pixel(pixel: (Int,(Int,Int))) -> out: (Int,(Int,Int)) {
-    $pixel -> _rgb_pixel_to_gray_code -> _gray_code_to_rgb_pixel -> $out
+node _rgb_pixel_to_gray_pixel(pixel: Pixel) -> out: Pixel {
+    $pixel -> _rgb_pixel_to_luma_code -> _gray_code_to_rgb_pixel -> $out
 }
 
-node normalize(bytes: Bytes) -> image: ((Int,Int),Seq[(Int,(Int,Int))]) {
+node normalize(bytes: Bytes) -> image: Image {
     $bytes -> byte_length -> $width
-    $bytes -> bytes_to_codes -> map _gray_code_to_rgb_pixel -> $pixels
-    (($width, 1), $pixels) -> $image
+    $bytes -> bytes_to_codes -> map _gray_code_to_rgb_pixel -> $values
+    (($width, 1), [$values]) -> $image
 }
 
-node _image_to_bytes(image: ((Int,Int),Seq[(Int,(Int,Int))])) -> bytes: Bytes {
-    $image -> second -> map _rgb_pixel_to_gray_code -> codes_to_bytes -> $bytes
+node _image_to_luma_bytes(image: Image) -> bytes: Bytes {
+    $image -> pixels -> map _rgb_pixel_to_luma_code -> codes_to_bytes -> $bytes
 }
 
-node grayscale(image: ((Int,Int),Seq[(Int,(Int,Int))])) -> out: ((Int,Int),Seq[(Int,(Int,Int))]) {
-    $image -> first -> $shape
-    $image -> second -> map _rgb_pixel_to_gray_pixel -> $pixels
-    ($shape, $pixels) -> $out
+node grayscale(image: Image) -> out: Image {
+    $image -> pixel_rows -> map _grayscale_row -> $values
+    ($image, $values) -> map_pixels -> $out
 }
 
-node decode_png(bytes: Bytes) -> image: Faultable[((Int,Int),Seq[(Int,(Int,Int))])] {
-    () -> _png_signature -> $signature
-    ($bytes, $signature) -> _require_prefix -> normalize -> $image
+node _grayscale_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
+    $row -> map _rgb_pixel_to_gray_pixel -> $out
 }
 
-node decode_jpeg(bytes: Bytes) -> image: Faultable[((Int,Int),Seq[(Int,(Int,Int))])] {
+node _invert_pixel(pixel: Pixel) -> out: Pixel {
+    $pixel -> first -> $red
+    $pixel -> second -> $green_blue
+    $green_blue -> first -> $green
+    $green_blue -> second -> $blue
+    (255, $red) -> _scalar_sub -> $out_red
+    (255, $green) -> _scalar_sub -> $out_green
+    (255, $blue) -> _scalar_sub -> $out_blue
+    ($out_red, ($out_green, $out_blue)) -> $out
+}
+
+node invert(image: Image) -> out: Image {
+    $image -> pixel_rows -> map _invert_row -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node _invert_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
+    $row -> map _invert_pixel -> $out
+}
+
+node _threshold_pixel(inputs: (Pixel,Int)) -> out: Pixel {
+    $inputs -> first -> _rgb_pixel_to_luma_code -> $luma
+    $inputs -> second -> $threshold
+    ($luma, $threshold) -> _scalar_gt -> $above
+    ($above, 255, 0) -> select -> $channel
+    $channel -> _gray_code_to_rgb_pixel -> $out
+}
+
+node threshold(inputs: (Image,Int)) -> out: Image {
+    $inputs -> first -> $image
+    $inputs -> second -> $cutoff
+    $image -> pixel_rows -> $rows
+    ($rows, $cutoff) -> broadcast_right -> map _threshold_row -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node _threshold_row(inputs: (Seq[Pixel],Int)) -> out: Seq[Pixel] {
+    $inputs -> first -> $row
+    $inputs -> second -> $cutoff
+    ($row, $cutoff) -> broadcast_right -> map _threshold_pixel -> $out
+}
+
+node _brighten_channel(inputs: (Int,Int)) -> out: Int {
+    $inputs -> _scalar_add -> _clamp_channel -> $out
+}
+
+node _brighten_pixel(inputs: (Pixel,Int)) -> out: Pixel {
+    $inputs -> first -> $pixel
+    $inputs -> second -> $amount
+    $pixel -> first -> $red
+    $pixel -> second -> $green_blue
+    $green_blue -> first -> $green
+    $green_blue -> second -> $blue
+    ($red, $amount) -> _brighten_channel -> $out_red
+    ($green, $amount) -> _brighten_channel -> $out_green
+    ($blue, $amount) -> _brighten_channel -> $out_blue
+    ($out_red, ($out_green, $out_blue)) -> $out
+}
+
+node brighten(inputs: (Image,Int)) -> out: Image {
+    $inputs -> first -> $image
+    $inputs -> second -> $amount
+    $image -> pixel_rows -> $rows
+    ($rows, $amount) -> broadcast_right -> map _brighten_row -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node _brighten_row(inputs: (Seq[Pixel],Int)) -> out: Seq[Pixel] {
+    $inputs -> first -> $row
+    $inputs -> second -> $amount
+    ($row, $amount) -> broadcast_right -> map _brighten_pixel -> $out
+}
+
+node darken(inputs: (Image,Int)) -> out: Image {
+    $inputs -> first -> $image
+    $inputs -> second -> _scalar_neg -> $amount
+    ($image, $amount) -> brighten -> $out
+}
+
+node _contrast_channel(inputs: (Int,Int)) -> out: Int {
+    $inputs -> first -> $channel
+    $inputs -> second -> $factor
+    ($channel, 128) -> _scalar_sub -> $centered
+    ($centered, $factor) -> _scalar_mul -> $scaled
+    ($scaled, 100) -> _scalar_div -> $normalized
+    ($normalized, 128) -> _scalar_add -> _clamp_channel -> $out
+}
+
+node _contrast_pixel(inputs: (Pixel,Int)) -> out: Pixel {
+    $inputs -> first -> $pixel
+    $inputs -> second -> $factor
+    $pixel -> first -> $red
+    $pixel -> second -> $green_blue
+    $green_blue -> first -> $green
+    $green_blue -> second -> $blue
+    ($red, $factor) -> _contrast_channel -> $out_red
+    ($green, $factor) -> _contrast_channel -> $out_green
+    ($blue, $factor) -> _contrast_channel -> $out_blue
+    ($out_red, ($out_green, $out_blue)) -> $out
+}
+
+node contrast(inputs: (Image,Int)) -> out: Image {
+    $inputs -> first -> $image
+    $inputs -> second -> $factor
+    $image -> pixel_rows -> $rows
+    ($rows, $factor) -> broadcast_right -> map _contrast_row -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node _contrast_row(inputs: (Seq[Pixel],Int)) -> out: Seq[Pixel] {
+    $inputs -> first -> $row
+    $inputs -> second -> $factor
+    ($row, $factor) -> broadcast_right -> map _contrast_pixel -> $out
+}
+
+node _red_channel_pixel(pixel: Pixel) -> out: Pixel {
+    $pixel -> first -> _gray_code_to_rgb_pixel -> $out
+}
+
+node _green_channel_pixel(pixel: Pixel) -> out: Pixel {
+    $pixel -> second -> first -> _gray_code_to_rgb_pixel -> $out
+}
+
+node _blue_channel_pixel(pixel: Pixel) -> out: Pixel {
+    $pixel -> second -> second -> _gray_code_to_rgb_pixel -> $out
+}
+
+node _to_real(value: Int) -> out: Real {
+    ($value, 0.0) -> _scalar_add -> $out
+}
+
+node _red_value(pixel: Pixel) -> out: Real {
+    $pixel -> first -> _to_real -> $out
+}
+
+node _green_value(pixel: Pixel) -> out: Real {
+    $pixel -> second -> first -> _to_real -> $out
+}
+
+node _blue_value(pixel: Pixel) -> out: Real {
+    $pixel -> second -> second -> _to_real -> $out
+}
+
+node _luma_value(pixel: Pixel) -> out: Real {
+    $pixel -> _rgb_pixel_to_luma_code -> _to_real -> $out
+}
+
+node _red_matrix_row(row: Seq[Pixel]) -> out: Seq[Real] {
+    $row -> map _red_value -> $out
+}
+
+node _green_matrix_row(row: Seq[Pixel]) -> out: Seq[Real] {
+    $row -> map _green_value -> $out
+}
+
+node _blue_matrix_row(row: Seq[Pixel]) -> out: Seq[Real] {
+    $row -> map _blue_value -> $out
+}
+
+node _luma_matrix_row(row: Seq[Pixel]) -> out: Seq[Real] {
+    $row -> map _luma_value -> $out
+}
+
+node red_matrix(image: Image) -> out: Seq[Seq[Real]] {
+    $image -> pixel_rows -> map _red_matrix_row -> $out
+}
+
+node green_matrix(image: Image) -> out: Seq[Seq[Real]] {
+    $image -> pixel_rows -> map _green_matrix_row -> $out
+}
+
+node blue_matrix(image: Image) -> out: Seq[Seq[Real]] {
+    $image -> pixel_rows -> map _blue_matrix_row -> $out
+}
+
+node luma_matrix(image: Image) -> out: Seq[Seq[Real]] {
+    $image -> pixel_rows -> map _luma_matrix_row -> $out
+}
+
+node red_channel(image: Image) -> out: Image {
+    $image -> pixel_rows -> map _red_channel_row -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node green_channel(image: Image) -> out: Image {
+    $image -> pixel_rows -> map _green_channel_row -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node blue_channel(image: Image) -> out: Image {
+    $image -> pixel_rows -> map _blue_channel_row -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node _red_channel_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
+    $row -> map _red_channel_pixel -> $out
+}
+
+node _green_channel_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
+    $row -> map _green_channel_pixel -> $out
+}
+
+node _blue_channel_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
+    $row -> map _blue_channel_pixel -> $out
+}
+
+node _sepia_channel(inputs: (Int,(Int,(Int,(Int,(Int,Int)))))) -> out: Int {
+    $inputs -> first -> $red
+    $inputs -> second -> first -> $green
+    $inputs -> second -> second -> first -> $blue
+    $inputs -> second -> second -> second -> first -> $red_weight
+    $inputs -> second -> second -> second -> second -> $green_blue_weights
+    $green_blue_weights -> first -> $green_weight
+    $green_blue_weights -> second -> $blue_weight
+    ($red, $red_weight) -> _scalar_mul -> $red_part
+    ($green, $green_weight) -> _scalar_mul -> $green_part
+    ($blue, $blue_weight) -> _scalar_mul -> $blue_part
+    ($red_part, $green_part) -> _scalar_add -> $rg
+    ($rg, $blue_part) -> _scalar_add -> $total
+    ($total, 1000) -> _scalar_div -> _clamp_channel -> $out
+}
+
+node _sepia_pixel(pixel: Pixel) -> out: Pixel {
+    $pixel -> first -> $red
+    $pixel -> second -> $green_blue
+    $green_blue -> first -> $green
+    $green_blue -> second -> $blue
+    ($red, ($green, ($blue, (393, (769, 189))))) -> _sepia_channel -> $out_red
+    ($red, ($green, ($blue, (349, (686, 168))))) -> _sepia_channel -> $out_green
+    ($red, ($green, ($blue, (272, (534, 131))))) -> _sepia_channel -> $out_blue
+    ($out_red, ($out_green, $out_blue)) -> $out
+}
+
+node sepia(image: Image) -> out: Image {
+    $image -> pixel_rows -> map _sepia_row -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node _sepia_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
+    $row -> map _sepia_pixel -> $out
+}
+
+node _add_pixel_pair(pair: (Pixel,Pixel)) -> out: Pixel {
+    $pair -> first -> $left
+    $pair -> second -> $right
+    $left -> first -> $left_red
+    $left -> second -> first -> $left_green
+    $left -> second -> second -> $left_blue
+    $right -> first -> $right_red
+    $right -> second -> first -> $right_green
+    $right -> second -> second -> $right_blue
+    ($left_red, $right_red) -> _scalar_add -> _clamp_channel -> $red
+    ($left_green, $right_green) -> _scalar_add -> _clamp_channel -> $green
+    ($left_blue, $right_blue) -> _scalar_add -> _clamp_channel -> $blue
+    ($red, ($green, $blue)) -> $out
+}
+
+node _sub_pixel_pair(pair: (Pixel,Pixel)) -> out: Pixel {
+    $pair -> first -> $left
+    $pair -> second -> $right
+    $left -> first -> $left_red
+    $left -> second -> first -> $left_green
+    $left -> second -> second -> $left_blue
+    $right -> first -> $right_red
+    $right -> second -> first -> $right_green
+    $right -> second -> second -> $right_blue
+    ($left_red, $right_red) -> _scalar_sub -> _clamp_channel -> $red
+    ($left_green, $right_green) -> _scalar_sub -> _clamp_channel -> $green
+    ($left_blue, $right_blue) -> _scalar_sub -> _clamp_channel -> $blue
+    ($red, ($green, $blue)) -> $out
+}
+
+node _absdiff_pixel_pair(pair: (Pixel,Pixel)) -> out: Pixel {
+    $pair -> first -> $left
+    $pair -> second -> $right
+    $left -> first -> $left_red
+    $left -> second -> first -> $left_green
+    $left -> second -> second -> $left_blue
+    $right -> first -> $right_red
+    $right -> second -> first -> $right_green
+    $right -> second -> second -> $right_blue
+    ($left_red, $right_red) -> _scalar_sub -> _scalar_abs -> $red
+    ($left_green, $right_green) -> _scalar_sub -> _scalar_abs -> $green
+    ($left_blue, $right_blue) -> _scalar_sub -> _scalar_abs -> $blue
+    ($red, ($green, $blue)) -> $out
+}
+
+node _add_row_pair(pair: (Seq[Pixel],Seq[Pixel])) -> out: Seq[Pixel] {
+    $pair -> zip -> map _add_pixel_pair -> $out
+}
+
+node _sub_row_pair(pair: (Seq[Pixel],Seq[Pixel])) -> out: Seq[Pixel] {
+    $pair -> zip -> map _sub_pixel_pair -> $out
+}
+
+node _absdiff_row_pair(pair: (Seq[Pixel],Seq[Pixel])) -> out: Seq[Pixel] {
+    $pair -> zip -> map _absdiff_pixel_pair -> $out
+}
+
+node _left_image(inputs: (Image,Image)) -> image: Image {
+    $inputs -> first -> $image
+}
+
+node add(inputs: (Image,Image)) -> out: Image {
+    $inputs -> first -> pixel_rows -> $left_pixels
+    $inputs -> second -> pixel_rows -> $right_pixels
+    $inputs -> _left_image -> $image
+    ($left_pixels, $right_pixels) -> zip -> map _add_row_pair -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node sub(inputs: (Image,Image)) -> out: Image {
+    $inputs -> first -> pixel_rows -> $left_pixels
+    $inputs -> second -> pixel_rows -> $right_pixels
+    $inputs -> _left_image -> $image
+    ($left_pixels, $right_pixels) -> zip -> map _sub_row_pair -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node absdiff(inputs: (Image,Image)) -> out: Image {
+    $inputs -> first -> pixel_rows -> $left_pixels
+    $inputs -> second -> pixel_rows -> $right_pixels
+    $inputs -> _left_image -> $image
+    ($left_pixels, $right_pixels) -> zip -> map _absdiff_row_pair -> $values
+    ($image, $values) -> map_pixels -> $out
+}
+
+node decode(bytes: Bytes) -> image: Faultable[Image] {
+    $bytes -> _decode_native -> $image
+}
+
+node decode_bmp(bytes: Bytes) -> image: Faultable[Image] {
+    $bytes -> _decode_bmp_native -> $image
+}
+
+node decode_jpeg(bytes: Bytes) -> image: Faultable[Image] {
     $bytes -> _decode_jpeg_native -> $image
 }
 
-node encode_png(image: ((Int,Int),Seq[(Int,(Int,Int))])) -> encoded: Faultable[Bytes] {
-    $image -> _image_to_bytes -> $bytes
-    () -> _png_signature -> $signature
-    ($bytes, $signature) -> _require_prefix -> $encoded
+node decode_png(bytes: Bytes) -> image: Faultable[Image] {
+    $bytes -> _decode_png_native -> $image
 }
 
-node encode_jpeg(image: ((Int,Int),Seq[(Int,(Int,Int))])) -> encoded: Faultable[Bytes] {
+node decode_pnm(bytes: Bytes) -> image: Faultable[Image] {
+    $bytes -> _decode_pnm_native -> $image
+}
+
+node decode_pgm(bytes: Bytes) -> image: Faultable[Image] {
+    $bytes -> decode_pnm -> $image
+}
+
+node decode_ppm(bytes: Bytes) -> image: Faultable[Image] {
+    $bytes -> decode_pnm -> $image
+}
+
+node encode_bmp(image: Image) -> encoded: Faultable[Bytes] {
+    $image -> _encode_bmp_native -> $encoded
+}
+
+node encode_jpeg(image: Image) -> encoded: Faultable[Bytes] {
     $image -> _encode_jpeg_native -> $encoded
 }
 
-node load(path: Bytes) -> image: Faultable[((Int,Int),Seq[(Int,(Int,Int))])] {
-    $path -> load_jpeg -> $image
+node encode_pgm(image: Image) -> encoded: Faultable[Bytes] {
+    $image -> _encode_pgm_native -> $encoded
 }
 
-node save(inputs: (Bytes,((Int,Int),Seq[(Int,(Int,Int))]))) -> status: Faultable[Int] {
-    $inputs -> save_jpeg -> $status
+node encode_png(image: Image) -> encoded: Faultable[Bytes] {
+    $image -> _encode_png_native -> $encoded
 }
 
-node load_png(path: Bytes) -> image: Faultable[((Int,Int),Seq[(Int,(Int,Int))])] {
-    $path -> read_file -> decode_png -> $image
+node encode_ppm(image: Image) -> encoded: Faultable[Bytes] {
+    $image -> _encode_ppm_native -> $encoded
 }
 
-node load_jpeg(path: Bytes) -> image: Faultable[((Int,Int),Seq[(Int,(Int,Int))])] {
+node load(path: Bytes) -> image: Faultable[Image] {
+    $path -> read_file -> decode -> $image
+}
+
+node load_bmp(path: Bytes) -> image: Faultable[Image] {
+    $path -> read_file -> decode_bmp -> $image
+}
+
+node load_jpeg(path: Bytes) -> image: Faultable[Image] {
     $path -> read_file -> decode_jpeg -> $image
 }
 
-node save_png(inputs: (Bytes,((Int,Int),Seq[(Int,(Int,Int))]))) -> status: Faultable[Int] {
+node load_png(path: Bytes) -> image: Faultable[Image] {
+    $path -> read_file -> decode_png -> $image
+}
+
+node load_pnm(path: Bytes) -> image: Faultable[Image] {
+    $path -> read_file -> decode_pnm -> $image
+}
+
+node load_pgm(path: Bytes) -> image: Faultable[Image] {
+    $path -> read_file -> decode_pgm -> $image
+}
+
+node load_ppm(path: Bytes) -> image: Faultable[Image] {
+    $path -> read_file -> decode_ppm -> $image
+}
+
+node save_bmp(inputs: (Bytes,Image)) -> status: Faultable[Int] {
+    $inputs -> first -> $path
+    $inputs -> second -> encode_bmp -> $encoded
+    ($path, $encoded) -> write_file -> $status
+}
+
+node save_jpeg(inputs: (Bytes,Image)) -> status: Faultable[Int] {
+    $inputs -> first -> $path
+    $inputs -> second -> encode_jpeg -> $encoded
+    ($path, $encoded) -> write_file -> $status
+}
+
+node save_pgm(inputs: (Bytes,Image)) -> status: Faultable[Int] {
+    $inputs -> first -> $path
+    $inputs -> second -> encode_pgm -> $encoded
+    ($path, $encoded) -> write_file -> $status
+}
+
+node save_png(inputs: (Bytes,Image)) -> status: Faultable[Int] {
     $inputs -> first -> $path
     $inputs -> second -> encode_png -> $encoded
     ($path, $encoded) -> write_file -> $status
 }
 
-node save_jpeg(inputs: (Bytes,((Int,Int),Seq[(Int,(Int,Int))]))) -> status: Faultable[Int] {
+node save_ppm(inputs: (Bytes,Image)) -> status: Faultable[Int] {
     $inputs -> first -> $path
-    $inputs -> second -> encode_jpeg -> $encoded
+    $inputs -> second -> encode_ppm -> $encoded
     ($path, $encoded) -> write_file -> $status
 }

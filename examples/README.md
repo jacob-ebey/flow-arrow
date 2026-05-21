@@ -15,7 +15,7 @@ import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, m
 import std.predicates { not_empty, is_empty, and, or, xor, not, all, any }
 import std.fault { Fault, has_faults, format_faults }
 import std.seq { head, tail }
-import std.cv { load_jpeg, save_jpeg, grayscale }
+import std.cv { load, save_jpeg, grayscale }
 ```
 
 ```text
@@ -93,4 +93,4 @@ Mermaid `flowchart TD` diagram.
 | `99-bottles/`                 | Pure string generation via `range_step` + `map` + concat reduce. |
 | `fibonacci/`                  | Stdin integer parsing and FlowArrow Fibonacci iteration. |
 | `json-parser/`                | Flat JSON array of numbers → JSON summary object, with bracket framing and fault routing. |
-| `grayscale-image/`            | Filepath arguments plus `std.cv` JPEG decode, grayscale conversion, and encode. |
+| `grayscale-image/`            | Filepath arguments plus `std.cv` image auto-detect, grayscale conversion, and JPEG encode. |

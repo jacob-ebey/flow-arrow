@@ -25,6 +25,10 @@ impl Parser {
 
     fn parse_decl(&mut self) -> Result<Decl, String> {
         match self.peek_ident() {
+            Some("type") => {
+                self.bump();
+                Ok(Decl::TypeAlias(self.parse_type_alias()?))
+            }
             Some("import") => {
                 self.bump();
                 Ok(Decl::Import(self.parse_import()?))
@@ -39,6 +43,13 @@ impl Parser {
             }
             _ => Err(format!("expected declaration, found {:?}", self.peek())),
         }
+    }
+
+    fn parse_type_alias(&mut self) -> Result<TypeAlias, String> {
+        let name = self.expect_ident()?;
+        self.expect(Token::Equal)?;
+        let ty = self.parse_type_name()?;
+        Ok(TypeAlias { name, ty })
     }
 
     fn parse_import(&mut self) -> Result<Import, String> {
@@ -133,6 +144,11 @@ impl Parser {
         let mut depth = 0usize;
         loop {
             match self.peek().clone() {
+                Token::Ident(name)
+                    if !text.is_empty() && depth == 0 && is_declaration_keyword(&name) =>
+                {
+                    break;
+                }
                 Token::Ident(name) => {
                     self.bump();
                     text.push_str(&name);
@@ -173,7 +189,9 @@ impl Parser {
                     self.bump();
                     text.push('.');
                 }
-                Token::Comma | Token::RParen | Token::LBrace if !text.is_empty() && depth == 0 => {
+                Token::Comma | Token::RParen | Token::LBrace | Token::Eof
+                    if !text.is_empty() && depth == 0 =>
+                {
                     break;
                 }
                 other if text.is_empty() => return Err(format!("expected type, found {other:?}")),
@@ -412,4 +430,8 @@ impl Parser {
     fn at_eof(&self) -> bool {
         matches!(self.peek(), Token::Eof)
     }
+}
+
+fn is_declaration_keyword(name: &str) -> bool {
+    matches!(name, "type" | "import" | "node" | "program")
 }

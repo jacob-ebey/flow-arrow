@@ -92,6 +92,7 @@ impl<'a> Checker<'a> {
         };
         checker.import_intrinsics()?;
         checker.collect_imports()?;
+        checker.collect_type_aliases()?;
         checker.collect_callables()?;
         checker.infer_effects();
         Ok(checker)
@@ -121,6 +122,7 @@ impl<'a> Checker<'a> {
 
         for decl in &self.module.declarations {
             match decl {
+                Decl::TypeAlias(_) => {}
                 Decl::Node(callable) => self.check_callable(callable, CallableKind::Node)?,
                 Decl::Program(callable) => self.check_callable(callable, CallableKind::Program)?,
                 Decl::Import(_) => {}
@@ -214,12 +216,100 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    fn collect_type_aliases(&mut self) -> Result<(), String> {
+        let mut raw = HashMap::new();
+        for decl in &self.module.declarations {
+            let Decl::TypeAlias(alias) = decl else {
+                continue;
+            };
+            if self.types.contains_key(&alias.name) || raw.contains_key(&alias.name) {
+                return Err(format!("duplicate type declaration `{}`", alias.name));
+            }
+            raw.insert(alias.name.clone(), alias.ty.clone());
+        }
+
+        let mut resolved = HashMap::new();
+        for name in raw.keys() {
+            let mut resolving = Vec::new();
+            let ty = self.resolve_type_alias(name, &raw, &mut resolved, &mut resolving)?;
+            self.validate_declared_type(&ty)?;
+            self.types.insert(name.clone(), ty);
+        }
+        Ok(())
+    }
+
+    fn resolve_type_alias(
+        &self,
+        name: &str,
+        raw: &HashMap<String, String>,
+        resolved: &mut HashMap<String, Type>,
+        resolving: &mut Vec<String>,
+    ) -> Result<Type, String> {
+        if let Some(ty) = resolved.get(name) {
+            return Ok(ty.clone());
+        }
+        if resolving.iter().any(|item| item == name) {
+            resolving.push(name.to_string());
+            return Err(format!("cyclic type alias `{}`", resolving.join(" -> ")));
+        }
+        let text = raw
+            .get(name)
+            .ok_or_else(|| format!("unknown type alias `{name}`"))?;
+        resolving.push(name.to_string());
+        let parsed = parse_type(text)?;
+        let ty = self.resolve_type_alias_type(parsed, raw, resolved, resolving)?;
+        resolving.pop();
+        resolved.insert(name.to_string(), ty.clone());
+        Ok(ty)
+    }
+
+    fn resolve_type_alias_type(
+        &self,
+        ty: Type,
+        raw: &HashMap<String, String>,
+        resolved: &mut HashMap<String, Type>,
+        resolving: &mut Vec<String>,
+    ) -> Result<Type, String> {
+        match ty {
+            Type::Var(name) => {
+                if let Some(known) = self.types.get(&name) {
+                    Ok(known.clone())
+                } else if raw.contains_key(&name) {
+                    self.resolve_type_alias(&name, raw, resolved, resolving)
+                } else {
+                    Err(format!("unknown type `{name}`"))
+                }
+            }
+            Type::Faultable(item) => Ok(Type::Faultable(Box::new(
+                self.resolve_type_alias_type(*item, raw, resolved, resolving)?,
+            ))),
+            Type::Seq(item) => Ok(Type::Seq(Box::new(
+                self.resolve_type_alias_type(*item, raw, resolved, resolving)?,
+            ))),
+            Type::OneOf(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.resolve_type_alias_type(item, raw, resolved, resolving)?);
+                }
+                Ok(Type::OneOf(out))
+            }
+            Type::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.resolve_type_alias_type(item, raw, resolved, resolving)?);
+                }
+                Ok(Type::Tuple(out))
+            }
+            other => Ok(other),
+        }
+    }
+
     fn collect_callables(&mut self) -> Result<(), String> {
         for decl in &self.module.declarations {
             let (callable, kind) = match decl {
                 Decl::Node(callable) => (callable, CallableKind::Node),
                 Decl::Program(callable) => (callable, CallableKind::Program),
-                Decl::Import(_) => continue,
+                Decl::TypeAlias(_) | Decl::Import(_) => continue,
             };
             let info = CallableInfo {
                 signatures: vec![self.callable_signature(callable)?],

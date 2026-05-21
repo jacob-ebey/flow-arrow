@@ -92,6 +92,7 @@ struct TypedCodegen<'a> {
     callables: HashMap<String, &'a Callable>,
     signatures: HashMap<String, Signature>,
     stdlib_names: HashMap<String, String>,
+    aliases: HashMap<String, Ty>,
     types: TypeRegistry,
 }
 
@@ -103,9 +104,11 @@ impl<'a> TypedCodegen<'a> {
             callables: HashMap::new(),
             signatures: HashMap::new(),
             stdlib_names: HashMap::new(),
+            aliases: HashMap::new(),
             types: TypeRegistry::default(),
         };
         codegen.collect_imports();
+        codegen.collect_type_aliases()?;
         codegen.collect_callables()?;
         Ok(codegen)
     }
@@ -114,7 +117,7 @@ impl<'a> TypedCodegen<'a> {
         let mut bodies = String::new();
         let mut names = self.callables.keys().cloned().collect::<Vec<_>>();
         names.sort();
-        let uses_jpeg = self.uses_jpeg_runtime();
+        let uses_cv_runtime = self.uses_cv_runtime();
 
         for name in &names {
             let sig = self
@@ -124,14 +127,16 @@ impl<'a> TypedCodegen<'a> {
             self.types.c_type(&sig.input);
             self.types.c_type(&sig.output);
         }
-        if uses_jpeg {
+        if uses_cv_runtime {
             let image = cv_image_ty();
             self.types.c_type(&image);
             self.types.c_type(&Ty::Faultable(Box::new(image)));
+            self.types.c_type(&Ty::Faultable(Box::new(Ty::Bytes)));
         }
 
         for decl in &self.module.declarations {
             match decl {
+                Decl::TypeAlias(_) => {}
                 Decl::Node(callable) => self.emit_callable(&mut bodies, callable, false)?,
                 Decl::Program(callable) => self.emit_callable(&mut bodies, callable, true)?,
                 Decl::Import(_) => {}
@@ -142,7 +147,7 @@ impl<'a> TypedCodegen<'a> {
         emit_preamble(&mut out);
         out.push_str(&self.types.emit_typedefs());
         out.push_str(&self.types.emit_helpers());
-        if uses_jpeg {
+        if uses_cv_runtime {
             stdlib::emit_cv_runtime_c(&mut out);
         }
         for name in &names {
@@ -179,10 +184,22 @@ impl<'a> TypedCodegen<'a> {
         Ok(out)
     }
 
-    fn uses_jpeg_runtime(&self) -> bool {
-        self.stdlib_names
-            .values()
-            .any(|name| matches!(name.as_str(), "decode_jpeg" | "encode_jpeg"))
+    fn uses_cv_runtime(&self) -> bool {
+        self.stdlib_names.values().any(|name| {
+            matches!(
+                name.as_str(),
+                "decode"
+                    | "decode_bmp"
+                    | "decode_jpeg"
+                    | "decode_png"
+                    | "decode_pnm"
+                    | "encode_bmp"
+                    | "encode_jpeg"
+                    | "encode_pgm"
+                    | "encode_png"
+                    | "encode_ppm"
+            )
+        })
     }
 
     fn collect_imports(&mut self) {
@@ -224,6 +241,90 @@ impl<'a> TypedCodegen<'a> {
         }
     }
 
+    fn collect_type_aliases(&mut self) -> Result<(), String> {
+        let raw = self
+            .module
+            .declarations
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::TypeAlias(alias) => Some((alias.name.clone(), alias.ty.clone())),
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        let mut resolved = HashMap::new();
+        for name in raw.keys() {
+            let mut resolving = Vec::new();
+            let ty = self.resolve_alias(name, &raw, &mut resolved, &mut resolving)?;
+            self.aliases.insert(name.clone(), ty);
+        }
+        Ok(())
+    }
+
+    fn resolve_alias(
+        &self,
+        name: &str,
+        raw: &HashMap<String, String>,
+        resolved: &mut HashMap<String, Ty>,
+        resolving: &mut Vec<String>,
+    ) -> Result<Ty, String> {
+        if let Some(ty) = resolved.get(name) {
+            return Ok(ty.clone());
+        }
+        if resolving.iter().any(|item| item == name) {
+            resolving.push(name.to_string());
+            return Err(format!("cyclic type alias `{}`", resolving.join(" -> ")));
+        }
+        let text = raw
+            .get(name)
+            .ok_or_else(|| format!("unknown type alias `{name}`"))?;
+        resolving.push(name.to_string());
+        let ty = self.resolve_alias_type(parse_type(text)?, raw, resolved, resolving)?;
+        resolving.pop();
+        resolved.insert(name.to_string(), ty.clone());
+        Ok(ty)
+    }
+
+    fn resolve_alias_type(
+        &self,
+        ty: Ty,
+        raw: &HashMap<String, String>,
+        resolved: &mut HashMap<String, Ty>,
+        resolving: &mut Vec<String>,
+    ) -> Result<Ty, String> {
+        match ty {
+            Ty::Var(name) => {
+                if let Some(known) = builtin_type_alias(&name) {
+                    Ok(known)
+                } else if raw.contains_key(&name) {
+                    self.resolve_alias(&name, raw, resolved, resolving)
+                } else {
+                    Err(format!("unknown type `{name}`"))
+                }
+            }
+            Ty::Faultable(item) => Ok(Ty::Faultable(Box::new(
+                self.resolve_alias_type(*item, raw, resolved, resolving)?,
+            ))),
+            Ty::Seq(item) => Ok(Ty::Seq(Box::new(
+                self.resolve_alias_type(*item, raw, resolved, resolving)?,
+            ))),
+            Ty::OneOf(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.resolve_alias_type(item, raw, resolved, resolving)?);
+                }
+                Ok(Ty::OneOf(out))
+            }
+            Ty::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.resolve_alias_type(item, raw, resolved, resolving)?);
+                }
+                Ok(Ty::Tuple(out))
+            }
+            other => Ok(other),
+        }
+    }
+
     fn collect_callables(&mut self) -> Result<(), String> {
         for decl in &self.module.declarations {
             let (Decl::Node(callable) | Decl::Program(callable)) = decl else {
@@ -253,13 +354,45 @@ impl<'a> TypedCodegen<'a> {
     fn port_types(&self, ports: &[Port]) -> Result<Ty, String> {
         let mut types = ports
             .iter()
-            .map(|port| parse_type(&port.ty))
+            .map(|port| self.parse_declared_type(&port.ty))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(match types.len() {
             0 => Ty::Unit,
             1 => types.remove(0),
             _ => Ty::Tuple(types),
         })
+    }
+
+    fn parse_declared_type(&self, text: &str) -> Result<Ty, String> {
+        self.resolve_declared_type(parse_type(text)?)
+    }
+
+    fn resolve_declared_type(&self, ty: Ty) -> Result<Ty, String> {
+        match ty {
+            Ty::Var(name) => self
+                .aliases
+                .get(&name)
+                .cloned()
+                .or_else(|| builtin_type_alias(&name))
+                .ok_or_else(|| format!("unknown type `{name}`")),
+            Ty::Faultable(item) => Ok(Ty::Faultable(Box::new(self.resolve_declared_type(*item)?))),
+            Ty::Seq(item) => Ok(Ty::Seq(Box::new(self.resolve_declared_type(*item)?))),
+            Ty::OneOf(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.resolve_declared_type(item)?);
+                }
+                Ok(Ty::OneOf(out))
+            }
+            Ty::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.resolve_declared_type(item)?);
+                }
+                Ok(Ty::Tuple(out))
+            }
+            other => Ok(other),
+        }
     }
 
     fn emit_callable(
@@ -294,7 +427,7 @@ impl<'a> TypedCodegen<'a> {
                 out.push_str("  (void)input;\n");
             }
             [port] => {
-                let ty = parse_type(&port.ty)?;
+                let ty = self.parse_declared_type(&port.ty)?;
                 let c_ty = self.types.c_type(&ty);
                 let var = c_ident(&port.name);
                 out.push_str(&format!("  {c_ty} {var} = input;\n"));
@@ -302,7 +435,7 @@ impl<'a> TypedCodegen<'a> {
             }
             ports => {
                 for (index, port) in ports.iter().enumerate() {
-                    let ty = parse_type(&port.ty)?;
+                    let ty = self.parse_declared_type(&port.ty)?;
                     let c_ty = self.types.c_type(&ty);
                     let var = c_ident(&port.name);
                     out.push_str(&format!("  {c_ty} {var} = input.f{index};\n"));
@@ -367,12 +500,12 @@ impl<'a> TypedCodegen<'a> {
         let [out_left, out_right, out_score] = callable.outputs.as_slice() else {
             return Ok(false);
         };
-        if parse_type(&left_port.ty)? != Ty::Seq(Box::new(Ty::Real))
-            || parse_type(&right_port.ty)? != Ty::Seq(Box::new(Ty::Real))
-            || parse_type(&score_port.ty)? != Ty::Real
-            || parse_type(&out_left.ty)? != Ty::Seq(Box::new(Ty::Real))
-            || parse_type(&out_right.ty)? != Ty::Seq(Box::new(Ty::Real))
-            || parse_type(&out_score.ty)? != Ty::Real
+        if self.parse_declared_type(&left_port.ty)? != Ty::Seq(Box::new(Ty::Real))
+            || self.parse_declared_type(&right_port.ty)? != Ty::Seq(Box::new(Ty::Real))
+            || self.parse_declared_type(&score_port.ty)? != Ty::Real
+            || self.parse_declared_type(&out_left.ty)? != Ty::Seq(Box::new(Ty::Real))
+            || self.parse_declared_type(&out_right.ty)? != Ty::Seq(Box::new(Ty::Real))
+            || self.parse_declared_type(&out_score.ty)? != Ty::Real
         {
             return Ok(false);
         }
@@ -1223,8 +1356,16 @@ impl<'a> TypedCodegen<'a> {
             "range_step" => out.push_str(&format!(
                 "  {target} = fa_range_step({input}.f0, {input}.f1, {input}.f2);\n"
             )),
+            "decode" => out.push_str(&format!("  {target} = fa_cv_decode({input});\n")),
+            "decode_bmp" => out.push_str(&format!("  {target} = fa_cv_decode_bmp({input});\n")),
             "decode_jpeg" => out.push_str(&format!("  {target} = fa_cv_decode_jpeg({input});\n")),
+            "decode_png" => out.push_str(&format!("  {target} = fa_cv_decode_png({input});\n")),
+            "decode_pnm" => out.push_str(&format!("  {target} = fa_cv_decode_pnm({input});\n")),
+            "encode_bmp" => out.push_str(&format!("  {target} = fa_cv_encode_bmp({input});\n")),
             "encode_jpeg" => out.push_str(&format!("  {target} = fa_cv_encode_jpeg({input});\n")),
+            "encode_pgm" => out.push_str(&format!("  {target} = fa_cv_encode_pgm({input});\n")),
+            "encode_png" => out.push_str(&format!("  {target} = fa_cv_encode_png({input});\n")),
+            "encode_ppm" => out.push_str(&format!("  {target} = fa_cv_encode_ppm({input});\n")),
             "bit_and" => out.push_str(&format!("  {target} = {input}.f0 & {input}.f1;\n")),
             "bit_or" => out.push_str(&format!("  {target} = {input}.f0 | {input}.f1;\n")),
             "bit_xor" => out.push_str(&format!("  {target} = {input}.f0 ^ {input}.f1;\n")),
@@ -2240,6 +2381,12 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             _ => Ok(Ty::Bytes),
         },
         "strip_prefix" | "strip_suffix" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
+        "decode" | "decode_bmp" | "decode_jpeg" | "decode_png" | "decode_pnm" => {
+            Ok(Ty::Faultable(Box::new(cv_image_ty())))
+        }
+        "encode_bmp" | "encode_jpeg" | "encode_pgm" | "encode_png" | "encode_ppm" => {
+            Ok(Ty::Faultable(Box::new(Ty::Bytes)))
+        }
         "bytes_to_codes" | "range_step" => Ok(Ty::Seq(Box::new(Ty::Int))),
         "byte_length" | "length" | "inner_length" | "bit_and" | "bit_or" | "bit_xor"
         | "bit_shl" | "bit_shr" => Ok(Ty::Int),
@@ -2369,14 +2516,15 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             };
             Ok(Ty::Faultable(item.clone()))
         }
-        "decode_jpeg" => Ok(Ty::Faultable(Box::new(cv_image_ty()))),
-        "encode_jpeg" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         other => Err(format!("unsupported builtin `{other}`")),
     }
 }
 
 fn cv_image_ty() -> Ty {
-    Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), cv_pixel_seq_ty()])
+    Ty::Tuple(vec![
+        Ty::Tuple(vec![Ty::Int, Ty::Int]),
+        Ty::Seq(Box::new(cv_pixel_seq_ty())),
+    ])
 }
 
 fn cv_pixel_seq_ty() -> Ty {
@@ -2566,6 +2714,13 @@ fn parse_type(text: &str) -> Result<Ty, String> {
         pos: 0,
     }
     .parse()
+}
+
+fn builtin_type_alias(name: &str) -> Option<Ty> {
+    match name {
+        "Number" => Some(Ty::OneOf(vec![Ty::Int, Ty::Real])),
+        _ => None,
+    }
 }
 
 struct TypeParser {

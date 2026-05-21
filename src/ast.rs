@@ -5,9 +5,16 @@ pub struct Module {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decl {
+    TypeAlias(TypeAlias),
     Import(Import),
     Node(Callable),
     Program(Callable),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeAlias {
+    pub name: String,
+    pub ty: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -666,6 +666,7 @@ Therefore, FlowArrow exposes exactly the maximum legal parallelism expressible b
 program     ::= declaration*
 
 declaration ::= import_decl
+              | "type" IDENT "=" TYPE
               | "node" IDENT "(" ports? ")" "->" ports block
               | "program" IDENT "(" ports? ")" "->" ports block
 

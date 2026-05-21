@@ -19,7 +19,7 @@ fn std_cv_jpeg_pipeline_decodes_grayscales_and_encodes() {
         import std.cv {{ save_jpeg }}
 
         program main(args: Args) -> exit_code: Faultable[Int] {{
-            ((2, 1), [(255, (0, 0)), (0, (255, 0))]) -> $image
+            ((2, 1), [[(255, (0, 0)), (0, (255, 0))]]) -> $image
             ("{input_path_text}", $image) -> save_jpeg -> $exit_code
         }}
     "#
@@ -52,17 +52,17 @@ fn std_cv_jpeg_pipeline_decodes_grayscales_and_encodes() {
     let validator = format!(
         r#"
         import std.cli {{ Args }}
-        import std.cv {{ load_jpeg }}
+        import std.cv {{ Pixel, load_jpeg, pixels }}
         import std.math {{ abs, le, sub }}
         import std.predicates {{ all, and }}
         import std.tuple {{ first, second }}
 
         program main(args: Args) -> exit_code: Faultable[Int] {{
-            "{output_path_text}" -> load_jpeg -> second -> map near_gray -> all -> $ok
+            "{output_path_text}" -> load_jpeg -> pixels -> map near_gray -> all -> $ok
             ($ok, 0, 1) -> select -> $exit_code
         }}
 
-        node near_gray(pixel: (Int,(Int,Int))) -> ok: Bool {{
+        node near_gray(pixel: Pixel) -> ok: Bool {{
             $pixel -> first -> $red
             $pixel -> second -> $green_blue
             $green_blue -> first -> $green
@@ -111,4 +111,164 @@ fn std_cv_rejects_invalid_jpeg() {
     let output = Command::new(&build.executable).output().expect("run");
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("decode_jpeg"));
+}
+
+#[test]
+fn std_cv_generic_load_detects_png_bmp_ppm_and_pgm() {
+    let path = support::source_path("cv-multiformat-generate");
+    let root = path.parent().expect("source root");
+    let png_path = root.join("input.png");
+    let bmp_path = root.join("input.bmp");
+    let ppm_path = root.join("input.ppm");
+    let pgm_path = root.join("input.pgm");
+    let png_path_text = png_path.to_string_lossy();
+    let bmp_path_text = bmp_path.to_string_lossy();
+    let ppm_path_text = ppm_path.to_string_lossy();
+    let pgm_path_text = pgm_path.to_string_lossy();
+    let generator = format!(
+        r#"
+        import std.cli {{ Args }}
+        import std.cv {{ save_bmp, save_pgm, save_png, save_ppm }}
+
+        program main(args: Args) -> exit_code: Faultable[Int] {{
+            ((2, 1), [[(255, (0, 0)), (0, (255, 0))]]) -> $image
+            ("{png_path_text}", $image) -> save_png -> $png_status
+            ("{bmp_path_text}", $image) -> save_bmp -> $bmp_status
+            ("{ppm_path_text}", $image) -> save_ppm -> $ppm_status
+            ("{pgm_path_text}", $image) -> save_pgm -> $exit_code
+        }}
+    "#
+    );
+
+    fs::write(&path, generator).expect("write source");
+    let build = build_file(&path, None).expect("build generator");
+    let output = Command::new(&build.executable)
+        .output()
+        .expect("run generator");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(
+        &fs::read(&png_path).expect("png")[..8],
+        b"\x89PNG\r\n\x1a\n"
+    );
+    assert_eq!(&fs::read(&bmp_path).expect("bmp")[..2], b"BM");
+    assert!(
+        fs::read(&ppm_path)
+            .expect("ppm")
+            .starts_with(b"P6\n2 1\n255\n")
+    );
+    assert!(
+        fs::read(&pgm_path)
+            .expect("pgm")
+            .starts_with(b"P5\n2 1\n255\n")
+    );
+
+    for (name, image_path, expected_red, expected_green, expected_blue) in [
+        ("png", &png_path, 255, 0, 0),
+        ("bmp", &bmp_path, 255, 0, 0),
+        ("ppm", &ppm_path, 255, 0, 0),
+        ("pgm", &pgm_path, 76, 76, 76),
+    ] {
+        let image_path_text = image_path.to_string_lossy();
+        let validator = format!(
+            r#"
+            import std.cli {{ Args }}
+            import std.cv {{ height, load, pixels, width }}
+            import std.math {{ eq }}
+            import std.predicates {{ and }}
+            import std.seq {{ head }}
+            import std.tuple {{ first, second }}
+
+            program main(args: Args) -> exit_code: Faultable[Int] {{
+                "{image_path_text}" -> load -> $image
+                $image -> width -> $width
+                $image -> height -> $height
+                ($width, 2) -> eq -> $width_ok
+                ($height, 1) -> eq -> $height_ok
+                $image -> pixels -> head -> $pixel
+                $pixel -> first -> $red
+                $pixel -> second -> first -> $green
+                $pixel -> second -> second -> $blue
+                ($red, {expected_red}) -> eq -> $red_ok
+                ($green, {expected_green}) -> eq -> $green_ok
+                ($blue, {expected_blue}) -> eq -> $blue_ok
+                ($width_ok, $height_ok) -> and -> $shape_ok
+                ($shape_ok, $red_ok) -> and -> $s1
+                ($s1, $green_ok) -> and -> $s2
+                ($s2, $blue_ok) -> and -> $ok
+                ($ok, 0, 1) -> select -> $exit_code
+            }}
+        "#
+        );
+        let validator_path = root.join(format!("validate-{name}.flow"));
+        fs::write(&validator_path, validator).expect("write validator");
+        let validator = build_file(&validator_path, None).expect("build validator");
+        let output = Command::new(&validator.executable)
+            .output()
+            .expect("run validator");
+        assert!(
+            output.status.success(),
+            "{name} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn std_cv_generic_decode_rejects_unknown_format() {
+    let source = r#"
+        import std.bytes { codes_to_bytes }
+        import std.cli { Args }
+        import std.cv { decode }
+        import std.tuple { second }
+
+        program main(args: Args) -> exit_code: Faultable[Int] {
+            [110, 111, 116, 45, 105, 109, 97, 103, 101] -> codes_to_bytes -> $not_image
+            $not_image -> decode -> $image
+            ($image, 0) -> second -> $exit_code
+        }
+    "#;
+
+    let build = support::build_source("cv-invalid-generic", source);
+    let output = Command::new(&build.executable).output().expect("run");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported image format"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn std_cv_exposes_channel_matrices_for_matrix_pipelines() {
+    let source = r#"
+        import std.cli { Args }
+        import std.cv { luma_matrix, red_matrix }
+        import std.matrix { add_scalar, equals as matrix_equals }
+        import std.predicates { and }
+
+        program main(args: Args) -> exit_code: Int {
+            ((2, 1), [[(255, (0, 0)), (0, (255, 0))]]) -> $image
+            $image -> red_matrix -> $red
+            ($red, [[255.0, 0.0]]) -> matrix_equals -> $red_ok
+            ($red, 1.0) -> add_scalar -> $red_plus_one
+            ($red_plus_one, [[256.0, 1.0]]) -> matrix_equals -> $matrix_pipeline_ok
+            $image -> luma_matrix -> $luma
+            ($luma, [[76.0, 149.0]]) -> matrix_equals -> $luma_ok
+            ($red_ok, $matrix_pipeline_ok) -> and -> $s1
+            ($s1, $luma_ok) -> and -> $ok
+            ($ok, 0, 1) -> select -> $exit_code
+        }
+    "#;
+
+    let output = support::run_source("cv-channel-matrices", source, b"");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

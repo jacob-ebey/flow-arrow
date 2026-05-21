@@ -1,8 +1,8 @@
 # grayscale-image
 
-Reads an input JPEG filepath and an output JPEG filepath from positional
-command-line arguments, converts the decoded image to grayscale, and saves the
-result.
+Reads an input image filepath and an output JPEG filepath from positional
+command-line arguments, auto-detects the input codec, converts the decoded
+image to grayscale, and saves the result.
 
 ```text
 $ flowarrow run main.flow input.jpg output.jpg
@@ -13,9 +13,10 @@ $ flowarrow run main.flow input.jpg output.jpg
 It shows the source-backed CV pipeline end to end:
 
 1. `argv` provides the two file paths as dataflow values.
-2. `load_jpeg` reads and decodes the input into the standard `std.cv`
-   RGB image format.
+2. `load` reads and decodes JPEG, PNG, BMP, PGM, or PPM input into the
+   standard `std.cv` RGB image format.
 3. `grayscale` operates on that normalized image format.
 4. `save_jpeg` encodes the grayscale image and writes it to the output path.
 
-The current `std.cv` JPEG boundary uses libjpeg/jpeg-turbo at runtime.
+The current `std.cv` JPEG and PNG boundaries use libjpeg/jpeg-turbo and
+libpng at runtime.

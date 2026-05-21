@@ -73,7 +73,7 @@ escape     ::= "\\" ("\"" | "\\" | "n" | "t" | "r")
 ### 1.4 Punctuation and operators
 
 ```text
-->   $   .   ,   :   (   )   {   }   <   >
+->   $   .   ,   :   =   (   )   {   }   <   >
 ```
 
 The only multi-character token is `->` (the **flow arrow**). A `$`
@@ -88,10 +88,13 @@ binding.
 program        ::= declaration*
 
 declaration    ::= import_decl
+                 | type_alias_decl
                  | node_decl
                  | program_decl
 
 import_decl    ::= "import" import_source import_clause
+
+type_alias_decl ::= "type" IDENT "=" type
 
 import_source  ::= module_path
                  | STRING
@@ -110,6 +113,10 @@ program_decl   ::= "program" IDENT "(" port_list? ")" "->" port_or_list block
 
 `import_decl` is compile-time-only. It introduces names into the module
 namespace but never creates dataflow graph nodes or edges.
+
+`type_alias_decl` is also compile-time-only and may only appear at module
+top level. Type aliases name existing types; they do not create runtime
+values or nominally distinct types.
 
 Two import sources exist:
 
@@ -458,7 +465,7 @@ For convenience, the complete syntactic grammar is reproduced here.
 ```ebnf
 program        ::= declaration*
 
-declaration    ::= import_decl | node_decl | program_decl
+declaration    ::= import_decl | type_alias_decl | node_decl | program_decl
 
 import_decl    ::= "import" import_source import_clause
 import_source  ::= module_path | STRING
@@ -466,6 +473,8 @@ module_path    ::= IDENT ("." IDENT)*
 import_clause  ::= "as" IDENT
                  | "{" import_item ("," import_item)* ","? "}"
 import_item    ::= IDENT ("as" IDENT)?
+
+type_alias_decl ::= "type" IDENT "=" type
 
 node_decl      ::= "node"    IDENT "(" port_list? ")" "->" port_or_list block
 program_decl   ::= "program" IDENT "(" port_list? ")" "->" port_or_list block

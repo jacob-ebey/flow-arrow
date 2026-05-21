@@ -73,8 +73,8 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
 
     let mut clang = Command::new("clang");
     clang.arg("-O3").arg(&llvm_path).arg(&runtime_path);
-    if runtime_c.contains("jpeglib.h") {
-        for flag in jpeg_compiler_flags()? {
+    if runtime_c.contains("jpeglib.h") || runtime_c.contains("png.h") {
+        for flag in cv_compiler_flags(&runtime_c)? {
             clang.arg(flag);
         }
     }
@@ -162,14 +162,32 @@ fn build_hash(source: &str, runtime_c: &str) -> u64 {
     hash
 }
 
-fn jpeg_compiler_flags() -> Result<Vec<String>, String> {
+fn cv_compiler_flags(runtime_c: &str) -> Result<Vec<String>, String> {
+    let mut flags = Vec::new();
+    if runtime_c.contains("jpeglib.h") {
+        flags.extend(pkg_config_flags("libjpeg", "JPEG")?);
+    }
+    if runtime_c.contains("png.h") {
+        flags.extend(pkg_config_flags("libpng", "PNG")?);
+    }
+    let mut deduped = Vec::new();
+    for flag in flags {
+        if !deduped.contains(&flag) {
+            deduped.push(flag);
+        }
+    }
+    let flags = deduped;
+    Ok(flags)
+}
+
+fn pkg_config_flags(package: &str, label: &str) -> Result<Vec<String>, String> {
     let output = Command::new("pkg-config")
-        .args(["--libs", "--cflags", "libjpeg"])
+        .args(["--libs", "--cflags", package])
         .output()
-        .map_err(|error| format!("failed to invoke pkg-config for libjpeg: {error}"))?;
+        .map_err(|error| format!("failed to invoke pkg-config for {package}: {error}"))?;
     if !output.status.success() {
         return Err(format!(
-            "std.cv JPEG support requires libjpeg development headers and libraries; pkg-config libjpeg failed:\n{}{}",
+            "std.cv {label} support requires development headers and libraries; pkg-config {package} failed:\n{}{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         ));
@@ -207,7 +225,7 @@ mod tests {
                 ast::Decl::Node(callable) | ast::Decl::Program(callable) => {
                     Some(callable.name.as_str())
                 }
-                ast::Decl::Import(_) => None,
+                ast::Decl::TypeAlias(_) | ast::Decl::Import(_) => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["main", "verse_for", "final_verse_node"]);
@@ -348,6 +366,81 @@ mod tests {
         typecheck::check_module(&module).expect("typecheck");
         let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
         assert!(!runtime_c.contains("FaValue"));
+    }
+
+    #[test]
+    fn type_aliases_resolve_in_typecheck_and_codegen() {
+        let source = r#"
+            type Pixel = (Int,(Int,Int))
+            type Row = Seq[Pixel]
+            type Size = (Int,Int)
+            type Image = (Size,Seq[Row])
+
+            import std.cli { Args }
+
+            node passthrough(image: Image) -> out: Image {
+                $image -> $out
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                ((1, 1), [[(1, (2, 3))]]) -> passthrough -> $image
+                0 -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
+        assert!(runtime_c.contains("flow_node_passthrough"));
+    }
+
+    #[test]
+    fn type_alias_cycles_are_rejected() {
+        let source = r#"
+            type A = B
+            type B = A
+
+            import std.cli { Args }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("cyclic type alias"));
+    }
+
+    #[test]
+    fn source_stdlib_type_alias_imports_rewrite_into_user_signatures() {
+        let source = r#"
+            import std.cli { Args }
+            import std.cv { Image, Pixel, Size, grayscale }
+            import std.tuple { first }
+
+            node image_size(image: Image) -> size: Size {
+                $image -> first -> $size
+            }
+
+            node keep_pixel(pixel: Pixel) -> out: Pixel {
+                $pixel -> $out
+            }
+
+            node process(image: Image) -> out: Image {
+                $image -> grayscale -> $out
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                ((1, 1), [[(20, (40, 60))]]) -> process -> $image
+                $image -> image_size -> $size
+                (20, (40, 60)) -> keep_pixel -> $pixel
+                0 -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
+        assert!(runtime_c.contains("flow_node_process"));
+        assert!(runtime_c.contains("flow_node___flow_std_cv_grayscale"));
     }
 
     #[test]

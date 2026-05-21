@@ -10,9 +10,9 @@ pub fn emit_module(module: &Module) -> Result<String, String> {
     emitter.line("flowchart TD");
     for decl in &module.declarations {
         match decl {
+            Decl::TypeAlias(_) | Decl::Import(_) => {}
             Decl::Node(callable) => emitter.emit_callable(callable, "node")?,
             Decl::Program(callable) => emitter.emit_callable(callable, "program")?,
-            Decl::Import(_) => {}
         }
     }
     Ok(emitter.out)
