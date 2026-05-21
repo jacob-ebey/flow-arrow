@@ -79,16 +79,27 @@ fn run_cli() -> Result<u8, String> {
             Ok(0)
         }
         Some("graph") => {
-            let path = args
-                .next()
-                .ok_or_else(|| "usage: flowarrow graph <path.flow>".to_string())?;
-            if args.next().is_some() {
-                return Err("usage: flowarrow graph <path.flow>".to_string());
+            let mut compact = false;
+            let mut path = None;
+            for arg in args {
+                match arg.as_str() {
+                    "--compact" => compact = true,
+                    other if other.starts_with("--") => {
+                        return Err(format!("unknown graph option `{other}`"));
+                    }
+                    _ if path.is_none() => path = Some(arg),
+                    other => return Err(format!("unknown graph option `{other}`")),
+                }
             }
-            print!(
-                "{}",
-                flowarrow::mermaid_file(PathBuf::from(path).as_path())?
-            );
+            let path =
+                path.ok_or_else(|| "usage: flowarrow graph [--compact] <path.flow>".to_string())?;
+            let path = PathBuf::from(path);
+            let graph = if compact {
+                flowarrow::mermaid_file_compact(path.as_path())?
+            } else {
+                flowarrow::mermaid_file(path.as_path())?
+            };
+            print!("{graph}");
             Ok(0)
         }
         _ => Err("usage: flowarrow <run|build|typecheck|fmt|graph> ...".to_string()),

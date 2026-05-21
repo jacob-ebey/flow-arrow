@@ -94,7 +94,10 @@ Use `flowarrow typecheck <path.flow>` to validate imports and graph
 types without emitting LLVM or invoking the native backend.
 
 Use `flowarrow graph <path.flow>` to print the typed execution graph as a
-Mermaid `flowchart TD` diagram.
+Mermaid `flowchart TD` diagram. The graph uses shapes and classes to separate
+values, pure operations, boundary operations, collection operators, decisions,
+and fault paths. Use `flowarrow graph --compact <path.flow>` to collapse
+intermediate bindings into edge labels for a denser operation-first view.
 
 | Example                       | What it shows                                          |
 | ----------------------------- | ------------------------------------------------------ |

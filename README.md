@@ -88,6 +88,12 @@ Print a Mermaid execution graph:
 cargo run -- graph examples/add-numbers-from-stdin/main.flow
 ```
 
+Print a compact graph that collapses intermediate bindings into edge labels:
+
+```sh
+cargo run -- graph --compact examples/add-numbers-from-stdin/main.flow
+```
+
 Format a FlowArrow source file:
 
 ```sh

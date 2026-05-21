@@ -130,6 +130,21 @@ pub fn mermaid_file(path: &Path) -> Result<String, String> {
     mermaid::emit_module(&module)
 }
 
+pub fn mermaid_file_compact(path: &Path) -> Result<String, String> {
+    mermaid_file_with_options(path, mermaid::MermaidOptions { compact: true })
+}
+
+fn mermaid_file_with_options(
+    path: &Path,
+    options: mermaid::MermaidOptions,
+) -> Result<String, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+    let module = parser::parse(&source)?;
+    typecheck::check_module_with_base(&module, path.parent().unwrap_or_else(|| Path::new(".")))?;
+    mermaid::emit_module_with_options(&module, options)
+}
+
 #[derive(Debug, Clone)]
 pub struct BuildOutput {
     pub build_dir: PathBuf,
@@ -324,7 +339,7 @@ mod tests {
         assert!(graph.starts_with("flowchart TD\n"));
         assert!(graph.contains("subgraph callable_main[\"program main\"]"));
         assert!(graph.contains("([\"$args: Args\"])"));
-        assert!(graph.contains("[\"read_stdin\"]"));
+        assert!(graph.contains("[[\"read_stdin\"]]"));
         assert!(graph.contains("([\"$input\"])"));
         assert!(graph.contains("([\"$raw_lines\"])"));
         assert!(graph.contains("[\"filter not_empty\"]"));
@@ -334,10 +349,14 @@ mod tests {
         assert!(graph.contains("[\"reduce add<br/>identity: 0.0\"]"));
         assert!(graph.contains("([\"$total_bytes\"])"));
         assert!(graph.contains("([\"input<br/>[$total_bytes, &quot;\\n&quot;]\"])"));
-        assert!(graph.contains("[\"write_stdout\"]"));
-        assert!(graph.contains("[\"read_stdin\"]\n    n2([\"$input\"])\n    n1 --> n2"));
-        assert!(graph.contains("n2 --> n3"));
-        assert!(graph.contains("n12 --> n13"));
+        assert!(graph.contains("[[\"write_stdout\"]]"));
+        assert!(graph.contains("read_stdin -- \"binds\" -->"));
+        assert!(graph.contains("-- \"$input\" -->"));
+        assert!(graph.contains("-- \"item\" -->"));
+        assert!(graph.contains("classDef value"));
+        assert!(graph.contains("classDef boundary"));
+        assert!(graph.contains("classDef collection"));
+        assert!(graph.contains("subgraph legend[\"legend\"]"));
         assert!(!graph.contains("[\"0.0\"]"));
         assert!(graph.contains("([\"$exit_code\"])"));
     }
@@ -349,12 +368,28 @@ mod tests {
         assert!(graph.contains("subgraph callable_handle_request[\"node handle_request\"]"));
         assert!(graph.contains("([\"$req: http.Request\"])"));
         assert!(graph.contains("{\"match ?\"}"));
+        assert!(graph.contains("subgraph handle_request_match_arm_0"));
         assert!(graph.contains("-- \"http.route(&quot;GET&quot;, &quot;/health&quot;)\" -->"));
         assert!(graph.contains("[\"health_response\"]"));
         assert!(graph.contains("-- \"_\" -->"));
-        assert!(graph.contains("[\"http.not_found\"]"));
+        assert!(graph.contains("[[\"http.not_found\"]]"));
         assert!(graph.contains("([\"$response\"])"));
+        assert!(graph.contains("class handle_request_match_match_20_3f decision"));
         assert!(!graph.contains("match<br/>http.route"));
+    }
+
+    #[test]
+    fn emits_compact_mermaid_execution_graph() {
+        let graph = mermaid_file_compact(Path::new("examples/add-numbers-from-stdin/main.flow"))
+            .expect("compact mermaid graph");
+        assert!(graph.starts_with("flowchart TD\n"));
+        assert!(graph.contains("[[\"read_stdin\"]]"));
+        assert!(graph.contains("[\"split_lines\"]"));
+        assert!(graph.contains("read_stdin -- \"$input\" -->"));
+        assert!(graph.contains("split_lines -- \"$raw_lines\" -->"));
+        assert!(!graph.contains("([\"$input\"])"));
+        assert!(!graph.contains("([\"$raw_lines\"])"));
+        assert!(graph.contains("([\"$exit_code\"])"));
     }
 
     #[test]
