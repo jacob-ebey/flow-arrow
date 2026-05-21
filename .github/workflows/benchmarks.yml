@@ -1,0 +1,60 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - benches/**
+      - src/**
+      - .github/workflows/benchmarks.yml
+  push:
+    branches:
+      - main
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - benches/**
+      - src/**
+      - .github/workflows/benchmarks.yml
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    name: Run Benchmarks
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Homebrew
+        id: set-up-homebrew
+        uses: Homebrew/actions/setup-homebrew@main
+
+      - name: Cache Homebrew setup dependencies
+        id: cache-homebrew-setup
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.set-up-homebrew.outputs.gems-path }}
+          key: ${{ runner.os }}-homebrew-setup-${{ steps.set-up-homebrew.outputs.gems-hash }}
+          restore-keys: ${{ runner.os }}-homebrew-setup-
+
+      - name: Install Homebrew setup dependencies
+        if: steps.cache-homebrew-setup.outputs.cache-hit != 'true'
+        run: brew install-bundler-gems
+
+      - name: Install system dependencies
+        run: brew install pkg-config jpeg-turbo libpng sqlite
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run benchmarks
+        run: cargo bench
