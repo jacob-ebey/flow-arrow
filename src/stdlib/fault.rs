@@ -9,4 +9,9 @@ pub const HAS_FAULTS: StdSymbol = node(MODULE, "has_faults", "Seq[Fault]", "Bool
 pub const FORMAT_FAULTS: StdSymbol = node(MODULE, "format_faults", "Seq[Fault]", "Bytes");
 pub const OK: StdSymbol = node(MODULE, "ok", "V", "Faultable[V]");
 pub const EXPECT: StdSymbol = node(MODULE, "expect", "Faultable[V]", "V");
-pub const COLLECT: StdSymbol = node(MODULE, "collect", "Seq[Faultable[V]]", "Faultable[Seq[V]]");
+pub const COLLECT: StdSymbol = node(
+    MODULE,
+    "collect",
+    "Seq[Faultable[V]]|Faultable[Seq[Faultable[V]]]",
+    "Faultable[Seq[V]]",
+);

@@ -87,7 +87,10 @@ Opens a filesystem path for streaming reads.
 - The path is supplied as UTF-8 `Bytes`.
 - A path containing a NUL byte returns a fault.
 - Open failures return a fault.
-- Successful output is a `Stream[Bytes]`, not file contents.
+- Successful output is a pull-readable `Stream[Bytes]` of fixed-size byte
+  chunks, not one materialized file value.
+- Consuming the stream to EOF with `std.stream.to_seq` or `std.stream.drain`
+  closes the underlying file handle.
 
 ### `size`
 

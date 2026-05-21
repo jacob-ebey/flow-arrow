@@ -19,13 +19,14 @@ higher-order functions:
 2. `map walk_files` expands each target, including glob patterns, into sorted
    regular files. This is effectful map usage: filesystem reads run in
    deterministic input order.
-3. `read_files` performs batch file reads at the boundary.
+3. `open_file -> stream.to_seq -> concat_bytes` streams each file's bytes at the
+   boundary before materializing the current file for line matching.
 4. Pure graph stages split file contents into lines, pair each line with a
    1-based line number, filter with `std.bytes.contains`, and format matching
    lines for stdout.
 5. Walked and scanned file counts are appended as summary lines. The walked
-   count comes from the flattened `walk_files` output; the scanned count comes
-   from the `read_files` result.
+   count comes from the flattened `walk_files` output; the scanned count is the
+   number of paths passed into the per-file scan stage.
 
 The matching is byte-oriented and literal: there are no regular expressions,
 case folding, or context lines.

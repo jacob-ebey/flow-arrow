@@ -21,7 +21,8 @@ drain  : Stream[V] -> Faultable[Int]
 `Stream[(Int,Bytes)]` are distinct FlowArrow types.
 
 File-backed byte stream nodes are boundary filesystem operations and are
-exported from [`std.fs`](./fs.md).
+exported from [`std.fs`](./fs.md). `std.fs.open_file` produces a pull-readable
+`Stream[Bytes]` whose items are fixed-size chunks of file contents.
 
 `to_seq` consumes a pull-readable stream and materializes all values into a
 sequence. `drain` consumes a pull-readable stream without materializing values.

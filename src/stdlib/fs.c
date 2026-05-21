@@ -315,6 +315,47 @@ static FaFaultable_Seq_Tuple_Bytes_Bytes fa_read_files(FaSeq_Bytes paths) {
 
 #define FA_STREAM_BUFFER_SIZE (1024 * 1024)
 
+typedef struct {
+  FILE *file;
+  int fd;
+  FaBytes path;
+  bool closed;
+} FaFileStreamState;
+
+static int fa_file_stream_next(void *state_ptr, void *out, FaFault *fault) {
+  FaFileStreamState *state = (FaFileStreamState *)state_ptr;
+  if (!state || state->closed || !state->file) return 0;
+
+  char *buffer = (char *)malloc(FA_STREAM_BUFFER_SIZE + 1);
+  if (!buffer) fa_die_alloc();
+  size_t read = fread(buffer, 1, FA_STREAM_BUFFER_SIZE, state->file);
+  if (read == 0) {
+    free(buffer);
+    if (ferror(state->file)) {
+      *fault = fa_io_fault(state->path, "read_file");
+      return -1;
+    }
+    return 0;
+  }
+  buffer[read] = '\0';
+  *(FaBytes *)out = fa_bytes_owned(buffer, read);
+  return 1;
+}
+
+static int fa_file_stream_close(void *state_ptr, FaFault *fault) {
+  FaFileStreamState *state = (FaFileStreamState *)state_ptr;
+  if (!state || state->closed) return 0;
+  state->closed = true;
+  int status = 0;
+  if (state->file && fclose(state->file) != 0) {
+    *fault = fa_io_fault(state->path, "close");
+    status = -1;
+  }
+  state->file = NULL;
+  free(state);
+  return status;
+}
+
 static FaFaultable_Stream_Bytes fa_open_file(FaBytes path) {
   if (memchr(path.bytes, '\0', path.len)) {
     return FaFaultable_Stream_Bytes_fault(fa_fault_cstr("open_file: path contains NUL byte"));
@@ -324,15 +365,22 @@ static FaFaultable_Stream_Bytes fa_open_file(FaBytes path) {
   free(path_c);
   if (!file) return FaFaultable_Stream_Bytes_fault(fa_io_fault(path, "open_file"));
 
+  FaFileStreamState *state = (FaFileStreamState *)calloc(1, sizeof(FaFileStreamState));
+  if (!state) fa_die_alloc();
+  state->file = file;
+  state->fd = fileno(file);
+  state->path = path;
+  state->closed = false;
+
   FaStream stream;
   stream.file = file;
-  stream.fd = fileno(file);
+  stream.fd = state->fd;
   stream.path = path;
-  stream.state = NULL;
+  stream.state = state;
   stream.map_fn = NULL;
-  stream.next = NULL;
-  stream.close = NULL;
-  stream.item_size = 0;
+  stream.next = fa_file_stream_next;
+  stream.close = fa_file_stream_close;
+  stream.item_size = sizeof(FaBytes);
   stream.closed = false;
   return FaFaultable_Stream_Bytes_ok(stream);
 }

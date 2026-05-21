@@ -133,6 +133,12 @@ fn std_fs_walk_files_supports_effectful_map_and_globs() {
     "#;
 
     let build = support::build_source("fs-effect-map-globs", source);
+    let runtime_c =
+        fs::read_to_string(build.build_dir.join(".cache/runtime.c")).expect("read runtime");
+    assert!(
+        !runtime_c.contains("fa_parallel_map_worker_0"),
+        "effectful walk_files map should not use parallel map worker"
+    );
     let root = support::source_path("fs-effect-map-globs-root").with_file_name("glob-root");
     let nested = root.join("nested");
     fs::create_dir_all(&nested).expect("create nested");

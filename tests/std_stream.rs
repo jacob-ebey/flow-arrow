@@ -58,6 +58,41 @@ fn std_stream_copy_file_runs_without_bytes_materialization() {
 }
 
 #[test]
+fn std_stream_open_file_can_stream_contents_to_seq() {
+    let source = r#"
+        import std.bytes { concat_bytes }
+        import std.cli { Args, argv }
+        import std.fs { open_file }
+        import std.io { write_stdout }
+        import std.seq { head }
+        import std.stream as stream
+
+        program main(args: Args) -> exit_code: Faultable[Int] {
+            $args -> argv -> head -> $input_path
+            $input_path -> open_file -> stream.to_seq -> concat_bytes -> $contents
+            [$contents, "\n"] -> concat_bytes -> $output
+            $output -> write_stdout -> $exit_code
+        }
+    "#;
+
+    let build = support::build_source("stream-file-contents", source);
+    let input_path = support::source_path("stream-file-contents-input").with_file_name("input.txt");
+    fs::write(&input_path, b"streamed file contents").expect("write input");
+
+    let output = Command::new(&build.executable)
+        .arg(&input_path)
+        .output()
+        .expect("run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"streamed file contents\n");
+}
+
+#[test]
 fn std_stream_read_at_reads_a_slice_without_consuming_the_stream() {
     let source = r#"
         import std.bytes { concat_bytes }

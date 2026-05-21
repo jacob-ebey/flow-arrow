@@ -20,6 +20,7 @@ format_faults : Seq[Fault] -> Bytes
 ok            : V -> Faultable[V]
 expect        : Faultable[V] -> V
 collect       : Seq[Faultable[V]] -> Faultable[Seq[V]]
+collect       : Faultable[Seq[Faultable[V]]] -> Faultable[Seq[V]]
 ```
 
 ## Semantics
@@ -46,8 +47,9 @@ the fault diagnostic and exits non-zero.
 
 ### `collect`
 
-Converts `Seq[Faultable[V]]` into `Faultable[Seq[V]]`. The result is successful
-when every item is successful; otherwise the first fault is propagated.
+Converts `Seq[Faultable[V]]` into `Faultable[Seq[V]]`. If the input sequence is
+itself faultable, the outer fault is propagated first. The result is successful
+when every item is successful; otherwise the first item fault is propagated.
 
 ## Example
 
