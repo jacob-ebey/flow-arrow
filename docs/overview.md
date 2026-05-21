@@ -387,11 +387,13 @@ program main(args: Args) -> exit_code: Int {
 }
 ```
 
-Standard input, standard output, and standard error are accessed through
-explicit program-boundary nodes in `std.io`, not through `main`'s
-parameters or return value. These nodes are visible in the dependency
-graph and may only appear inside `program` bodies; reusable `node`
-declarations remain pure.
+Standard input, standard output, standard error, and file I/O are
+accessed through explicit boundary nodes such as `std.io` and `std.fs`,
+not through `main`'s parameters or return value. These nodes are visible
+in the dependency graph. A reusable `node` that calls a boundary node is
+effectful by composition, so it can be called from a program but cannot
+be used as a `map`, `filter`, `reduce`, or similar higher-order
+function.
 
 Runtime invalid states are **faults**, not exceptions and not ordinary
 control flow. Faults are reserved for unintended invalid states such as

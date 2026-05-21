@@ -1,6 +1,8 @@
 mod bytes;
 mod cli;
+mod cv;
 mod fault;
+mod fs;
 mod int;
 mod intrinsic;
 mod io;
@@ -13,6 +15,7 @@ mod tuple;
 const RUNTIME_C: &str = include_str!("stdlib/runtime.c");
 const VECTOR_FLOW: &str = include_str!("stdlib/source/vector.flow");
 const MATRIX_FLOW: &str = include_str!("stdlib/source/matrix.flow");
+const CV_FLOW: &str = include_str!("stdlib/source/cv.flow");
 const VECTOR_EXPORTS: &[&str] = &[
     "sum",
     "mean",
@@ -83,7 +86,16 @@ const MATRIX_EXPORTS: &[&str] = &[
     "outer",
     "gram",
 ];
-
+const CV_EXPORTS: &[&str] = &[
+    "normalize",
+    "grayscale",
+    "load",
+    "save",
+    "load_jpeg",
+    "save_jpeg",
+    "decode_jpeg",
+    "encode_jpeg",
+];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     Type,
@@ -134,6 +146,10 @@ pub const SYMBOLS: &[StdSymbol] = &[
     cli::ARGV,
     cli::FLAG_PRESENT,
     cli::FLAG_VALUE,
+    cv::DECODE_JPEG,
+    cv::ENCODE_JPEG,
+    fs::READ_FILE,
+    fs::WRITE_FILE,
     io::READ_STDIN,
     io::WRITE_STDOUT,
     io::WRITE_STDERR,
@@ -182,7 +198,9 @@ pub const SYMBOLS: &[StdSymbol] = &[
     seq::FLATTEN,
     seq::INNER_LENGTH,
     seq::SHIFT_RIGHT,
+    seq::SHIFT_LEFT,
     seq::HEAD,
+    seq::TAIL,
     tuple::FIRST,
     tuple::SECOND,
     tuple::SWAP,
@@ -193,6 +211,7 @@ pub fn emit_runtime_c(out: &mut String) {
         RUNTIME_C,
         cli::C,
         io::C,
+        fs::C,
         int::C,
         real::C,
         fault::C,
@@ -202,6 +221,11 @@ pub fn emit_runtime_c(out: &mut String) {
         out.push_str(part);
         out.push('\n');
     }
+}
+
+pub fn emit_cv_runtime_c(out: &mut String) {
+    out.push_str(cv::C);
+    out.push('\n');
 }
 
 pub fn module_symbols(module: &str) -> impl Iterator<Item = &'static StdSymbol> + '_ {
@@ -218,6 +242,7 @@ pub fn flow_source(module: &str) -> Option<&'static str> {
     match module {
         "std.vector" => Some(VECTOR_FLOW),
         "std.matrix" => Some(MATRIX_FLOW),
+        "std.cv" => Some(CV_FLOW),
         _ => None,
     }
 }
@@ -226,6 +251,7 @@ pub fn flow_exports(module: &str) -> Option<&'static [&'static str]> {
     match module {
         "std.vector" => Some(VECTOR_EXPORTS),
         "std.matrix" => Some(MATRIX_EXPORTS),
+        "std.cv" => Some(CV_EXPORTS),
         _ => None,
     }
 }
@@ -247,6 +273,9 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "inner_length"
             | "transpose"
             | "flatten"
+            | "shift_left"
+            | "shift_right"
+            | "tail"
             | "first"
             | "second"
             | "swap"

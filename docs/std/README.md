@@ -2,7 +2,7 @@
 
 The standard library is imported through the reserved `std` module
 root. Most stdlib declarations are pure nodes and types; boundary
-modules such as `std.io` expose explicit program-only I/O nodes.
+modules such as `std.io` and `std.fs` expose explicit I/O nodes.
 Importing any stdlib module never creates hidden ordering, hidden
 effects, or dynamic dispatch.
 
@@ -12,6 +12,8 @@ Initial modules:
 | --- | --- |
 | [`std.bytes`](./bytes.md) | Byte/text splitting, concatenation, joining |
 | [`std.cli`](./cli.md) | Command-line argument and flag helpers |
+| [`std.cv`](./cv.md) | JPEG decode/encode and normalized RGB image helpers |
+| [`std.fs`](./fs.md) | File byte I/O |
 | [`std.io`](./io.md) | Stdin/stdout/stderr boundary I/O |
 | [`std.real`](./real.md) | `Real` parsing and formatting |
 | [`std.int`](./int.md) | `Int` parsing and formatting |

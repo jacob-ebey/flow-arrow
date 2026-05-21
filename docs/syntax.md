@@ -146,7 +146,7 @@ another `node` or `program` body.
 A `program_decl` has identical syntax to a `node_decl`; the difference
 is semantic: the canonical command-line entry point is
 `program main(args: Args) -> exit_code: Int`, with stdin/stdout/stderr
-handled by explicit `std.io` boundary nodes inside the program body
+handled by explicit `std.io` boundary nodes or effectful wrapper nodes
 (see `overview.md` §12).
 
 ```ebnf

@@ -93,6 +93,7 @@ impl<'a> Checker<'a> {
         checker.import_intrinsics()?;
         checker.collect_imports()?;
         checker.collect_callables()?;
+        checker.infer_effects();
         Ok(checker)
     }
 
@@ -232,6 +233,57 @@ impl<'a> Checker<'a> {
             self.insert_symbol(&callable.name, info)?;
         }
         Ok(())
+    }
+
+    fn infer_effects(&mut self) {
+        loop {
+            let mut changed = false;
+            for decl in &self.module.declarations {
+                let (Decl::Node(callable) | Decl::Program(callable)) = decl else {
+                    continue;
+                };
+                if self
+                    .symbols
+                    .get(&callable.name)
+                    .map(|info| info.effect == Effect::Io)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                if self.callable_uses_io(callable) {
+                    if let Some(info) = self.symbols.get_mut(&callable.name) {
+                        info.effect = Effect::Io;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    fn callable_uses_io(&self, callable: &Callable) -> bool {
+        callable.chains.iter().any(|chain| {
+            chain.stages.iter().any(|stage| match stage {
+                Stage::Endpoint(Endpoint::Name(name))
+                | Stage::Map(name)
+                | Stage::Filter(name)
+                | Stage::Reduce { op: name, .. }
+                | Stage::Scan { op: name, .. } => self.symbol_effect(name) == Effect::Io,
+                Stage::FaultMap { node, .. } | Stage::Repeat { node, .. } => {
+                    self.symbol_effect(node) == Effect::Io
+                }
+                Stage::Endpoint(_) => false,
+            })
+        })
+    }
+
+    fn symbol_effect(&self, name: &str) -> Effect {
+        self.symbols
+            .get(name)
+            .map(|info| info.effect)
+            .unwrap_or(Effect::Pure)
     }
 
     fn insert_symbol(&mut self, name: &str, info: CallableInfo) -> Result<(), String> {
@@ -455,8 +507,8 @@ impl<'a> Checker<'a> {
 
     fn apply_node(
         &self,
-        callable: &Callable,
-        context: CallableKind,
+        _callable: &Callable,
+        _context: CallableKind,
         name: &str,
         input: &Type,
         as_function: bool,
@@ -468,13 +520,10 @@ impl<'a> Checker<'a> {
         if node.kind == CallableKind::Program {
             return Err(format!("program `{name}` cannot be called from a graph"));
         }
-        if context == CallableKind::Node && node.effect == Effect::Io {
-            return Err(format!(
-                "`{}` cannot use effectful stdlib node `{name}` outside a program",
-                callable.name
-            ));
-        }
         if as_function && !self.supports_higher_order_call(node) {
+            return Err(format!("`{name}` cannot be used as a map/filter function"));
+        }
+        if as_function && node.effect != Effect::Pure {
             return Err(format!("`{name}` cannot be used as a map/filter function"));
         }
         if !as_function && node.runtime == RuntimeSupport::ReduceOnly {

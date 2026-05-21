@@ -1,0 +1,104 @@
+import std.bytes { bytes_to_codes, byte_length, codes_to_bytes, strip_prefix }
+import std.fs { read_file, write_file }
+import std.math { add, div }
+import std.tuple { first, second }
+import std.cv.native {
+    decode_jpeg as _decode_jpeg_native,
+    encode_jpeg as _encode_jpeg_native,
+}
+
+node _png_signature(unit: ()) -> signature: Bytes {
+    [137, 80, 78, 71, 13, 10, 26, 10] -> codes_to_bytes -> $signature
+}
+
+node _jpeg_signature(unit: ()) -> signature: Bytes {
+    [255, 216, 255] -> codes_to_bytes -> $signature
+}
+
+node _require_prefix(inputs: (Bytes,Bytes)) -> image: Faultable[Bytes] {
+    $inputs -> first -> $bytes
+    $inputs -> second -> $signature
+    ($bytes, $signature) -> strip_prefix -> $checked
+    ($checked, $bytes) -> second -> $image
+}
+
+node _gray_code_to_rgb_pixel(code: Int) -> pixel: (Int,(Int,Int)) {
+    ($code, ($code, $code)) -> $pixel
+}
+
+node _rgb_pixel_to_gray_code(pixel: (Int,(Int,Int))) -> code: Int {
+    $pixel -> first -> $red
+    $pixel -> second -> $green_blue
+    $green_blue -> first -> $green
+    $green_blue -> second -> $blue
+    ($red, $green) -> add -> $red_green
+    ($red_green, $blue) -> add -> $total
+    ($total, 3) -> div -> $code
+}
+
+node _rgb_pixel_to_gray_pixel(pixel: (Int,(Int,Int))) -> out: (Int,(Int,Int)) {
+    $pixel -> _rgb_pixel_to_gray_code -> _gray_code_to_rgb_pixel -> $out
+}
+
+node normalize(bytes: Bytes) -> image: ((Int,Int),Seq[(Int,(Int,Int))]) {
+    $bytes -> byte_length -> $width
+    $bytes -> bytes_to_codes -> map _gray_code_to_rgb_pixel -> $pixels
+    (($width, 1), $pixels) -> $image
+}
+
+node _image_to_bytes(image: ((Int,Int),Seq[(Int,(Int,Int))])) -> bytes: Bytes {
+    $image -> second -> map _rgb_pixel_to_gray_code -> codes_to_bytes -> $bytes
+}
+
+node grayscale(image: ((Int,Int),Seq[(Int,(Int,Int))])) -> out: ((Int,Int),Seq[(Int,(Int,Int))]) {
+    $image -> first -> $shape
+    $image -> second -> map _rgb_pixel_to_gray_pixel -> $pixels
+    ($shape, $pixels) -> $out
+}
+
+node decode_png(bytes: Bytes) -> image: Faultable[((Int,Int),Seq[(Int,(Int,Int))])] {
+    () -> _png_signature -> $signature
+    ($bytes, $signature) -> _require_prefix -> normalize -> $image
+}
+
+node decode_jpeg(bytes: Bytes) -> image: Faultable[((Int,Int),Seq[(Int,(Int,Int))])] {
+    $bytes -> _decode_jpeg_native -> $image
+}
+
+node encode_png(image: ((Int,Int),Seq[(Int,(Int,Int))])) -> encoded: Faultable[Bytes] {
+    $image -> _image_to_bytes -> $bytes
+    () -> _png_signature -> $signature
+    ($bytes, $signature) -> _require_prefix -> $encoded
+}
+
+node encode_jpeg(image: ((Int,Int),Seq[(Int,(Int,Int))])) -> encoded: Faultable[Bytes] {
+    $image -> _encode_jpeg_native -> $encoded
+}
+
+node load(path: Bytes) -> image: Faultable[((Int,Int),Seq[(Int,(Int,Int))])] {
+    $path -> load_jpeg -> $image
+}
+
+node save(inputs: (Bytes,((Int,Int),Seq[(Int,(Int,Int))]))) -> status: Faultable[Int] {
+    $inputs -> save_jpeg -> $status
+}
+
+node load_png(path: Bytes) -> image: Faultable[((Int,Int),Seq[(Int,(Int,Int))])] {
+    $path -> read_file -> decode_png -> $image
+}
+
+node load_jpeg(path: Bytes) -> image: Faultable[((Int,Int),Seq[(Int,(Int,Int))])] {
+    $path -> read_file -> decode_jpeg -> $image
+}
+
+node save_png(inputs: (Bytes,((Int,Int),Seq[(Int,(Int,Int))]))) -> status: Faultable[Int] {
+    $inputs -> first -> $path
+    $inputs -> second -> encode_png -> $encoded
+    ($path, $encoded) -> write_file -> $status
+}
+
+node save_jpeg(inputs: (Bytes,((Int,Int),Seq[(Int,(Int,Int))]))) -> status: Faultable[Int] {
+    $inputs -> first -> $path
+    $inputs -> second -> encode_jpeg -> $encoded
+    ($path, $encoded) -> write_file -> $status
+}

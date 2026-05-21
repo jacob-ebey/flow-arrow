@@ -68,19 +68,19 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
 
     fs::write(&llvm_path, llvm)
         .map_err(|error| format!("failed to write `{}`: {error}", llvm_path.display()))?;
-    fs::write(&runtime_path, runtime_c)
+    fs::write(&runtime_path, &runtime_c)
         .map_err(|error| format!("failed to write `{}`: {error}", runtime_path.display()))?;
 
-    let output = Command::new("clang")
-        .arg("-O3")
-        .arg(&llvm_path)
-        .arg(&runtime_path)
-        .arg("-o")
-        .arg(&executable)
-        .output()
-        .map_err(|error| {
-            "failed to invoke clang for LLVM backend: ".to_string() + &error.to_string()
-        })?;
+    let mut clang = Command::new("clang");
+    clang.arg("-O3").arg(&llvm_path).arg(&runtime_path);
+    if runtime_c.contains("jpeglib.h") {
+        for flag in jpeg_compiler_flags()? {
+            clang.arg(flag);
+        }
+    }
+    let output = clang.arg("-o").arg(&executable).output().map_err(|error| {
+        "failed to invoke clang for LLVM backend: ".to_string() + &error.to_string()
+    })?;
     if !output.status.success() {
         return Err(format!(
             "LLVM backend failed:\n{}{}",
@@ -160,6 +160,33 @@ fn build_hash(source: &str, runtime_c: &str) -> u64 {
         hash = hash.wrapping_mul(FNV_PRIME);
     }
     hash
+}
+
+fn jpeg_compiler_flags() -> Result<Vec<String>, String> {
+    let output = Command::new("pkg-config")
+        .args(["--libs", "--cflags", "libjpeg"])
+        .output()
+        .map_err(|error| format!("failed to invoke pkg-config for libjpeg: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "std.cv JPEG support requires libjpeg development headers and libraries; pkg-config libjpeg failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let mut flags = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if cfg!(target_os = "macos") {
+        let rpaths = flags
+            .iter()
+            .filter_map(|flag| flag.strip_prefix("-L"))
+            .map(|path| format!("-Wl,-rpath,{path}"))
+            .collect::<Vec<_>>();
+        flags.extend(rpaths);
+    }
+    Ok(flags)
 }
 
 #[cfg(test)]

@@ -14,6 +14,8 @@ import std.int { parse_int, format_int }
 import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, min, max }
 import std.predicates { not_empty, is_empty, and, or, xor, not, all, any }
 import std.fault { Fault, has_faults, format_faults }
+import std.seq { head, tail }
+import std.cv { load_jpeg, save_jpeg, grayscale }
 ```
 
 ```text
@@ -74,8 +76,8 @@ format_faults     : Seq[Fault] -> Bytes
 
 These are the stdlib primitives currently backed by the compiler and
 runtime. Native primitives live in the compiler's stdlib registry;
-source-backed modules such as `std.vector` and `std.matrix` live as
-bundled `.flow` modules with an explicit export list.
+source-backed modules such as `std.vector`, `std.matrix`, and `std.cv`
+live as bundled `.flow` modules with an explicit export list.
 
 Use `flowarrow typecheck <path.flow>` to validate imports and graph
 types without emitting LLVM or invoking the native backend.
@@ -91,3 +93,4 @@ Mermaid `flowchart TD` diagram.
 | `99-bottles/`                 | Pure string generation via `range_step` + `map` + concat reduce. |
 | `fibonacci/`                  | Stdin integer parsing and FlowArrow Fibonacci iteration. |
 | `json-parser/`                | Flat JSON array of numbers → JSON summary object, with bracket framing and fault routing. |
+| `grayscale-image/`            | Filepath arguments plus `std.cv` JPEG decode, grayscale conversion, and encode. |

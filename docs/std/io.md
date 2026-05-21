@@ -3,9 +3,9 @@
 Boundary I/O nodes for command-line programs.
 
 Unlike most standard-library nodes, `std.io` nodes are effect boundary
-nodes. They are still explicit graph vertices, but they may only appear
-inside a `program` body. Pure `node` declarations cannot read stdin,
-write stdout, write stderr, or observe process I/O.
+nodes. They are still explicit graph vertices. A reusable `node` that
+calls one becomes effectful by composition, and effectful nodes cannot be
+used as higher-order `map`, `filter`, `reduce`, or `scan` functions.
 
 ## Nodes
 
@@ -21,7 +21,6 @@ write_stderr : Bytes -> Int
 
 Reads all bytes from standard input.
 
-- Legal only in a `program` body.
 - The read is explicit in the dependency graph:
 
   ```flow
@@ -36,7 +35,6 @@ Reads all bytes from standard input.
 
 Writes bytes to standard output and produces an exit code.
 
-- Legal only in a `program` body.
 - Produces `0` on success.
 - A boundary fault produces a non-zero host-defined exit code.
 - The program's returned `Int` exit code should depend on this node if
@@ -46,7 +44,6 @@ Writes bytes to standard output and produces an exit code.
 
 Writes bytes to standard error and produces an exit code.
 
-- Legal only in a `program` body.
 - Produces `0` on success.
 - A boundary fault produces a non-zero host-defined exit code.
 

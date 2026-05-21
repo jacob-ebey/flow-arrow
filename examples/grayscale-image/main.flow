@@ -1,0 +1,21 @@
+# grayscale-image
+#
+# Reads an input file path and output file path from positional command-line
+# arguments, decodes it through std.cv, converts it to grayscale, and writes a
+# JPEG output image.
+#
+# Example:
+#
+#   $ flowarrow run main.flow input.jpg output.jpg
+
+import std.cli { Args, argv }
+import std.cv { load_jpeg, grayscale, save_jpeg }
+import std.seq { head, tail }
+
+program main(args: Args) -> exit_code: Faultable[Int] {
+    $args -> argv -> $paths
+    $paths -> head -> $input_path
+    $paths -> tail -> head -> $output_path
+    $input_path -> load_jpeg -> grayscale -> $gray
+    ($output_path, $gray) -> save_jpeg -> $exit_code
+}

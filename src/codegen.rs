@@ -114,6 +114,7 @@ impl<'a> TypedCodegen<'a> {
         let mut bodies = String::new();
         let mut names = self.callables.keys().cloned().collect::<Vec<_>>();
         names.sort();
+        let uses_jpeg = self.uses_jpeg_runtime();
 
         for name in &names {
             let sig = self
@@ -122,6 +123,11 @@ impl<'a> TypedCodegen<'a> {
                 .ok_or_else(|| format!("missing signature for `{name}`"))?;
             self.types.c_type(&sig.input);
             self.types.c_type(&sig.output);
+        }
+        if uses_jpeg {
+            let image = cv_image_ty();
+            self.types.c_type(&image);
+            self.types.c_type(&Ty::Faultable(Box::new(image)));
         }
 
         for decl in &self.module.declarations {
@@ -136,6 +142,9 @@ impl<'a> TypedCodegen<'a> {
         emit_preamble(&mut out);
         out.push_str(&self.types.emit_typedefs());
         out.push_str(&self.types.emit_helpers());
+        if uses_jpeg {
+            stdlib::emit_cv_runtime_c(&mut out);
+        }
         for name in &names {
             let sig = self.signatures.get(name).expect("signature");
             let input = self.types.c_type(&sig.input);
@@ -168,6 +177,12 @@ impl<'a> TypedCodegen<'a> {
             other => return Err(format!("program main output must be Int, found `{other}`")),
         }
         Ok(out)
+    }
+
+    fn uses_jpeg_runtime(&self) -> bool {
+        self.stdlib_names
+            .values()
+            .any(|name| matches!(name.as_str(), "decode_jpeg" | "encode_jpeg"))
     }
 
     fn collect_imports(&mut self) {
@@ -654,15 +669,31 @@ impl<'a> TypedCodegen<'a> {
             out.push_str(&format!("    {target}.is_fault = true;\n"));
             out.push_str(&format!("    {target}.fault = {input}.fault;\n"));
             out.push_str("  } else {\n");
-            out.push_str(&format!("    {target}.is_fault = false;\n"));
-            self.emit_assign_call_plain(
-                out,
-                &format!("{target}.value"),
-                output_inner,
-                name,
-                &format!("{input}.value"),
-                input_inner,
-            )?;
+            let plain_output = if let Some(signature) = self.signatures.get(name) {
+                signature.output.clone()
+            } else {
+                builtin_output_type_plain(&self.canonical_name(name), input_inner)?
+            };
+            if matches!(plain_output, Ty::Faultable(_)) {
+                self.emit_assign_call_plain(
+                    out,
+                    target,
+                    output_ty,
+                    name,
+                    &format!("{input}.value"),
+                    input_inner,
+                )?;
+            } else {
+                out.push_str(&format!("    {target}.is_fault = false;\n"));
+                self.emit_assign_call_plain(
+                    out,
+                    &format!("{target}.value"),
+                    output_inner,
+                    name,
+                    &format!("{input}.value"),
+                    input_inner,
+                )?;
+            }
             out.push_str("  }\n");
             return Ok(());
         }
@@ -1101,6 +1132,10 @@ impl<'a> TypedCodegen<'a> {
             "write_stderr" => {
                 out.push_str(&format!("  {target} = fa_write_bytes(stderr, {input});\n"))
             }
+            "read_file" => out.push_str(&format!("  {target} = fa_read_file({input});\n")),
+            "write_file" => out.push_str(&format!(
+                "  {target} = fa_write_file({input}.f0, {input}.f1);\n"
+            )),
             "split_lines" => out.push_str(&format!("  {target} = fa_split_lines({input});\n")),
             "trim" => out.push_str(&format!("  {target} = fa_trim({input});\n")),
             "split_on" => out.push_str(&format!(
@@ -1182,10 +1217,14 @@ impl<'a> TypedCodegen<'a> {
             "flatten" => self.emit_flatten(out, target, output_ty, input, input_ty)?,
             "group_by_id" => self.emit_group_by_id(out, target, output_ty, input, input_ty)?,
             "shift_right" => self.emit_shift_right(out, target, output_ty, input, input_ty)?,
+            "shift_left" => self.emit_shift_left(out, target, output_ty, input, input_ty)?,
             "head" => self.emit_head(out, target, output_ty, input, input_ty)?,
+            "tail" => self.emit_tail(out, target, output_ty, input, input_ty)?,
             "range_step" => out.push_str(&format!(
                 "  {target} = fa_range_step({input}.f0, {input}.f1, {input}.f2);\n"
             )),
+            "decode_jpeg" => out.push_str(&format!("  {target} = fa_cv_decode_jpeg({input});\n")),
+            "encode_jpeg" => out.push_str(&format!("  {target} = fa_cv_encode_jpeg({input});\n")),
             "bit_and" => out.push_str(&format!("  {target} = {input}.f0 & {input}.f1;\n")),
             "bit_or" => out.push_str(&format!("  {target} = {input}.f0 | {input}.f1;\n")),
             "bit_xor" => out.push_str(&format!("  {target} = {input}.f0 ^ {input}.f1;\n")),
@@ -1513,6 +1552,26 @@ impl<'a> TypedCodegen<'a> {
         Ok(())
     }
 
+    fn emit_shift_left(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        _input_ty: &Ty,
+    ) -> Result<(), String> {
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let i = self.next_temp();
+        out.push_str(&format!("  {target} = {new_fn}({input}.f0.count);\n"));
+        out.push_str(&format!("  if ({input}.f0.count > 0) {{\n"));
+        out.push_str(&format!("    for (size_t {i} = 0; {i} + 1 < {input}.f0.count; {i}++) {target}.items[{i}] = {input}.f0.items[{i} + 1];\n"));
+        out.push_str(&format!(
+            "    {target}.items[{input}.f0.count - 1] = {input}.f1;\n"
+        ));
+        out.push_str("  }\n");
+        Ok(())
+    }
+
     fn emit_head(
         &mut self,
         out: &mut String,
@@ -1522,6 +1581,25 @@ impl<'a> TypedCodegen<'a> {
         _input_ty: &Ty,
     ) -> Result<(), String> {
         out.push_str(&format!("  if ({input}.count == 0) {{ {target}.is_fault = true; {target}.fault = fa_fault_cstr(\"head: empty sequence\"); }} else {{ {target}.is_fault = false; {target}.value = {input}.items[0]; }}\n"));
+        Ok(())
+    }
+
+    fn emit_tail(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        output_ty: &Ty,
+        input: &str,
+        _input_ty: &Ty,
+    ) -> Result<(), String> {
+        let new_fn = self.types.seq_new_name(output_ty)?;
+        let i = self.next_temp();
+        out.push_str(&format!(
+            "  {target} = {new_fn}({input}.count == 0 ? 0 : {input}.count - 1);\n"
+        ));
+        out.push_str(&format!(
+            "  for (size_t {i} = 1; {i} < {input}.count; {i}++) {target}.items[{i} - 1] = {input}.items[{i}];\n"
+        ));
         Ok(())
     }
 
@@ -2151,6 +2229,8 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "argv" => Ok(Ty::Seq(Box::new(Ty::Bytes))),
         "read_stdin" => Ok(Ty::Bytes),
         "write_stdout" | "write_stderr" => Ok(Ty::Int),
+        "read_file" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
+        "write_file" => Ok(Ty::Faultable(Box::new(Ty::Int))),
         "split_lines" | "split_on" => Ok(Ty::Seq(Box::new(Ty::Bytes))),
         "trim" | "join_bytes" | "codes_to_bytes" | "format_faults" => Ok(Ty::Bytes),
         "concat_bytes" => match input {
@@ -2273,23 +2353,37 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             };
             Ok(Ty::Seq(Box::new(Ty::Seq(value.clone()))))
         }
-        "shift_right" => {
+        "shift_right" | "shift_left" => {
             let Ty::Tuple(items) = input else {
-                return Err("shift_right expected tuple input".to_string());
+                return Err(format!("{name} expected tuple input"));
             };
             items
                 .first()
                 .cloned()
-                .ok_or_else(|| "shift_right expected sequence input".to_string())
+                .ok_or_else(|| format!("{name} expected sequence input"))
         }
+        "tail" => Ok(input.clone()),
         "head" => {
             let Ty::Seq(item) = input else {
                 return Err("head expected sequence input".to_string());
             };
             Ok(Ty::Faultable(item.clone()))
         }
+        "decode_jpeg" => Ok(Ty::Faultable(Box::new(cv_image_ty()))),
+        "encode_jpeg" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         other => Err(format!("unsupported builtin `{other}`")),
     }
+}
+
+fn cv_image_ty() -> Ty {
+    Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), cv_pixel_seq_ty()])
+}
+
+fn cv_pixel_seq_ty() -> Ty {
+    Ty::Seq(Box::new(Ty::Tuple(vec![
+        Ty::Int,
+        Ty::Tuple(vec![Ty::Int, Ty::Int]),
+    ])))
 }
 
 fn sequence_item_type(left: &Ty, right: &Ty) -> Result<Ty, String> {
@@ -2496,15 +2590,16 @@ impl TypeParser {
         self.skip_ws();
         if self.eat('(') {
             let mut items = Vec::new();
-            if !self.eat(')') {
-                loop {
-                    items.push(self.parse()?);
-                    if self.eat(',') {
-                        continue;
-                    }
-                    self.expect(')')?;
-                    break;
+            if self.eat(')') {
+                return Ok(Ty::Unit);
+            }
+            loop {
+                items.push(self.parse()?);
+                if self.eat(',') {
+                    continue;
                 }
+                self.expect(')')?;
+                break;
             }
             return Ok(Ty::Tuple(items));
         }

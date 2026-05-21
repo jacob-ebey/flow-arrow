@@ -16,4 +16,6 @@ pub const TRANSPOSE: StdSymbol = node(MODULE, "transpose", "Seq[Seq[V]]", "Seq[S
 pub const FLATTEN: StdSymbol = node(MODULE, "flatten", "Seq[Seq[V]]", "Seq[V]");
 pub const INNER_LENGTH: StdSymbol = node(MODULE, "inner_length", "Seq[Seq[V]]", "Int");
 pub const SHIFT_RIGHT: StdSymbol = node(MODULE, "shift_right", "(Seq[V],V)", "Seq[V]");
+pub const SHIFT_LEFT: StdSymbol = node(MODULE, "shift_left", "(Seq[V],V)", "Seq[V]");
 pub const HEAD: StdSymbol = node(MODULE, "head", "Seq[V]", "Faultable[V]");
+pub const TAIL: StdSymbol = node(MODULE, "tail", "Seq[V]", "Seq[V]");
