@@ -8,14 +8,6 @@
 #   - explicit data-parallel work via `map score_job`
 #   - independent downstream reductions over the same mapped values
 #   - deterministic output without time, mutation, or thread identity
-#
-# Dataflow shape:
-#
-#   range_step(1, 17, 1) -> jobs
-#       jobs -> map score_job -> scores
-#           scores -> reduce add(identity: 0) -> total
-#           scores -> reduce max(identity: 0) -> peak
-#       (total, peak) -> render_summary -> write_stdout -> exit_code
 import std.bytes { concat_bytes }
 import std.cli { Args }
 import std.int { format_int }
