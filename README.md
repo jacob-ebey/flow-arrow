@@ -1,6 +1,6 @@
 # FlowArrow Developer Guide
 
-FlowArrow is a Rust compiler and runtime for a static dataflow language. This
+FlowArrow is a compiler and runtime for a static dataflow language. This
 repository contains the parser, typechecker, C runtime/codegen backend, standard
 library registry, examples, tests, docs, and VS Code syntax extension.
 
