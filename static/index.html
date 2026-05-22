@@ -479,36 +479,101 @@
       }
 
       @media (max-width: 780px) {
+        html,
+        body {
+          height: 100dvh;
+        }
+
         main {
-          width: min(100vw - 20px, 1180px);
-          padding: 12px 0;
-        }
-
-        header,
-        .toolbar {
-          align-items: stretch;
-          flex-direction: column;
-        }
-
-        .actions,
-        .tabs,
-        .target-toggle {
           width: 100%;
+          height: 100dvh;
+          padding: 8px;
         }
 
-        .tab,
-        .target-option {
-          flex: 1;
+        header {
+          align-items: center;
+          margin-bottom: 8px;
+        }
+
+        h1 {
+          font-size: 1.12rem;
         }
 
         .status {
-          width: 100%;
+          min-height: 30px;
+          padding: 0 8px;
+          font-size: 0.8rem;
           white-space: normal;
+        }
+
+        .toolbar {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          align-items: stretch;
+          gap: 8px;
+          padding: 8px;
+        }
+
+        .tabs {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          width: 100%;
+        }
+
+        .tab {
+          min-width: 0;
+          min-height: 38px;
+          padding: 0 6px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .actions {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          width: 100%;
+          gap: 8px;
+        }
+
+        .target-toggle {
+          display: grid;
+          grid-column: 1 / -1;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          width: 100%;
+        }
+
+        .target-option,
+        .workers-toggle,
+        .icon-button,
+        .compile {
+          min-width: 0;
+          min-height: 38px;
+          padding-right: 8px;
+          padding-left: 8px;
+          font-size: 0.85rem;
+        }
+
+        .target-option {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .workers-toggle,
+        .icon-button,
+        .compile {
+          justify-content: center;
+          width: 100%;
+        }
+
+        .compile {
+          grid-column: 1 / -1;
         }
 
         .workspace {
           grid-template-columns: 1fr;
-          grid-template-rows: minmax(0, 0.95fr) minmax(0, 1.05fr);
+          grid-template-rows: minmax(190px, 0.9fr) minmax(230px, 1.1fr);
           min-height: 0;
         }
 
@@ -523,12 +588,79 @@
           min-height: 0;
         }
 
+        .results[data-has-worker="true"][data-mode="javascript"] {
+          grid-template-rows: minmax(0, 0.7fr) minmax(0, 1fr) minmax(0, 1fr);
+        }
+
+        .results[data-has-worker="true"][data-mode="typescript"] {
+          grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+        }
+
+        .pane-title {
+          min-height: 32px;
+          padding: 0 10px;
+          font-size: 0.75rem;
+        }
+
+        textarea,
+        pre {
+          padding: 10px;
+          font-size: 0.78rem;
+          line-height: 1.45;
+        }
+
+        .editor-stack {
+          grid-template-columns: 36px minmax(0, 1fr);
+        }
+
+        .line-numbers {
+          padding: 10px 6px;
+          font-size: 0.78rem;
+          line-height: 1.45;
+        }
+
+        .source-highlight {
+          padding: 10px;
+        }
+
         .diagnostics {
           max-height: min(190px, 26vh);
         }
 
         .diagnostics pre {
           max-height: calc(min(190px, 26vh) - 38px);
+        }
+      }
+
+      @media (max-width: 420px) {
+        main {
+          padding: 6px;
+        }
+
+        header {
+          gap: 8px;
+        }
+
+        .toolbar {
+          gap: 6px;
+          padding: 6px;
+        }
+
+        .actions {
+          gap: 6px;
+        }
+
+        .tab,
+        .target-option,
+        .workers-toggle,
+        .icon-button,
+        .compile {
+          min-height: 36px;
+          font-size: 0.78rem;
+        }
+
+        .workspace {
+          grid-template-rows: minmax(170px, 0.85fr) minmax(220px, 1.15fr);
         }
       }
     </style>
