@@ -371,14 +371,19 @@ mod tests {
         let source = r#"
             import std.math { add, mul }
 
-            extern node score_batch(width: Int) -> scores: Seq[Int] {
+            extern node score_batch(width: Int) -> (scores: Seq[Int], weights: Seq[Int]) {
                 (1, $width, 1) -> range_step -> $jobs
                 $jobs -> map score_job -> $scores
+                $jobs -> map weight_job -> $weights
             }
 
             node score_job(n: Int) -> score: Int {
                 ($n, $n) -> mul -> $square
                 ($square, $n) -> add -> $score
+            }
+
+            node weight_job(n: Int) -> weight: Int {
+                ($n, 2) -> mul -> $weight
             }
         "#;
         let sequential = compile_typescript_library_source(source).expect("typescript");
@@ -396,7 +401,7 @@ mod tests {
         assert!(workers.contains("export async function score_batch"));
         assert!(workers.contains("export async function __flowarrow_setup_workers"));
         assert!(workers.contains("export async function __flowarrow_teardown_workers"));
-        assert!(workers.contains("const __flowarrow_worker_mappers"));
+        assert!(workers.contains("const __flowarrow_worker_mapper_ids"));
         assert!(workers.contains("faUseSharedNumericSequences = true"));
         assert!(workers.contains("function faScalarInputBuffer"));
         assert!(workers.contains("Promise<Array<bigint>>"));
@@ -404,6 +409,7 @@ mod tests {
         assert!(workers.contains("node:worker_threads"));
         assert!(workers.contains("new runtime.Worker(new URL(runtime.workerUrl)"));
         assert!(workers.contains("execArgv: []"));
+        assert!(!workers.contains("eval("));
         assert!(!workers.contains("eval: true"));
         assert!(workers.contains("faScalarWorkerPools"));
         assert!(workers.contains("SharedArrayBuffer"));
@@ -434,22 +440,31 @@ mod tests {
         let concurrency_source = r#"
             import std.math { add, max, mul }
 
-            extern node score_batch(width: Int) -> (total: Int, peak: Int) {
+            extern node score_batch(width: Int) -> (total_score: Int, peak_score: Int, total_weight: Int, peak_weight: Int) {
                 (1, $width, 1) -> range_step              -> $jobs
                 $jobs          -> map score_job           -> $scores
-                $scores        -> reduce add(identity: 0) -> $total
-                $scores        -> reduce max(identity: 0) -> $peak
+                $jobs          -> map weight_job          -> $weights
+                $scores        -> reduce add(identity: 0) -> $total_score
+                $scores        -> reduce max(identity: 0) -> $peak_score
+                $weights       -> reduce add(identity: 0) -> $total_weight
+                $weights       -> reduce max(identity: 0) -> $peak_weight
             }
 
             node score_job(n: Int) -> score: Int {
                 ($n, $n)      -> mul -> $square
                 ($square, $n) -> add -> $score
             }
+
+            node weight_job(n: Int) -> weight: Int {
+                ($n, 2)       -> mul -> $doubled
+                ($doubled, 1) -> add -> $weight
+            }
         "#;
         let llvm = compile_llvm_ir_library_source(concurrency_source).expect("llvm ir");
-        assert!(llvm.contains("define { i64, i64 } @flow_node_score_batch(i64 %input)"));
+        assert!(llvm.contains("define { i64, i64, i64, i64 } @flow_node_score_batch(i64 %input)"));
         assert!(llvm.contains("@flow_builtin_range_step"));
         assert!(llvm.contains("@flow_map_score_job"));
+        assert!(llvm.contains("@flow_map_weight_job"));
         assert!(llvm.contains("@flow_reduce_add"));
         assert!(llvm.contains("@flow_reduce_max"));
         assert!(llvm.contains(" mul i64 "));

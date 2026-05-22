@@ -144,8 +144,11 @@ pub struct TypeScriptArtifacts {
     pub files: Vec<GeneratedSourceFile>,
 }
 
-pub fn scalar_worker_module_source() -> &'static str {
-    typescript::scalar_worker_module_source()
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaScriptArtifacts {
+    pub declarations: String,
+    pub javascript: String,
+    pub files: Vec<GeneratedSourceFile>,
 }
 
 fn worker_module_path_from_specifier(specifier: Option<&str>) -> String {
@@ -168,7 +171,11 @@ pub fn emit_typescript_with_options(
         TypedCodegen::new(&expanded)?,
         typescript::TypeScriptEmitOptions {
             worker_concurrency: options.worker_concurrency,
-            worker_module_specifier: options.worker_module_specifier,
+            worker_module_specifier: Some(
+                options
+                    .worker_module_specifier
+                    .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
+            ),
         },
     )?;
     oxc_postprocess::emit_typescript(&source)
@@ -188,7 +195,7 @@ pub fn emit_typescript_artifacts_with_options(
     let worker_path = worker_module_path_from_specifier(options.worker_module_specifier.as_deref());
     let expanded = module_resolver::expand_stdlib_sources(module)?;
     let expanded = monomorphize::expand_module(&expanded)?;
-    let source = typescript::emit_module_with_options(
+    let emitted = typescript::emit_module_artifacts_with_options(
         TypedCodegen::new(&expanded)?,
         typescript::TypeScriptEmitOptions {
             worker_concurrency: options.worker_concurrency,
@@ -200,40 +207,56 @@ pub fn emit_typescript_artifacts_with_options(
         },
     )?;
     Ok(TypeScriptArtifacts {
-        source: oxc_postprocess::emit_typescript(&source)?,
+        source: oxc_postprocess::emit_typescript(&emitted.source)?,
         files: vec![GeneratedSourceFile {
             path: worker_path,
-            source: typescript::scalar_worker_module_source().to_string(),
+            source: typescript::scalar_worker_module_source(&emitted.worker_mappers),
         }],
     })
 }
 
-pub fn emit_javascript_artifacts(
-    module: &Module,
-) -> Result<oxc_postprocess::JavaScriptArtifacts, String> {
+pub fn emit_javascript_artifacts(module: &Module) -> Result<JavaScriptArtifacts, String> {
     let expanded = module_resolver::expand_stdlib_sources(module)?;
     let expanded = monomorphize::expand_module(&expanded)?;
     let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
-    oxc_postprocess::emit_javascript_artifacts(&source)
+    let artifacts = oxc_postprocess::emit_javascript_artifacts(&source)?;
+    Ok(JavaScriptArtifacts {
+        declarations: artifacts.declarations,
+        javascript: artifacts.javascript,
+        files: Vec::new(),
+    })
 }
 
 pub fn emit_javascript_artifacts_with_options(
     module: &Module,
     options: TypeScriptBackendOptions,
-) -> Result<oxc_postprocess::JavaScriptArtifacts, String> {
+) -> Result<JavaScriptArtifacts, String> {
     if !options.worker_concurrency {
         return emit_javascript_artifacts(module);
     }
+    let worker_path = worker_module_path_from_specifier(options.worker_module_specifier.as_deref());
     let expanded = module_resolver::expand_stdlib_sources(module)?;
     let expanded = monomorphize::expand_module(&expanded)?;
-    let source = typescript::emit_module_with_options(
+    let emitted = typescript::emit_module_artifacts_with_options(
         TypedCodegen::new(&expanded)?,
         typescript::TypeScriptEmitOptions {
             worker_concurrency: options.worker_concurrency,
-            worker_module_specifier: options.worker_module_specifier,
+            worker_module_specifier: Some(
+                options
+                    .worker_module_specifier
+                    .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
+            ),
         },
     )?;
-    oxc_postprocess::emit_javascript_artifacts(&source)
+    let artifacts = oxc_postprocess::emit_javascript_artifacts(&emitted.source)?;
+    Ok(JavaScriptArtifacts {
+        declarations: artifacts.declarations,
+        javascript: artifacts.javascript,
+        files: vec![GeneratedSourceFile {
+            path: worker_path,
+            source: typescript::scalar_worker_module_source(&emitted.worker_mappers),
+        }],
+    })
 }
 
 pub fn emit_llvm_ir_preview(module: &Module) -> Result<String, String> {
@@ -287,7 +310,7 @@ pub fn emit_typescript_artifacts_with_base_and_options(
     let worker_path = worker_module_path_from_specifier(options.worker_module_specifier.as_deref());
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let expanded = monomorphize::expand_module(&expanded)?;
-    let source = typescript::emit_module_with_options(
+    let emitted = typescript::emit_module_artifacts_with_options(
         TypedCodegen::new(&expanded)?,
         typescript::TypeScriptEmitOptions {
             worker_concurrency: options.worker_concurrency,
@@ -299,10 +322,10 @@ pub fn emit_typescript_artifacts_with_base_and_options(
         },
     )?;
     Ok(TypeScriptArtifacts {
-        source: oxc_postprocess::emit_typescript(&source)?,
+        source: oxc_postprocess::emit_typescript(&emitted.source)?,
         files: vec![GeneratedSourceFile {
             path: worker_path,
-            source: typescript::scalar_worker_module_source().to_string(),
+            source: typescript::scalar_worker_module_source(&emitted.worker_mappers),
         }],
     })
 }
@@ -311,11 +334,16 @@ pub fn emit_typescript_artifacts_with_base_and_options(
 pub fn emit_javascript_artifacts_with_base(
     module: &Module,
     base_dir: &Path,
-) -> Result<oxc_postprocess::JavaScriptArtifacts, String> {
+) -> Result<JavaScriptArtifacts, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let expanded = monomorphize::expand_module(&expanded)?;
     let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
-    oxc_postprocess::emit_javascript_artifacts(&source)
+    let artifacts = oxc_postprocess::emit_javascript_artifacts(&source)?;
+    Ok(JavaScriptArtifacts {
+        declarations: artifacts.declarations,
+        javascript: artifacts.javascript,
+        files: Vec::new(),
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -323,20 +351,29 @@ pub fn emit_javascript_artifacts_with_base_and_options(
     module: &Module,
     base_dir: &Path,
     options: TypeScriptBackendOptions,
-) -> Result<oxc_postprocess::JavaScriptArtifacts, String> {
+) -> Result<JavaScriptArtifacts, String> {
     if !options.worker_concurrency {
         return emit_javascript_artifacts_with_base(module, base_dir);
     }
+    let worker_path = worker_module_path_from_specifier(options.worker_module_specifier.as_deref());
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let expanded = monomorphize::expand_module(&expanded)?;
-    let source = typescript::emit_module_with_options(
+    let emitted = typescript::emit_module_artifacts_with_options(
         TypedCodegen::new(&expanded)?,
         typescript::TypeScriptEmitOptions {
             worker_concurrency: options.worker_concurrency,
             worker_module_specifier: options.worker_module_specifier,
         },
     )?;
-    oxc_postprocess::emit_javascript_artifacts(&source)
+    let artifacts = oxc_postprocess::emit_javascript_artifacts(&emitted.source)?;
+    Ok(JavaScriptArtifacts {
+        declarations: artifacts.declarations,
+        javascript: artifacts.javascript,
+        files: vec![GeneratedSourceFile {
+            path: worker_path,
+            source: typescript::scalar_worker_module_source(&emitted.worker_mappers),
+        }],
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -4,14 +4,22 @@
 # the benchmark can import both TypeScript builds and call the same API.
 import std.math { add, max, mul }
 
-extern node score_batch(width: Int) -> (total: Int, peak: Int) {
+extern node score_batch(width: Int) -> (total_score: Int, peak_score: Int, total_weight: Int, peak_weight: Int) {
     (1, $width, 1) -> range_step              -> $jobs
     $jobs          -> map score_job           -> $scores
-    $scores        -> reduce add(identity: 0) -> $total
-    $scores        -> reduce max(identity: 0) -> $peak
+    $jobs          -> map weight_job          -> $weights
+    $scores        -> reduce add(identity: 0) -> $total_score
+    $scores        -> reduce max(identity: 0) -> $peak_score
+    $weights       -> reduce add(identity: 0) -> $total_weight
+    $weights       -> reduce max(identity: 0) -> $peak_weight
 }
 
 node score_job(n: Int) -> score: Int {
     ($n, $n)      -> mul -> $square
     ($square, $n) -> add -> $score
+}
+
+node weight_job(n: Int) -> weight: Int {
+    ($n, 2)       -> mul -> $doubled
+    ($doubled, 1) -> add -> $weight
 }

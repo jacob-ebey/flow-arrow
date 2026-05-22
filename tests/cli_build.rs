@@ -340,11 +340,10 @@ fn build_javascript_with_worker_concurrency_and_run_node_workers() {
         .expect("read generated JavaScript");
     let declarations = fs::read_to_string("examples/concurrency/build/javascript/main.d.ts")
         .expect("read generated JavaScript declarations");
+    let worker = fs::read_to_string("examples/concurrency/build/javascript/main.worker.mjs")
+        .expect("read generated JavaScript worker");
     assert!(generated.contains("new runtime.Worker(runtime.workerUrl, { type: \"module\" })"));
-    assert!(
-        generated
-            .contains("new workerGlobals.Blob([script], { type: \"application/javascript\" })")
-    );
+    assert!(!generated.contains("new workerGlobals.Blob"));
     assert!(generated.contains("export async function __flowarrow_setup_workers"));
     assert!(generated.contains("export async function __flowarrow_teardown_workers"));
     assert!(generated.contains("const faScalarWorkerPools = new Map"));
@@ -354,6 +353,11 @@ fn build_javascript_with_worker_concurrency_and_run_node_workers() {
     assert!(generated.contains("new runtime.Worker(new URL(runtime.workerUrl)"));
     assert!(generated.contains("execArgv: []"));
     assert!(generated.contains("new URL(\"./main.worker.mjs\", import.meta.url).href"));
+    assert!(generated.contains("const __flowarrow_worker_mapper_ids"));
+    assert!(worker.contains("const faScalarWorkerMappers = new Map"));
+    assert!(worker.contains("const weight ="));
+    assert!(!worker.contains("eval("));
+    assert!(!generated.contains("eval("));
     assert!(!generated.contains("eval: true"));
     assert!(generated.contains("SharedArrayBuffer"));
     assert!(generated.contains("faParallelMapBigInt"));
@@ -419,7 +423,9 @@ fn build_javascript_with_worker_concurrency_and_run_node_workers() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("0\njobs: 16\ntotal score: 1632\npeak score: 272\n"));
+    assert!(stdout.contains(
+        "0\njobs: 16\ntotal score: 1632\npeak score: 272\ntotal weight: 288\npeak weight: 33\n"
+    ));
     assert!(stdout.contains("0\n0\njobs: 16"));
     assert!(
         stdout
@@ -490,6 +496,8 @@ fn typescript_concurrency_benchmark_example_builds_and_runs() {
     assert!(workers_ts.contains("new runtime.Worker(new URL(runtime.workerUrl)"));
     assert!(workers_ts.contains("execArgv: []"));
     assert!(workers_ts.contains("new URL(\"./bench.worker.mjs\", import.meta.url).href"));
+    assert!(workers_ts.contains("const __flowarrow_worker_mapper_ids"));
+    assert!(!workers_ts.contains("eval("));
     assert!(!workers_ts.contains("eval: true"));
     assert!(workers_ts.contains("faScalarWorkerPools"));
     assert!(workers_ts.contains("SharedArrayBuffer"));
@@ -510,7 +518,7 @@ fn typescript_concurrency_benchmark_example_builds_and_runs() {
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(stdout.contains("sequential"));
     assert!(stdout.contains("workers"));
-    assert!(stdout.contains("result=[333333330000, 99990000]"));
+    assert!(stdout.contains("result=[333333330000, 99990000, 99999999, 19999]"));
 }
 
 fn temp_flow_path(prefix: &str) -> std::path::PathBuf {

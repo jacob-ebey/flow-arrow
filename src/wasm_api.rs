@@ -166,10 +166,11 @@ fn compile_javascript_artifacts_for_static(
     Ok((
         artifacts.declarations,
         artifacts.javascript,
-        vec![(
-            "flowarrow.worker.mjs".to_string(),
-            codegen::scalar_worker_module_source().to_string(),
-        )],
+        artifacts
+            .files
+            .into_iter()
+            .map(|file| (file.path, file.source))
+            .collect(),
     ))
 }
 

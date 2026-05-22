@@ -1,11 +1,12 @@
 # concurrency
 #
-# Builds a sequence of independent jobs, scores every job with a pure node,
-# computes two aggregate views of the scores, and writes a deterministic
+# Builds a sequence of independent jobs, maps them through two pure nodes,
+# computes aggregate views of both mapped sequences, and writes a deterministic
 # summary to stdout.
 #
 # Demonstrates:
 #   - explicit data-parallel work via `map score_job`
+#   - a second independent data-parallel region via `map weight_job`
 #   - independent downstream reductions over the same mapped values
 #   - deterministic output without time, mutation, or thread identity
 import std.bytes { concat_bytes }
@@ -15,12 +16,15 @@ import std.io { write_stdout }
 import std.math { add, max, mul }
 
 program main(args: Args) -> exit_code: Int {
-    (1, 17, 1)      -> range_step              -> $jobs
-    $jobs           -> map score_job           -> $scores
-    $scores         -> reduce add(identity: 0) -> $total
-    $scores         -> reduce max(identity: 0) -> $peak
-    ($total, $peak) -> render_summary          -> $output
-    $output         -> write_stdout            -> $exit_code
+    (1, 17, 1)                                               -> range_step              -> $jobs
+    $jobs                                                    -> map score_job           -> $scores
+    $jobs                                                    -> map weight_job          -> $weights
+    $scores                                                  -> reduce add(identity: 0) -> $total_score
+    $scores                                                  -> reduce max(identity: 0) -> $peak_score
+    $weights                                                 -> reduce add(identity: 0) -> $total_weight
+    $weights                                                 -> reduce max(identity: 0) -> $peak_weight
+    ($total_score, $peak_score, $total_weight, $peak_weight) -> render_summary          -> $output
+    $output                                                  -> write_stdout            -> $exit_code
 }
 
 node score_job(n: Int) -> score: Int {
@@ -28,9 +32,16 @@ node score_job(n: Int) -> score: Int {
     ($square, $n) -> add -> $score
 }
 
-node render_summary(total: Int, peak: Int) -> output: Bytes {
-    $total -> format_int -> $total_bytes
-    $peak  -> format_int -> $peak_bytes
+node weight_job(n: Int) -> weight: Int {
+    ($n, 2)       -> mul -> $doubled
+    ($doubled, 1) -> add -> $weight
+}
 
-    ["jobs: 16\n", "total score: ", $total_bytes, "\n", "peak score: ", $peak_bytes, "\n"] -> concat_bytes -> $output
+node render_summary(total_score: Int, peak_score: Int, total_weight: Int, peak_weight: Int) -> output: Bytes {
+    $total_score  -> format_int -> $total_score_bytes
+    $peak_score   -> format_int -> $peak_score_bytes
+    $total_weight -> format_int -> $total_weight_bytes
+    $peak_weight  -> format_int -> $peak_weight_bytes
+
+    ["jobs: 16\n", "total score: ", $total_score_bytes, "\n", "peak score: ", $peak_score_bytes, "\n", "total weight: ", $total_weight_bytes, "\n", "peak weight: ", $peak_weight_bytes, "\n"] -> concat_bytes -> $output
 }

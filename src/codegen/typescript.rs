@@ -19,8 +19,15 @@ pub(super) fn emit_module_with_options(
     TypeScriptCodegen::new(codegen, options).emit()
 }
 
-pub(super) fn scalar_worker_module_source() -> &'static str {
-    TS_SCALAR_WORKER_MODULE
+pub(super) fn emit_module_artifacts_with_options(
+    codegen: TypedCodegen<'_>,
+    options: TypeScriptEmitOptions,
+) -> Result<TypeScriptEmitOutput, String> {
+    TypeScriptCodegen::new(codegen, options).emit_artifacts()
+}
+
+pub(super) fn scalar_worker_module_source(mappers: &[WorkerMapper]) -> String {
+    scalar_worker_module_source_from_mappers(mappers)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -41,8 +48,27 @@ struct TypeScriptCodegen<'a> {
     options: TypeScriptEmitOptions,
     temp: usize,
     used_idents: HashSet<String>,
-    worker_mapper_sources: Vec<String>,
-    seen_worker_mapper_sources: HashSet<String>,
+    worker_mappers: Vec<WorkerMapper>,
+    seen_worker_mapper_sources: HashMap<String, String>,
+}
+
+struct WorkerMapBatchItem {
+    source: Endpoint,
+    target: String,
+    output_ty: Ty,
+    worker_fn: &'static str,
+    mapper_id: String,
+}
+
+pub(super) struct TypeScriptEmitOutput {
+    pub source: String,
+    pub worker_mappers: Vec<WorkerMapper>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct WorkerMapper {
+    pub id: String,
+    pub source: String,
 }
 
 impl<'a> TypeScriptCodegen<'a> {
@@ -52,12 +78,16 @@ impl<'a> TypeScriptCodegen<'a> {
             options,
             temp: 0,
             used_idents: HashSet::new(),
-            worker_mapper_sources: Vec::new(),
-            seen_worker_mapper_sources: HashSet::new(),
+            worker_mappers: Vec::new(),
+            seen_worker_mapper_sources: HashMap::new(),
         }
     }
 
-    fn emit(mut self) -> Result<String, String> {
+    fn emit(self) -> Result<String, String> {
+        Ok(self.emit_artifacts()?.source)
+    }
+
+    fn emit_artifacts(mut self) -> Result<TypeScriptEmitOutput, String> {
         let mut out = String::new();
         out.push_str(TS_PRELUDE);
 
@@ -100,22 +130,25 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             }
         }
 
-        Ok(out)
+        Ok(TypeScriptEmitOutput {
+            source: out,
+            worker_mappers: self.worker_mappers,
+        })
     }
 
     fn emit_worker_lifecycle_exports(&self, out: &mut String) {
-        let mapper_sources = self
-            .worker_mapper_sources
+        let mapper_ids = self
+            .worker_mappers
             .iter()
-            .map(|source| ts_string(source))
+            .map(|mapper| ts_string(&mapper.id))
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!(
-            "\nconst __flowarrow_worker_mappers = [{mapper_sources}];\n\
+            "\nconst __flowarrow_worker_mapper_ids = [{mapper_ids}];\n\
 faUseSharedNumericSequences = true;\n\
 {}\n\
 export async function __flowarrow_setup_workers(): Promise<void> {{\n\
-  await faSetupScalarWorkerPools(__flowarrow_worker_mappers);\n\
+  await faSetupScalarWorkerPools(__flowarrow_worker_mapper_ids);\n\
 }}\n\
 \n\
 export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
@@ -199,8 +232,21 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             env.insert(port.name.clone(), ts_value(ts_ident(&port.name), ty));
         }
 
-        for chain in &callable.chains {
-            self.emit_chain(out, chain, &mut env, "  ")?;
+        let mut chain_index = 0;
+        while chain_index < callable.chains.len() {
+            let batch_len = self.worker_map_batch_len(&callable.chains[chain_index..], &env)?;
+            if batch_len > 1 {
+                self.emit_worker_map_batch(
+                    out,
+                    &callable.chains[chain_index..chain_index + batch_len],
+                    &mut env,
+                    "  ",
+                )?;
+                chain_index += batch_len;
+            } else {
+                self.emit_chain(out, &callable.chains[chain_index], &mut env, "  ")?;
+                chain_index += 1;
+            }
         }
 
         let result = self.emit_outputs(callable, &env)?;
@@ -323,6 +369,137 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                     value = self.emit_match(out, arms, value, env, indent, preferred)?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn worker_map_batch_len(
+        &mut self,
+        chains: &[Chain],
+        env: &HashMap<String, TsValue>,
+    ) -> Result<usize, String> {
+        let Some(first) = self.worker_map_batch_item(&chains[0], env)? else {
+            return Ok(0);
+        };
+        let source = first.source;
+        let mut len = 1;
+        for chain in chains.iter().skip(1) {
+            let Some(item) = self.worker_map_batch_item(chain, env)? else {
+                break;
+            };
+            if item.source != source {
+                break;
+            }
+            len += 1;
+        }
+        Ok(len)
+    }
+
+    fn worker_map_batch_item(
+        &mut self,
+        chain: &Chain,
+        env: &HashMap<String, TsValue>,
+    ) -> Result<Option<WorkerMapBatchItem>, String> {
+        let [
+            Stage::Map(name),
+            Stage::Bind(BindingTarget::Variable(target)),
+        ] = chain.stages.as_slice()
+        else {
+            return Ok(None);
+        };
+        let input = self.endpoint_type(&chain.source, env)?;
+        let Ty::Seq(item_ty) = input else {
+            return Ok(None);
+        };
+        let output_item_ty = self.codegen.call_output_type(name, &item_ty)?;
+        let output_ty = Ty::Seq(Box::new(output_item_ty.clone()));
+        let Some((worker_fn, mapper_id)) =
+            self.worker_map_call(name, item_ty.as_ref(), &output_item_ty)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(WorkerMapBatchItem {
+            source: chain.source.clone(),
+            target: target.clone(),
+            output_ty,
+            worker_fn,
+            mapper_id,
+        }))
+    }
+
+    fn emit_worker_map_batch(
+        &mut self,
+        out: &mut String,
+        chains: &[Chain],
+        env: &mut HashMap<String, TsValue>,
+        indent: &str,
+    ) -> Result<(), String> {
+        let items = chains
+            .iter()
+            .map(|chain| {
+                self.worker_map_batch_item(chain, env)?
+                    .ok_or_else(|| "expected worker map batch item".to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let mut source = self.emit_endpoint(out, &items[0].source, env, indent)?;
+        if !ts_value_code_is_stable(&source.code) {
+            let source_tmp = self.next_temp();
+            out.push_str(&format!(
+                "{indent}const {source_tmp}: {} = {};\n",
+                ts_type(&source.ty),
+                source.code
+            ));
+            source.code = source_tmp;
+        }
+        let temp_names = items
+            .iter()
+            .map(|item| self.next_temp_or_preferred(Some(&item.target)))
+            .collect::<Vec<_>>();
+        for (item, temp) in items.iter().zip(temp_names.iter()) {
+            out.push_str(&format!(
+                "{indent}let {temp}: {};\n",
+                ts_type(&item.output_ty)
+            ));
+        }
+        let worker_count = self.next_temp();
+        let per_map_worker_count = self.next_temp();
+        out.push_str(&format!(
+            "{indent}const {worker_count} = faDefaultScalarWorkerCount({}.length);\n",
+            source.code
+        ));
+        out.push_str(&format!(
+            "{indent}const {per_map_worker_count} = Math.max(1, Math.floor({worker_count} / {}));\n",
+            items.len()
+        ));
+        let batch = self.next_temp();
+        let calls = items
+            .iter()
+            .map(|item| {
+                format!(
+                    "{}({}, {}, {})",
+                    item.worker_fn,
+                    source.code,
+                    ts_string(&item.mapper_id),
+                    per_map_worker_count
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "{indent}const {batch} = await Promise.all([{calls}]);\n"
+        ));
+        for (index, ((item, temp), chain)) in items
+            .iter()
+            .zip(temp_names.iter())
+            .zip(chains.iter())
+            .enumerate()
+        {
+            out.push_str(&format!("{indent}{temp} = {batch}[{index}];\n"));
+            let value = ts_value(temp.clone(), item.output_ty.clone());
+            let Some(Stage::Bind(target)) = chain.stages.last() else {
+                return Err("expected worker map batch binding".to_string());
+            };
+            self.bind_target(out, target, value, env, indent)?;
         }
         Ok(())
     }
@@ -937,13 +1114,13 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             input.code.clone()
         };
         if !is_faultable
-            && let Some((worker_fn, mapper_source)) =
+            && let Some((worker_fn, mapper_id)) =
                 self.worker_map_call(name, item_ty.as_ref(), &output_item_ty)?
         {
             out.push_str(&format!(
                 "{indent}{tmp} = await {worker_fn}({}, {});\n",
                 source,
-                ts_string(&mapper_source)
+                ts_string(&mapper_id)
             ));
             return Ok(ts_value(tmp, output_ty));
         }
@@ -1574,10 +1751,22 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         let Some(mapper) = self.worker_mapper_source(name, input_ty, output_ty)? else {
             return Ok(None);
         };
-        if self.seen_worker_mapper_sources.insert(mapper.clone()) {
-            self.worker_mapper_sources.push(mapper.clone());
+        let mapper_id = self.worker_mapper_id(&mapper);
+        Ok(Some((worker_fn, mapper_id)))
+    }
+
+    fn worker_mapper_id(&mut self, source: &str) -> String {
+        if let Some(id) = self.seen_worker_mapper_sources.get(source) {
+            return id.clone();
         }
-        Ok(Some((worker_fn, mapper)))
+        let id = format!("m{}", self.worker_mappers.len());
+        self.worker_mappers.push(WorkerMapper {
+            id: id.clone(),
+            source: source.to_string(),
+        });
+        self.seen_worker_mapper_sources
+            .insert(source.to_string(), id.clone());
+        id
     }
 
     fn worker_mapper_source(
@@ -2033,12 +2222,13 @@ const TS_INTERNAL_VALUE_IDENTS: &[&str] = &[
     "faShiftRight",
     "__flowarrow_setup_workers",
     "__flowarrow_teardown_workers",
-    "__flowarrow_worker_mappers",
+    "__flowarrow_worker_mapper_ids",
     "faCreateScalarPooledWorker",
     "faCreateScalarWorkerPool",
     "faDefaultScalarWorkerCount",
     "faDispatchScalarWorkerPool",
     "faGrowScalarWorkerPool",
+    "faLoadNodeWorkerThreads",
     "faRejectScalarWorker",
     "faRetireScalarWorkerPool",
     "faRunScalarWorker",
@@ -2057,9 +2247,7 @@ const TS_INTERNAL_VALUE_IDENTS: &[&str] = &[
     "faZip",
     "faReadScalarBuffer",
     "faScalarBytes",
-    "faScalarMapper",
     "faScalarWorkerRuntime",
-    "faScalarWorkerScript",
     "faWriteScalarBuffer",
 ];
 
@@ -2226,48 +2414,38 @@ let faUseSharedNumericSequences = false;
 let faScalarWorkerModuleUrl: string | null = null;
 const faScalarWorkerPools = new Map<string, Promise<FaScalarWorkerPool | null>>();
 
-function faParallelMapBigInt(input: Array<bigint>, mapperSource: string): Promise<Array<bigint>> {
-  return faParallelMapScalar(input, mapperSource, "bigint", "bigint") as Promise<Array<bigint>>;
+function faParallelMapBigInt(input: Array<bigint>, mapperId: string, workerCount?: number): Promise<Array<bigint>> {
+  return faParallelMapScalar(input, mapperId, "bigint", "bigint", workerCount) as Promise<Array<bigint>>;
 }
 
-function faParallelMapNumber(input: Array<number>, mapperSource: string): Promise<Array<number>> {
-  return faParallelMapScalar(input, mapperSource, "number", "number") as Promise<Array<number>>;
+function faParallelMapNumber(input: Array<number>, mapperId: string, workerCount?: number): Promise<Array<number>> {
+  return faParallelMapScalar(input, mapperId, "number", "number", workerCount) as Promise<Array<number>>;
 }
 
-function faParallelMapBool(input: Array<boolean>, mapperSource: string): Promise<Array<boolean>> {
-  return faParallelMapScalar(input, mapperSource, "bool", "bool") as Promise<Array<boolean>>;
+function faParallelMapBool(input: Array<boolean>, mapperId: string, workerCount?: number): Promise<Array<boolean>> {
+  return faParallelMapScalar(input, mapperId, "bool", "bool", workerCount) as Promise<Array<boolean>>;
 }
 
 async function faParallelMapScalar<I, O>(
   input: Array<I>,
-  mapperSource: string,
+  mapperId: string,
   inputKind: FaScalarMapKind,
   outputKind: FaScalarMapKind,
+  requestedWorkerCount?: number,
 ): Promise<Array<O>> {
-  const mapper = faScalarMapper<I, O>(mapperSource);
-  if (input.length < 2 || typeof SharedArrayBuffer !== "function") {
-    return input.map(mapper);
-  }
+  if (typeof SharedArrayBuffer !== "function") throw new Error("worker concurrency requires SharedArrayBuffer");
+  if (input.length === 0) return [];
 
-  const workerCount = faDefaultScalarWorkerCount(input.length);
-  if (workerCount <= 1) return input.map(mapper);
+  const workerCount = requestedWorkerCount === undefined
+    ? faDefaultScalarWorkerCount(input.length)
+    : Math.max(1, Math.min(input.length, requestedWorkerCount));
+  if (workerCount <= 0) throw new Error("worker concurrency requires at least one worker");
 
   const inputBuffer = faScalarInputBuffer(input, inputKind);
   const outputBuffer = new SharedArrayBuffer(input.length * faScalarBytes(outputKind));
-  const pool = await faScalarWorkerPool(mapperSource, workerCount);
-  if (pool === null) return input.map(mapper);
-
-  try {
-    await faDispatchScalarWorkerPool(pool, workerCount, input.length, { inputBuffer, outputBuffer, inputKind, outputKind });
-    return faReadScalarBuffer<O>(outputBuffer, input.length, outputKind);
-  } catch {
-    await faRetireScalarWorkerPool(mapperSource, pool);
-    return input.map(mapper);
-  }
-}
-
-function faScalarMapper<I, O>(mapperSource: string): (input: I) => O {
-  return (0, eval)(`(${mapperSource})`) as (input: I) => O;
+  const pool = await faScalarWorkerPool(mapperId, workerCount);
+  await faDispatchScalarWorkerPool(pool, workerCount, input.length, { inputBuffer, outputBuffer, inputKind, outputKind });
+  return faReadScalarBuffer<O>(outputBuffer, input.length, outputKind);
 }
 
 function faDefaultScalarWorkerCount(inputLength?: number): number {
@@ -2276,48 +2454,49 @@ function faDefaultScalarWorkerCount(inputLength?: number): number {
   return inputLength === undefined ? workerCount : Math.min(inputLength, workerCount);
 }
 
-async function faSetupScalarWorkerPools(mapperSources: string[]): Promise<void> {
-  if (typeof SharedArrayBuffer !== "function") return;
+async function faSetupScalarWorkerPools(mapperIds: string[]): Promise<void> {
+  if (typeof SharedArrayBuffer !== "function") throw new Error("worker concurrency requires SharedArrayBuffer");
   const workerCount = faDefaultScalarWorkerCount();
-  await Promise.all(mapperSources.map((mapperSource) => faScalarWorkerPool(mapperSource, workerCount)));
+  const perMapperWorkerCount = Math.max(1, Math.floor(workerCount / Math.max(1, mapperIds.length)));
+  await Promise.all(mapperIds.map((mapperId) => faScalarWorkerPool(mapperId, perMapperWorkerCount)));
 }
 
 async function faTeardownScalarWorkerPools(): Promise<void> {
   const entries = Array.from(faScalarWorkerPools.entries());
   faScalarWorkerPools.clear();
-  await Promise.all(entries.map(async ([mapperSource, poolPromise]) => {
+  await Promise.all(entries.map(async ([mapperId, poolPromise]) => {
     const pool = await poolPromise;
-    if (pool !== null) await faRetireScalarWorkerPool(mapperSource, pool);
+    if (pool !== null) await faRetireScalarWorkerPool(mapperId, pool);
   }));
 }
 
-async function faScalarWorkerPool(mapperSource: string, workerCount: number): Promise<FaScalarWorkerPool | null> {
-  let poolPromise = faScalarWorkerPools.get(mapperSource);
+async function faScalarWorkerPool(mapperId: string, workerCount: number): Promise<FaScalarWorkerPool> {
+  let poolPromise = faScalarWorkerPools.get(mapperId);
   if (poolPromise === undefined) {
-    poolPromise = faCreateScalarWorkerPool(mapperSource);
-    faScalarWorkerPools.set(mapperSource, poolPromise);
+    poolPromise = faCreateScalarWorkerPool(mapperId);
+    faScalarWorkerPools.set(mapperId, poolPromise);
   }
 
   const pool = await poolPromise;
-  if (pool === null || pool.retired) return null;
+  if (pool === null) throw new Error("worker concurrency is unavailable");
+  if (pool.retired) throw new Error("worker pool is retired");
 
   try {
-    faGrowScalarWorkerPool(pool, mapperSource, workerCount);
+    faGrowScalarWorkerPool(pool, mapperId, workerCount);
     return pool;
   } catch {
-    await faRetireScalarWorkerPool(mapperSource, pool);
-    return null;
+    await faRetireScalarWorkerPool(mapperId, pool);
+    throw new Error(`failed to create worker pool for ${mapperId}`);
   }
 }
 
-async function faCreateScalarWorkerPool(mapperSource: string): Promise<FaScalarWorkerPool | null> {
-  const script = faScalarWorkerScript();
-  const runtime = await faScalarWorkerRuntime(script);
-  if (runtime === null) return null;
+async function faCreateScalarWorkerPool(mapperId: string): Promise<FaScalarWorkerPool | null> {
+  const runtime = await faScalarWorkerRuntime();
+  if (runtime === null) throw new Error("worker concurrency requires module worker support");
   return { runtime, workers: [], queue: Promise.resolve(), retired: false };
 }
 
-async function faScalarWorkerRuntime(script: string): Promise<FaScalarWorkerRuntime | null> {
+async function faScalarWorkerRuntime(): Promise<FaScalarWorkerRuntime | null> {
   if (faScalarWorkerModuleUrl !== null) {
     const workerGlobals = globalThis as typeof globalThis & {
       Worker?: new (url: string, options: { type: "module" }) => FaScalarWorker;
@@ -2339,9 +2518,7 @@ async function faScalarWorkerRuntime(script: string): Promise<FaScalarWorkerRunt
     }).process;
     if (typeof processLike?.versions?.node !== "string") return null;
     try {
-      const workerThreads = typeof processLike.getBuiltinModule === "function"
-        ? processLike.getBuiltinModule("node:worker_threads")
-        : await ((0, eval)("specifier => import(specifier)") as (specifier: string) => Promise<any>)("node:worker_threads");
+      const workerThreads = faLoadNodeWorkerThreads(processLike);
       return typeof workerThreads?.Worker === "function"
         ? { kind: "node", workerUrl: faScalarWorkerModuleUrl, Worker: workerThreads.Worker }
         : null;
@@ -2350,52 +2527,18 @@ async function faScalarWorkerRuntime(script: string): Promise<FaScalarWorkerRunt
     }
   }
 
-  const workerGlobals = globalThis as typeof globalThis & {
-    Worker?: new (url: string, options: { type: "module" }) => FaScalarWorker;
-    Blob?: new (parts: Array<string>, options: { type: string }) => unknown;
-    URL?: {
-      createObjectURL?: (blob: unknown) => string;
-      revokeObjectURL?: (url: string) => void;
-    };
-  };
-  if (
-    typeof workerGlobals.Worker === "function" &&
-    typeof workerGlobals.Blob === "function" &&
-    typeof workerGlobals.URL?.createObjectURL === "function" &&
-    typeof workerGlobals.URL.revokeObjectURL === "function"
-  ) {
-    const blob = new workerGlobals.Blob([script], { type: "application/javascript" });
-    return {
-      kind: "browser",
-      workerUrl: workerGlobals.URL.createObjectURL(blob),
-      Worker: workerGlobals.Worker,
-      revokeObjectURL: workerGlobals.URL.revokeObjectURL,
-    };
-  }
-
-  const processLike = (globalThis as typeof globalThis & {
-    process?: {
-      versions?: { node?: string };
-      getBuiltinModule?: (name: string) => any;
-    };
-  }).process;
-  if (typeof processLike?.versions?.node !== "string") return null;
-
-  try {
-    const workerThreads = typeof processLike.getBuiltinModule === "function"
-      ? processLike.getBuiltinModule("node:worker_threads")
-      : await ((0, eval)("specifier => import(specifier)") as (specifier: string) => Promise<any>)("node:worker_threads");
-    return typeof workerThreads?.Worker === "function"
-      ? { kind: "node", workerUrl: `data:text/javascript,${encodeURIComponent(script)}`, Worker: workerThreads.Worker }
-      : null;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
-function faGrowScalarWorkerPool(pool: FaScalarWorkerPool, mapperSource: string, workerCount: number): void {
+function faLoadNodeWorkerThreads(processLike: { getBuiltinModule?: (name: string) => any }): any {
+  return typeof processLike.getBuiltinModule === "function"
+    ? processLike.getBuiltinModule("node:worker_threads")
+    : null;
+}
+
+function faGrowScalarWorkerPool(pool: FaScalarWorkerPool, mapperId: string, workerCount: number): void {
   while (pool.workers.length < workerCount) {
-    pool.workers.push(faCreateScalarPooledWorker(pool.runtime, mapperSource));
+    pool.workers.push(faCreateScalarPooledWorker(pool.runtime, mapperId));
   }
 }
 
@@ -2423,7 +2566,7 @@ function faDispatchScalarWorkerPool(
   return pool.queue;
 }
 
-function faCreateScalarPooledWorker(runtime: FaScalarWorkerRuntime, mapperSource: string): FaScalarPooledWorker {
+function faCreateScalarPooledWorker(runtime: FaScalarWorkerRuntime, mapperId: string): FaScalarPooledWorker {
   let worker: FaScalarWorker;
   try {
     worker = runtime.kind === "browser"
@@ -2474,15 +2617,16 @@ function faCreateScalarPooledWorker(runtime: FaScalarWorkerRuntime, mapperSource
       faRejectScalarWorker(pooled, error);
     });
     if (worker.on) worker.on("exit", (code: number) => {
+      const wasAlive = pooled.alive;
       pooled.alive = false;
-      if (code !== 0) {
+      if (code !== 0 && wasAlive) {
         const error = new Error(`Worker stopped with exit code ${code}`);
         readyReject(error);
         faRejectScalarWorker(pooled, error);
       }
     });
   }
-  worker.postMessage({ type: "init", mapperSource });
+  worker.postMessage({ type: "init", mapperId });
   return pooled;
 }
 
@@ -2527,8 +2671,8 @@ function faRejectScalarWorker(pooled: FaScalarPooledWorker, error: unknown): voi
   if (reject) reject(error);
 }
 
-async function faRetireScalarWorkerPool(mapperSource: string, pool: FaScalarWorkerPool): Promise<void> {
-  faScalarWorkerPools.delete(mapperSource);
+async function faRetireScalarWorkerPool(mapperId: string, pool: FaScalarWorkerPool): Promise<void> {
+  faScalarWorkerPools.delete(mapperId);
   pool.retired = true;
   await pool.queue.catch(() => undefined);
   const terminations: Array<Promise<unknown>> = [];
@@ -2593,64 +2737,6 @@ function faReadScalarBuffer<T>(buffer: SharedArrayBuffer, length: number, kind: 
   if (kind === "bigint") return new BigInt64Array(buffer, 0, length) as unknown as Array<T>;
   if (kind === "number") return new Float64Array(buffer, 0, length) as unknown as Array<T>;
   return Array.from(new Uint8Array(buffer, 0, length), (value) => value !== 0) as Array<T>;
-}
-
-function faScalarWorkerScript(): string {
-  return `
-let nodeParentPort = null;
-try {
-  if (typeof process !== "undefined" && process.versions?.node) {
-    nodeParentPort = (await import("node:worker_threads")).parentPort;
-  }
-} catch {
-  nodeParentPort = null;
-}
-let mapper = null;
-const postDone = () => {
-  if (nodeParentPort) {
-    nodeParentPort.postMessage({ done: true });
-  } else {
-    self.postMessage({ done: true });
-  }
-};
-const handleMessage = (message) => {
-  if (message.type === "init") {
-    mapper = (0, eval)("(" + message.mapperSource + ")");
-    postReady();
-    return;
-  }
-  if (mapper === null) throw new Error("worker mapper has not been initialized");
-  const { inputBuffer, outputBuffer, start, end, inputKind, outputKind } = message;
-  const input = inputKind === "bigint"
-    ? new BigInt64Array(inputBuffer)
-    : inputKind === "number"
-      ? new Float64Array(inputBuffer)
-      : new Uint8Array(inputBuffer);
-  const output = outputKind === "bigint"
-    ? new BigInt64Array(outputBuffer)
-    : outputKind === "number"
-      ? new Float64Array(outputBuffer)
-      : new Uint8Array(outputBuffer);
-  for (let index = start; index < end; index++) {
-    const value = inputKind === "bool" ? input[index] !== 0 : input[index];
-    const mapped = mapper(value);
-    output[index] = outputKind === "bool" ? (mapped ? 1 : 0) : mapped;
-  }
-  postDone();
-};
-const postReady = () => {
-  if (nodeParentPort) {
-    nodeParentPort.postMessage({ type: "ready" });
-  } else {
-    self.postMessage({ type: "ready" });
-  }
-};
-if (nodeParentPort) {
-  nodeParentPort.on("message", handleMessage);
-} else {
-  self.onmessage = (event) => handleMessage(event.data);
-}
-`;
 }
 
 function faZip<A, B>(input: [f0: A[], f1: B[]]): Array<[f0: A, f1: B]> {
@@ -2754,37 +2840,48 @@ function faRangeStep(input: [f0: bigint, f1: bigint, f2: bigint]): bigint[] {
 
 "#;
 
-const TS_SCALAR_WORKER_MODULE: &str = r#"let nodeParentPort = null;
-try {
-  if (typeof process !== "undefined" && process.versions?.node) {
+fn scalar_worker_module_source_from_mappers(mappers: &[WorkerMapper]) -> String {
+    let mapper_entries = mappers
+        .iter()
+        .map(|mapper| format!("  [{}, {}]", ts_string(&mapper.id), mapper.source))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!(
+        r#"let nodeParentPort = null;
+try {{
+  if (typeof process !== "undefined" && process.versions && process.versions.node) {{
     nodeParentPort = (await import("node:worker_threads")).parentPort;
-  }
-} catch {
+  }}
+}} catch {{
   nodeParentPort = null;
-}
+}}
+const faScalarWorkerMappers = new Map([
+{mapper_entries}
+]);
 let mapper = null;
-const postDone = () => {
-  if (nodeParentPort) {
-    nodeParentPort.postMessage({ done: true });
-  } else {
-    self.postMessage({ done: true });
-  }
-};
-const postReady = () => {
-  if (nodeParentPort) {
-    nodeParentPort.postMessage({ type: "ready" });
-  } else {
-    self.postMessage({ type: "ready" });
-  }
-};
-const handleMessage = (message) => {
-  if (message.type === "init") {
-    mapper = (0, eval)("(" + message.mapperSource + ")");
+const postDone = () => {{
+  if (nodeParentPort) {{
+    nodeParentPort.postMessage({{ done: true }});
+  }} else {{
+    self.postMessage({{ done: true }});
+  }}
+}};
+const postReady = () => {{
+  if (nodeParentPort) {{
+    nodeParentPort.postMessage({{ type: "ready" }});
+  }} else {{
+    self.postMessage({{ type: "ready" }});
+  }}
+}};
+const handleMessage = (message) => {{
+  if (message.type === "init") {{
+    mapper = faScalarWorkerMappers.get(message.mapperId) ?? null;
+    if (mapper === null) throw new Error(`worker mapper not found: ${{message.mapperId}}`);
     postReady();
     return;
-  }
+  }}
   if (mapper === null) throw new Error("worker mapper has not been initialized");
-  const { inputBuffer, outputBuffer, start, end, inputKind, outputKind } = message;
+  const {{ inputBuffer, outputBuffer, start, end, inputKind, outputKind }} = message;
   const input = inputKind === "bigint"
     ? new BigInt64Array(inputBuffer)
     : inputKind === "number"
@@ -2795,16 +2892,18 @@ const handleMessage = (message) => {
     : outputKind === "number"
       ? new Float64Array(outputBuffer)
       : new Uint8Array(outputBuffer);
-  for (let index = start; index < end; index++) {
+  for (let index = start; index < end; index++) {{
     const value = inputKind === "bool" ? input[index] !== 0 : input[index];
     const mapped = mapper(value);
     output[index] = outputKind === "bool" ? (mapped ? 1 : 0) : mapped;
-  }
+  }}
   postDone();
-};
-if (nodeParentPort) {
+}};
+if (nodeParentPort) {{
   nodeParentPort.on("message", handleMessage);
-} else {
+}} else {{
   self.onmessage = (event) => handleMessage(event.data);
+}}
+"#
+    )
 }
-"#;

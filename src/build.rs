@@ -375,10 +375,10 @@ fn build_javascript(
         .map_err(|error| format!("failed to write `{}`: {error}", artifact.display()))?;
     fs::write(&declarations, artifacts.declarations)
         .map_err(|error| format!("failed to write `{}`: {error}", declarations.display()))?;
-    if options.worker_concurrency {
-        let worker = build_dir.join(format!("{executable_name}.worker.mjs"));
-        fs::write(&worker, codegen::scalar_worker_module_source())
-            .map_err(|error| format!("failed to write `{}`: {error}", worker.display()))?;
+    for file in artifacts.files {
+        let path = build_dir.join(file.path);
+        fs::write(&path, file.source)
+            .map_err(|error| format!("failed to write `{}`: {error}", path.display()))?;
     }
     Ok(BuildOutput {
         build_dir,
