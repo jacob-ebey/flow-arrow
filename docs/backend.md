@@ -187,6 +187,18 @@ runtime support.
 Only nodes declared with `extern node` are emitted as exported
 host-callable functions; ordinary nodes are generated as internal helpers.
 
+Worker-backed concurrency is opt-in for JavaScript and TypeScript builds:
+
+```text
+flowarrow build --target javascript --workers --crate-type cdylib examples/concurrency/main.flow
+flowarrow build --target typescript --workers --crate-type cdylib examples/concurrency/main.flow
+```
+
+When enabled, exported functions are emitted as `async` functions. Pure scalar
+`map` regions that can be encoded for browser workers use module workers created
+from Blob URLs and communicate through `SharedArrayBuffer` views; unsupported
+maps keep the sequential lowering.
+
 ### 2.5 WASM-hosted TypeScript compiler
 
 The compiler crate can also be built as a `wasm32-unknown-unknown`
@@ -211,6 +223,9 @@ dependency:
 - `flowarrow_result_ok() -> ok`
 - `flowarrow_result_ptr() -> ptr`
 - `flowarrow_result_len() -> len`
+
+For TypeScript and JavaScript exports, `mode` is a bit field: bit 0 selects
+library mode and bit 1 enables worker-backed concurrency.
 - `flowarrow_result_clear()`
 
 `mode` is `0` for a `program` source and `1` for a library source that

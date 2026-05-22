@@ -126,12 +126,53 @@ pub fn emit_typescript(module: &Module) -> Result<String, String> {
     oxc_postprocess::emit_typescript(&source)
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TypeScriptBackendOptions {
+    pub worker_concurrency: bool,
+}
+
+pub fn emit_typescript_with_options(
+    module: &Module,
+    options: TypeScriptBackendOptions,
+) -> Result<String, String> {
+    if !options.worker_concurrency {
+        return emit_typescript(module);
+    }
+    let expanded = module_resolver::expand_stdlib_sources(module)?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    let source = typescript::emit_module_with_options(
+        TypedCodegen::new(&expanded)?,
+        typescript::TypeScriptEmitOptions {
+            worker_concurrency: options.worker_concurrency,
+        },
+    )?;
+    oxc_postprocess::emit_typescript(&source)
+}
+
 pub fn emit_javascript_artifacts(
     module: &Module,
 ) -> Result<oxc_postprocess::JavaScriptArtifacts, String> {
     let expanded = module_resolver::expand_stdlib_sources(module)?;
     let expanded = monomorphize::expand_module(&expanded)?;
     let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
+    oxc_postprocess::emit_javascript_artifacts(&source)
+}
+
+pub fn emit_javascript_artifacts_with_options(
+    module: &Module,
+    options: TypeScriptBackendOptions,
+) -> Result<oxc_postprocess::JavaScriptArtifacts, String> {
+    if !options.worker_concurrency {
+        return emit_javascript_artifacts(module);
+    }
+    let expanded = module_resolver::expand_stdlib_sources(module)?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    let source = typescript::emit_module_with_options(
+        TypedCodegen::new(&expanded)?,
+        typescript::TypeScriptEmitOptions {
+            worker_concurrency: options.worker_concurrency,
+        },
+    )?;
     oxc_postprocess::emit_javascript_artifacts(&source)
 }
 
@@ -150,6 +191,26 @@ pub fn emit_typescript_with_base(module: &Module, base_dir: &Path) -> Result<Str
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub fn emit_typescript_with_base_and_options(
+    module: &Module,
+    base_dir: &Path,
+    options: TypeScriptBackendOptions,
+) -> Result<String, String> {
+    if !options.worker_concurrency {
+        return emit_typescript_with_base(module, base_dir);
+    }
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    let source = typescript::emit_module_with_options(
+        TypedCodegen::new(&expanded)?,
+        typescript::TypeScriptEmitOptions {
+            worker_concurrency: options.worker_concurrency,
+        },
+    )?;
+    oxc_postprocess::emit_typescript(&source)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn emit_javascript_artifacts_with_base(
     module: &Module,
     base_dir: &Path,
@@ -157,6 +218,26 @@ pub fn emit_javascript_artifacts_with_base(
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let expanded = monomorphize::expand_module(&expanded)?;
     let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
+    oxc_postprocess::emit_javascript_artifacts(&source)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn emit_javascript_artifacts_with_base_and_options(
+    module: &Module,
+    base_dir: &Path,
+    options: TypeScriptBackendOptions,
+) -> Result<oxc_postprocess::JavaScriptArtifacts, String> {
+    if !options.worker_concurrency {
+        return emit_javascript_artifacts_with_base(module, base_dir);
+    }
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    let source = typescript::emit_module_with_options(
+        TypedCodegen::new(&expanded)?,
+        typescript::TypeScriptEmitOptions {
+            worker_concurrency: options.worker_concurrency,
+        },
+    )?;
     oxc_postprocess::emit_javascript_artifacts(&source)
 }
 

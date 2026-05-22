@@ -9,7 +9,19 @@ use crate::ast::{
 use std::collections::{HashMap, HashSet};
 
 pub(super) fn emit_module(codegen: TypedCodegen<'_>) -> Result<String, String> {
-    TypeScriptCodegen::new(codegen).emit()
+    TypeScriptCodegen::new(codegen, TypeScriptEmitOptions::default()).emit()
+}
+
+pub(super) fn emit_module_with_options(
+    codegen: TypedCodegen<'_>,
+    options: TypeScriptEmitOptions,
+) -> Result<String, String> {
+    TypeScriptCodegen::new(codegen, options).emit()
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct TypeScriptEmitOptions {
+    pub worker_concurrency: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -21,14 +33,16 @@ struct TsValue {
 
 struct TypeScriptCodegen<'a> {
     codegen: TypedCodegen<'a>,
+    options: TypeScriptEmitOptions,
     temp: usize,
     used_idents: HashSet<String>,
 }
 
 impl<'a> TypeScriptCodegen<'a> {
-    fn new(codegen: TypedCodegen<'a>) -> Self {
+    fn new(codegen: TypedCodegen<'a>, options: TypeScriptEmitOptions) -> Self {
         Self {
             codegen,
+            options,
             temp: 0,
             used_idents: HashSet::new(),
         }
@@ -58,11 +72,19 @@ impl<'a> TypeScriptCodegen<'a> {
         }
 
         if has_program_main {
-            out.push_str(
-                "\nconst __flowarrow_process = (globalThis as any).process;\n\
+            if self.options.worker_concurrency {
+                out.push_str(
+                    "\nconst __flowarrow_process = (globalThis as any).process;\n\
+const __flowarrow_main_url = __flowarrow_process?.argv?.[1]\n  ? new URL(__flowarrow_process.argv[1], \"file:\").href\n  : \"\";\n\
+if (import.meta.url === __flowarrow_main_url) {\n  (async () => {\n    const __flowarrow_result = await main({ argv: __flowarrow_process.argv.slice(2) });\n    const __flowarrow_exit = faExitCode(__flowarrow_result);\n    __flowarrow_process.exit(Number(__flowarrow_exit));\n  })();\n}\n",
+                );
+            } else {
+                out.push_str(
+                    "\nconst __flowarrow_process = (globalThis as any).process;\n\
 const __flowarrow_main_url = __flowarrow_process?.argv?.[1]\n  ? new URL(__flowarrow_process.argv[1], \"file:\").href\n  : \"\";\n\
 if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = main({ argv: __flowarrow_process.argv.slice(2) });\n  const __flowarrow_exit = faExitCode(__flowarrow_result);\n  __flowarrow_process.exit(Number(__flowarrow_exit));\n}\n",
-            );
+                );
+            }
         }
 
         Ok(out)
@@ -119,9 +141,15 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             })
             .collect::<Result<Vec<_>, String>>()?
             .join(", ");
-        out.push_str(&format!(
-            "\n{export}function {fn_name}({params}): {return_ty} {{\n"
-        ));
+        if self.options.worker_concurrency {
+            out.push_str(&format!(
+                "\n{export}async function {fn_name}({params}): Promise<{return_ty}> {{\n"
+            ));
+        } else {
+            out.push_str(&format!(
+                "\n{export}function {fn_name}({params}): {return_ty} {{\n"
+            ));
+        }
 
         let mut env = HashMap::new();
         for port in &callable.inputs {
@@ -611,7 +639,12 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                 .get(name)
                 .map(|callable| callable.inputs.len())
                 .ok_or_else(|| format!("missing callable `{name}`"))?;
-            format!("{}({})", ts_ident(name), call_args(&input, arity)?)
+            let call = format!("{}({})", ts_ident(name), call_args(&input, arity)?);
+            if self.options.worker_concurrency {
+                format!("await {call}")
+            } else {
+                call
+            }
         } else {
             self.emit_builtin_expr(&self.codegen.canonical_name(name), &input, output_ty)?
         };
@@ -861,6 +894,17 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         } else {
             input.code.clone()
         };
+        if !is_faultable
+            && let Some((worker_fn, mapper_source)) =
+                self.worker_map_call(name, item_ty.as_ref(), &output_item_ty)?
+        {
+            out.push_str(&format!(
+                "{indent}{tmp} = await {worker_fn}({}, {});\n",
+                source,
+                ts_string(&mapper_source)
+            ));
+            return Ok(ts_value(tmp, output_ty));
+        }
         let seq_tmp = self.next_temp();
         let item = self.next_temp();
         let body_indent = if is_faultable {
@@ -1470,6 +1514,208 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         }
     }
 
+    fn worker_map_call(
+        &self,
+        name: &str,
+        input_ty: &Ty,
+        output_ty: &Ty,
+    ) -> Result<Option<(&'static str, String)>, String> {
+        if !self.options.worker_concurrency {
+            return Ok(None);
+        }
+        let worker_fn = match (input_ty, output_ty) {
+            (Ty::Int, Ty::Int) => "faParallelMapBigInt",
+            (Ty::Real, Ty::Real) => "faParallelMapNumber",
+            (Ty::Bool, Ty::Bool) => "faParallelMapBool",
+            _ => return Ok(None),
+        };
+        let Some(mapper) = self.worker_mapper_source(name, input_ty, output_ty)? else {
+            return Ok(None);
+        };
+        Ok(Some((worker_fn, mapper)))
+    }
+
+    fn worker_mapper_source(
+        &self,
+        name: &str,
+        input_ty: &Ty,
+        output_ty: &Ty,
+    ) -> Result<Option<String>, String> {
+        if let Some(expr) = self.worker_builtin_expr(
+            &self.codegen.canonical_name(name),
+            &ts_value("input", input_ty.clone()),
+            output_ty,
+        )? {
+            return Ok(Some(format!("function(input) {{ return {expr}; }}")));
+        }
+        let Some(callable) = self.codegen.callables.get(name) else {
+            return Ok(None);
+        };
+        if callable.inputs.len() != 1 || callable.outputs.len() != 1 {
+            return Ok(None);
+        }
+        if !self
+            .codegen
+            .is_parallel_safe_name(name, &mut HashSet::new())
+        {
+            return Ok(None);
+        }
+
+        let mut lines = vec!["function(input) {".to_string()];
+        let mut env = HashMap::new();
+        let input_name = callable.inputs[0].name.clone();
+        env.insert(input_name, ts_value("input", input_ty.clone()));
+
+        for chain in &callable.chains {
+            let mut value = match self.worker_endpoint_expr(&chain.source, &env)? {
+                Some(value) => value,
+                None => return Ok(None),
+            };
+            for (index, stage) in chain.stages.iter().enumerate() {
+                let is_last = index + 1 == chain.stages.len();
+                match stage {
+                    Stage::Endpoint(Endpoint::Name(name)) => {
+                        let output_ty = self.codegen.call_output_type(name, &value.ty)?;
+                        value = match self.worker_call_expr(name, &value, &output_ty)? {
+                            Some(value) => value,
+                            None => return Ok(None),
+                        };
+                    }
+                    Stage::Bind(target) if is_last => {
+                        if !self.worker_bind_target(&mut lines, target, value.clone(), &mut env)? {
+                            return Ok(None);
+                        }
+                    }
+                    _ => return Ok(None),
+                }
+            }
+        }
+
+        let output = callable.outputs[0].name.clone();
+        let Some(value) = env.get(&output) else {
+            return Ok(None);
+        };
+        if &value.ty != output_ty {
+            return Ok(None);
+        }
+        lines.push(format!("  return {};", value.code));
+        lines.push("}".to_string());
+        Ok(Some(lines.join("\n")))
+    }
+
+    fn worker_endpoint_expr(
+        &self,
+        endpoint: &Endpoint,
+        env: &HashMap<String, TsValue>,
+    ) -> Result<Option<TsValue>, String> {
+        match endpoint {
+            Endpoint::Variable(name) => Ok(env.get(name).cloned()),
+            Endpoint::Int(value) => Ok(Some(ts_value(format!("{value}n"), Ty::Int))),
+            Endpoint::Real(value) => Ok(Some(ts_value(format!("{value:.17e}"), Ty::Real))),
+            Endpoint::Bool(value) => Ok(Some(ts_value(value.to_string(), Ty::Bool))),
+            Endpoint::Tuple(items) => {
+                let values = items
+                    .iter()
+                    .map(|item| self.worker_endpoint_expr(item, env))
+                    .collect::<Result<Option<Vec<_>>, _>>()?;
+                Ok(values.map(|values| {
+                    let ty = Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect());
+                    ts_tuple_value(values, ty)
+                }))
+            }
+            Endpoint::Name(_)
+            | Endpoint::String(_)
+            | Endpoint::Unit
+            | Endpoint::Seq(_)
+            | Endpoint::Eval { .. } => Ok(None),
+        }
+    }
+
+    fn worker_call_expr(
+        &self,
+        name: &str,
+        input: &TsValue,
+        output_ty: &Ty,
+    ) -> Result<Option<TsValue>, String> {
+        let Some(expr) =
+            self.worker_builtin_expr(&self.codegen.canonical_name(name), input, output_ty)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(ts_value(expr, output_ty.clone())))
+    }
+
+    fn worker_builtin_expr(
+        &self,
+        name: &str,
+        input: &TsValue,
+        output_ty: &Ty,
+    ) -> Result<Option<String>, String> {
+        let expr = match name {
+            "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
+                ts_numeric_binary_expr(name, input, output_ty)
+            }
+            "neg" => format!("(-{})", input.code),
+            "abs" => format!("({0} < 0 ? -{0} : {0})", input.code),
+            "sqrt" => format!("Math.sqrt({})", input.code),
+            "exp" => format!("Math.exp({})", input.code),
+            "sin" => format!("Math.sin({})", input.code),
+            "cos" => format!("Math.cos({})", input.code),
+            "eq" => format!("({} === {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "lt" => format!("({} < {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "gt" => format!("({} > {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "le" => format!("({} <= {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "ge" => format!("({} >= {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "and" => format!("({} && {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "or" => format!("({} || {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "xor" => format!("({} !== {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "not" => format!("(!{})", input.code),
+            "bit_and" => format!("({} & {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "bit_or" => format!("({} | {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "bit_xor" => format!("({} ^ {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "bit_shl" => format!("({} << {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "bit_shr" => format!("({} >> {})", tuple_field(input, 0), tuple_field(input, 1)),
+            _ => return Ok(None),
+        };
+        Ok(Some(expr))
+    }
+
+    fn worker_bind_target(
+        &self,
+        lines: &mut Vec<String>,
+        target: &BindingTarget,
+        value: TsValue,
+        env: &mut HashMap<String, TsValue>,
+    ) -> Result<bool, String> {
+        match target {
+            BindingTarget::Discard => Ok(true),
+            BindingTarget::Variable(name) => {
+                let ident = ts_ident(name);
+                lines.push(format!("  const {ident} = {};", value.code));
+                env.insert(name.clone(), ts_value(ident, value.ty));
+                Ok(true)
+            }
+            BindingTarget::Tuple(targets) => {
+                let Ty::Tuple(items) = value.ty.clone() else {
+                    return Ok(false);
+                };
+                if items.len() != targets.len() {
+                    return Ok(false);
+                }
+                for (index, (target, ty)) in targets.iter().zip(items.iter()).enumerate() {
+                    if binding_target_is_discard(target) {
+                        continue;
+                    }
+                    let item = ts_value(tuple_field(&value, index), ty.clone());
+                    if !self.worker_bind_target(lines, target, item, env)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+        }
+    }
+
     fn next_temp(&mut self) -> String {
         loop {
             let tmp = format!("t{}", self.temp);
@@ -1729,6 +1975,10 @@ const TS_INTERNAL_VALUE_IDENTS: &[&str] = &[
     "faHead",
     "faLast",
     "faOk",
+    "faParallelMapBigInt",
+    "faParallelMapBool",
+    "faParallelMapNumber",
+    "faParallelMapScalar",
     "faParseInt",
     "faParseReal",
     "faRangeStep",
@@ -1743,6 +1993,11 @@ const TS_INTERNAL_VALUE_IDENTS: &[&str] = &[
     "faWriteStderr",
     "faWriteStdout",
     "faZip",
+    "faReadScalarBuffer",
+    "faScalarBytes",
+    "faScalarMapper",
+    "faScalarWorkerScript",
+    "faWriteScalarBuffer",
 ];
 
 const TS_PRELUDE: &str = r#"// Generated by FlowArrow. Do not edit by hand.
@@ -1869,6 +2124,136 @@ function faCollect<T>(items: Array<FaFaultable<T>>): FaFaultable<T[]> {
     out.push(item.value);
   }
   return faOk(out);
+}
+
+type FaScalarMapKind = "bigint" | "number" | "bool";
+
+function faParallelMapBigInt(input: Array<bigint>, mapperSource: string): Promise<Array<bigint>> {
+  return faParallelMapScalar(input, mapperSource, "bigint", "bigint") as Promise<Array<bigint>>;
+}
+
+function faParallelMapNumber(input: Array<number>, mapperSource: string): Promise<Array<number>> {
+  return faParallelMapScalar(input, mapperSource, "number", "number") as Promise<Array<number>>;
+}
+
+function faParallelMapBool(input: Array<boolean>, mapperSource: string): Promise<Array<boolean>> {
+  return faParallelMapScalar(input, mapperSource, "bool", "bool") as Promise<Array<boolean>>;
+}
+
+async function faParallelMapScalar<I, O>(
+  input: Array<I>,
+  mapperSource: string,
+  inputKind: FaScalarMapKind,
+  outputKind: FaScalarMapKind,
+): Promise<Array<O>> {
+  const mapper = faScalarMapper<I, O>(mapperSource);
+  const workerGlobals = globalThis as typeof globalThis & {
+    Worker?: typeof Worker;
+    Blob?: typeof Blob;
+    SharedArrayBuffer?: typeof SharedArrayBuffer;
+  };
+  if (
+    input.length < 2 ||
+    typeof workerGlobals.Worker !== "function" ||
+    typeof workerGlobals.Blob !== "function" ||
+    typeof workerGlobals.SharedArrayBuffer !== "function" ||
+    typeof URL === "undefined" ||
+    typeof URL.createObjectURL !== "function"
+  ) {
+    return input.map(mapper);
+  }
+
+  const hardwareConcurrency = (globalThis as typeof globalThis & { navigator?: Navigator }).navigator?.hardwareConcurrency ?? 4;
+  const workerCount = Math.min(input.length, Math.max(1, Math.min(8, hardwareConcurrency)));
+  if (workerCount <= 1) return input.map(mapper);
+
+  const inputBuffer = new SharedArrayBuffer(input.length * faScalarBytes(inputKind));
+  const outputBuffer = new SharedArrayBuffer(input.length * faScalarBytes(outputKind));
+  faWriteScalarBuffer(inputBuffer, input, inputKind);
+  const script = faScalarWorkerScript(mapperSource);
+  const blob = new Blob([script], { type: "application/javascript" });
+  const workerUrl = URL.createObjectURL(blob);
+  const workers: Worker[] = [];
+
+  try {
+    const jobs = Array.from({ length: workerCount }, (_, index) => {
+      const start = Math.floor((input.length * index) / workerCount);
+      const end = Math.floor((input.length * (index + 1)) / workerCount);
+      return new Promise<void>((resolve, reject) => {
+        let worker: Worker;
+        try {
+          worker = new Worker(workerUrl, { type: "module" });
+        } catch (e) {
+          console.error(`Cross-origin worker module failed to load: ${e}`);
+          reject(e);
+          return;
+        }
+        workers.push(worker);
+        worker.onmessage = () => resolve();
+        worker.onerror = (event) => reject(event.error ?? new Error(event.message));
+        worker.postMessage({ inputBuffer, outputBuffer, start, end, inputKind, outputKind });
+      });
+    });
+    await Promise.all(jobs);
+    return faReadScalarBuffer<O>(outputBuffer, input.length, outputKind);
+  } catch {
+    return input.map(mapper);
+  } finally {
+    for (const worker of workers) worker.terminate();
+    URL.revokeObjectURL(workerUrl);
+  }
+}
+
+function faScalarMapper<I, O>(mapperSource: string): (input: I) => O {
+  return (0, eval)(`(${mapperSource})`) as (input: I) => O;
+}
+
+function faScalarBytes(kind: FaScalarMapKind): number {
+  return kind === "bigint" ? BigInt64Array.BYTES_PER_ELEMENT : kind === "number" ? Float64Array.BYTES_PER_ELEMENT : Uint8Array.BYTES_PER_ELEMENT;
+}
+
+function faWriteScalarBuffer<T>(buffer: SharedArrayBuffer, input: Array<T>, kind: FaScalarMapKind): void {
+  if (kind === "bigint") {
+    new BigInt64Array(buffer).set(input as Array<bigint>);
+  } else if (kind === "number") {
+    new Float64Array(buffer).set(input as Array<number>);
+  } else {
+    const view = new Uint8Array(buffer);
+    input.forEach((value, index) => {
+      view[index] = value ? 1 : 0;
+    });
+  }
+}
+
+function faReadScalarBuffer<T>(buffer: SharedArrayBuffer, length: number, kind: FaScalarMapKind): Array<T> {
+  if (kind === "bigint") return Array.from(new BigInt64Array(buffer, 0, length)) as Array<T>;
+  if (kind === "number") return Array.from(new Float64Array(buffer, 0, length)) as Array<T>;
+  return Array.from(new Uint8Array(buffer, 0, length), (value) => value !== 0) as Array<T>;
+}
+
+function faScalarWorkerScript(mapperSource: string): string {
+  return `
+const mapper = (${mapperSource});
+self.onmessage = (event) => {
+  const { inputBuffer, outputBuffer, start, end, inputKind, outputKind } = event.data;
+  const input = inputKind === "bigint"
+    ? new BigInt64Array(inputBuffer)
+    : inputKind === "number"
+      ? new Float64Array(inputBuffer)
+      : new Uint8Array(inputBuffer);
+  const output = outputKind === "bigint"
+    ? new BigInt64Array(outputBuffer)
+    : outputKind === "number"
+      ? new Float64Array(outputBuffer)
+      : new Uint8Array(outputBuffer);
+  for (let index = start; index < end; index++) {
+    const value = inputKind === "bool" ? input[index] !== 0 : input[index];
+    const mapped = mapper(value);
+    output[index] = outputKind === "bool" ? (mapped ? 1 : 0) : mapped;
+  }
+  self.postMessage({ done: true });
+};
+`;
 }
 
 function faZip<A, B>(input: [f0: A[], f1: B[]]): Array<[f0: A, f1: B]> {

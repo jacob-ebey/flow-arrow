@@ -21,6 +21,7 @@ pub struct BuildOptions {
     pub compiler_flags: Vec<String>,
     pub linker_flags: Vec<String>,
     pub emit_llvm: Option<PathBuf>,
+    pub worker_concurrency: bool,
 }
 
 impl BuildOptions {
@@ -36,6 +37,7 @@ impl BuildOptions {
             compiler_flags: Vec::new(),
             linker_flags: Vec::new(),
             emit_llvm: None,
+            worker_concurrency: false,
         }
     }
 
@@ -54,6 +56,7 @@ impl Default for BuildOptions {
             compiler_flags: Vec::new(),
             linker_flags: Vec::new(),
             emit_llvm: None,
+            worker_concurrency: false,
         }
     }
 }
@@ -271,6 +274,16 @@ pub fn build_file_with_options(path: &Path, options: &BuildOptions) -> Result<Bu
         CrateType::Bin => typecheck::check_module_with_base(&module, base_dir)?,
         CrateType::Cdylib => typecheck::check_library_module_with_base(&module, base_dir)?,
     }
+    if options.worker_concurrency
+        && !matches!(
+            options.target,
+            BuildTarget::Typescript | BuildTarget::Javascript
+        )
+    {
+        return Err(
+            "`--workers` is only supported for TypeScript and JavaScript builds".to_string(),
+        );
+    }
 
     match &options.target {
         BuildTarget::Native(target) => build_native(path, base_dir, &module, target, options),
@@ -296,7 +309,13 @@ fn build_typescript(
         return Err("TypeScript builds do not support `--emit-llvm`".to_string());
     }
 
-    let source = codegen::emit_typescript_with_base(module, base_dir)?;
+    let source = codegen::emit_typescript_with_base_and_options(
+        module,
+        base_dir,
+        codegen::TypeScriptBackendOptions {
+            worker_concurrency: options.worker_concurrency,
+        },
+    )?;
     let target = BuildTarget::Typescript;
     let build_dir = build_dir(path, &target);
     fs::create_dir_all(&build_dir)
@@ -327,7 +346,13 @@ fn build_javascript(
         return Err("JavaScript builds do not support `--emit-llvm`".to_string());
     }
 
-    let artifacts = codegen::emit_javascript_artifacts_with_base(module, base_dir)?;
+    let artifacts = codegen::emit_javascript_artifacts_with_base_and_options(
+        module,
+        base_dir,
+        codegen::TypeScriptBackendOptions {
+            worker_concurrency: options.worker_concurrency,
+        },
+    )?;
     let target = BuildTarget::Javascript;
     let build_dir = build_dir(path, &target);
     fs::create_dir_all(&build_dir)

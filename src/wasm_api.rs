@@ -42,15 +42,14 @@ pub unsafe extern "C" fn flowarrow_compile_typescript(
             return 0;
         }
     };
-    let mode = match mode {
-        0 => TypeScriptCompileMode::Program,
-        1 => TypeScriptCompileMode::Library,
-        other => {
-            store_result(false, format!("unknown TypeScript compile mode `{other}`"));
+    let options = match typescript_options(mode) {
+        Ok(options) => options,
+        Err(error) => {
+            store_result(false, error);
             return 0;
         }
     };
-    match compile_typescript_source_with_options(source, TypeScriptCompileOptions { mode }) {
+    match compile_typescript_source_with_options(source, options) {
         Ok(output) => {
             store_result(true, output);
             1
@@ -75,18 +74,14 @@ pub unsafe extern "C" fn flowarrow_compile_javascript_artifacts(
             return 0;
         }
     };
-    let mode = match mode {
-        0 => TypeScriptCompileMode::Program,
-        1 => TypeScriptCompileMode::Library,
-        other => {
-            store_result(false, format!("unknown TypeScript compile mode `{other}`"));
+    let options = match typescript_options(mode) {
+        Ok(options) => options,
+        Err(error) => {
+            store_result(false, error);
             return 0;
         }
     };
-    match compile_javascript_artifacts_source_with_options(
-        source,
-        TypeScriptCompileOptions { mode },
-    ) {
+    match compile_javascript_artifacts_source_with_options(source, options) {
         Ok((declarations, javascript)) => {
             store_result(true, format!("{declarations}\0{javascript}"));
             1
@@ -119,7 +114,13 @@ pub unsafe extern "C" fn flowarrow_compile_llvm_ir(
             return 0;
         }
     };
-    match compile_llvm_ir_source_with_options(source, TypeScriptCompileOptions { mode }) {
+    match compile_llvm_ir_source_with_options(
+        source,
+        TypeScriptCompileOptions {
+            mode,
+            ..TypeScriptCompileOptions::default()
+        },
+    ) {
         Ok(output) => {
             store_result(true, output);
             1
@@ -129,6 +130,21 @@ pub unsafe extern "C" fn flowarrow_compile_llvm_ir(
             0
         }
     }
+}
+
+fn typescript_options(flags: u32) -> Result<TypeScriptCompileOptions, String> {
+    let mode = match flags & 1 {
+        0 => TypeScriptCompileMode::Program,
+        1 => TypeScriptCompileMode::Library,
+        _ => unreachable!(),
+    };
+    if flags & !0b11 != 0 {
+        return Err(format!("unknown TypeScript compile option flags `{flags}`"));
+    }
+    Ok(TypeScriptCompileOptions {
+        mode,
+        worker_concurrency: flags & 0b10 != 0,
+    })
 }
 
 #[unsafe(no_mangle)]

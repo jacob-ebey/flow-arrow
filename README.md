@@ -116,6 +116,8 @@ cargo bench
 scalar nodes, `typescript` emits generated TypeScript source, and
 `javascript` emits generated JavaScript plus TypeScript declarations from the
 TypeScript backend with OXC.
+Pass `--workers` with the JavaScript or TypeScript target to emit async,
+browser-worker-backed scalar map lowering where possible.
 
 Native outputs are written under the source file's local build directory:
 

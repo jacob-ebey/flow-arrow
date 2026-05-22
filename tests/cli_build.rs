@@ -315,6 +315,70 @@ fn build_javascript_program_with_core_stdlib_and_run_node() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "7");
 }
 
+#[test]
+fn build_javascript_with_worker_concurrency_and_run_node_fallback() {
+    let output = Command::new(flowarrow())
+        .args([
+            "build",
+            "--target",
+            "javascript",
+            "--crate-type",
+            "cdylib",
+            "--workers",
+            "examples/concurrency/main.flow",
+        ])
+        .output()
+        .expect("run flowarrow build");
+    assert!(
+        output.status.success(),
+        "flowarrow build failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let generated = fs::read_to_string("examples/concurrency/build/javascript/main.js")
+        .expect("read generated JavaScript");
+    let declarations = fs::read_to_string("examples/concurrency/build/javascript/main.d.ts")
+        .expect("read generated JavaScript declarations");
+    assert!(generated.contains("new Worker(workerUrl, { type: \"module\" })"));
+    assert!(generated.contains("new Blob([script], { type: \"application/javascript\" })"));
+    assert!(generated.contains("SharedArrayBuffer"));
+    assert!(generated.contains("faParallelMapBigInt"));
+    assert!(declarations.contains("export declare function main(args: FaArgs): Promise<bigint>"));
+
+    if Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipping JavaScript worker fallback test: node is not installed");
+        return;
+    }
+
+    let script = r#"
+        const fs = require("node:fs");
+        const source = fs.readFileSync("examples/concurrency/build/javascript/main.js", "utf8");
+        import("data:text/javascript," + encodeURIComponent(source)).then(async (mod) => {
+          let stdout = "";
+          globalThis.process = {
+            argv: [],
+            stdout: { write: (bytes) => { stdout += bytes; } },
+          };
+          const code = await mod.main({ argv: [] });
+          console.log(String(code));
+          console.log(stdout);
+        });
+    "#;
+    let output = Command::new("node")
+        .args(["--input-type=commonjs", "-e", script])
+        .output()
+        .expect("run node JavaScript worker fallback example");
+    assert!(
+        output.status.success(),
+        "node JavaScript worker fallback example failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("0\njobs: 16\ntotal score: 1632\npeak score: 272\n"));
+}
+
 fn temp_flow_path(prefix: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(

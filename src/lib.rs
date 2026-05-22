@@ -43,12 +43,14 @@ pub enum TypeScriptCompileMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeScriptCompileOptions {
     pub mode: TypeScriptCompileMode,
+    pub worker_concurrency: bool,
 }
 
 impl Default for TypeScriptCompileOptions {
     fn default() -> Self {
         Self {
             mode: TypeScriptCompileMode::Program,
+            worker_concurrency: false,
         }
     }
 }
@@ -62,6 +64,7 @@ pub fn compile_typescript_library_source(source: &str) -> Result<String, String>
         source,
         TypeScriptCompileOptions {
             mode: TypeScriptCompileMode::Library,
+            ..TypeScriptCompileOptions::default()
         },
     )
 }
@@ -75,6 +78,7 @@ pub fn compile_llvm_ir_library_source(source: &str) -> Result<String, String> {
         source,
         TypeScriptCompileOptions {
             mode: TypeScriptCompileMode::Library,
+            ..TypeScriptCompileOptions::default()
         },
     )
 }
@@ -91,7 +95,12 @@ pub fn compile_typescript_source_with_options(
         TypeScriptCompileMode::Library => typecheck::check_library_module(&module)
             .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
     }
-    codegen::emit_typescript(&module)
+    codegen::emit_typescript_with_options(
+        &module,
+        codegen::TypeScriptBackendOptions {
+            worker_concurrency: options.worker_concurrency,
+        },
+    )
 }
 
 pub fn compile_javascript_artifacts_source_with_options(
@@ -106,7 +115,12 @@ pub fn compile_javascript_artifacts_source_with_options(
         TypeScriptCompileMode::Library => typecheck::check_library_module(&module)
             .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
     }
-    let artifacts = codegen::emit_javascript_artifacts(&module)?;
+    let artifacts = codegen::emit_javascript_artifacts_with_options(
+        &module,
+        codegen::TypeScriptBackendOptions {
+            worker_concurrency: options.worker_concurrency,
+        },
+    )?;
     Ok((artifacts.declarations, artifacts.javascript))
 }
 
@@ -351,6 +365,40 @@ mod tests {
     }
 
     #[test]
+    fn typescript_worker_concurrency_is_opt_in() {
+        let source = r#"
+            import std.math { add, mul }
+
+            extern node score_batch(width: Int) -> scores: Seq[Int] {
+                (1, $width, 1) -> range_step -> $jobs
+                $jobs -> map score_job -> $scores
+            }
+
+            node score_job(n: Int) -> score: Int {
+                ($n, $n) -> mul -> $square
+                ($square, $n) -> add -> $score
+            }
+        "#;
+        let sequential = compile_typescript_library_source(source).expect("typescript");
+        assert!(!sequential.contains("new Worker"));
+        assert!(!sequential.contains("SharedArrayBuffer"));
+
+        let workers = compile_typescript_source_with_options(
+            source,
+            TypeScriptCompileOptions {
+                mode: TypeScriptCompileMode::Library,
+                worker_concurrency: true,
+            },
+        )
+        .expect("typescript workers");
+        assert!(workers.contains("export async function score_batch"));
+        assert!(workers.contains("Promise<Array<bigint>>"));
+        assert!(workers.contains("new Worker(workerUrl, { type: \"module\" })"));
+        assert!(workers.contains("SharedArrayBuffer"));
+        assert!(workers.contains("faParallelMapBigInt"));
+    }
+
+    #[test]
     fn compiles_llvm_ir_preview_in_memory() {
         let fib_source = r#"
             import std.math { add }
@@ -431,6 +479,7 @@ extern node demo(value: Int) -> out: Int {
             source,
             TypeScriptCompileOptions {
                 mode: TypeScriptCompileMode::Library,
+                ..TypeScriptCompileOptions::default()
             },
         )
         .expect_err("typecheck error");

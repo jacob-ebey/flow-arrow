@@ -179,6 +179,23 @@
         font-weight: 680;
       }
 
+      .workers-toggle {
+        display: inline-flex;
+        min-height: 34px;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--muted);
+        padding: 0 10px;
+        font: inherit;
+      }
+
+      .workers-toggle input {
+        margin: 0;
+      }
+
       button {
         cursor: pointer;
       }
@@ -524,6 +541,10 @@
               <button class="target-option" type="button" data-target="typescript" aria-pressed="false">TypeScript</button>
               <button class="target-option" type="button" data-target="llvm" aria-pressed="false">LLVM IR</button>
             </div>
+            <label class="workers-toggle">
+              <input id="workers" type="checkbox" />
+              Workers
+            </label>
             <button id="reset" class="icon-button" type="button" title="Reset example" aria-label="Reset example">
               Reset
             </button>
@@ -623,6 +644,7 @@ node score_job(n: Int) -> score: Int {
       const sourceOutputCode = document.querySelector("#source-output code");
       const sourceOutputTitle = document.querySelector("#source-output-title");
       const compileButton = document.querySelector("#compile");
+      const workersToggle = document.querySelector("#workers");
       const resetButton = document.querySelector("#reset");
       const diagnostics = document.querySelector("#diagnostics");
       const diagnosticsSummary = document.querySelector("#diagnostics-summary");
@@ -794,11 +816,14 @@ node score_job(n: Int) -> score: Int {
           }
 
           const ok =
-            target === "javascript"
-              ? wasm.flowarrow_compile_javascript_artifacts(ptr, bytes.length, 1)
-              : target === "llvm"
-                ? compileLlvm(ptr, bytes.length, 1)
-                : wasm.flowarrow_compile_typescript(ptr, bytes.length, 1);
+            (() => {
+              const options = 1 | (workersToggle.checked && target !== "llvm" ? 2 : 0);
+              return target === "javascript"
+                ? wasm.flowarrow_compile_javascript_artifacts(ptr, bytes.length, options)
+                : target === "llvm"
+                  ? compileLlvm(ptr, bytes.length, 1)
+                  : wasm.flowarrow_compile_typescript(ptr, bytes.length, options);
+            })();
           const result = readResult();
           if (!ok) {
             clearOutputs();
@@ -860,6 +885,7 @@ node score_job(n: Int) -> score: Int {
       }
 
       compileButton.addEventListener("click", compile);
+      workersToggle.addEventListener("change", compile);
       resetButton.addEventListener("click", () => {
         source.value = examples[currentExample].source;
         updateSourceHighlight();

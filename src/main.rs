@@ -63,6 +63,12 @@ fn run_cli() -> Result<u8, String> {
                             .ok_or_else(|| "--emit-llvm requires an output path".to_string())?;
                         options.emit_llvm = Some(PathBuf::from(out));
                     }
+                    "--workers" => {
+                        options.worker_concurrency = true;
+                    }
+                    "--no-workers" => {
+                        options.worker_concurrency = false;
+                    }
                     "--" => {
                         options.compiler_flags.extend(args);
                         break;
@@ -79,7 +85,7 @@ fn run_cli() -> Result<u8, String> {
                 }
             }
             let path = path.ok_or_else(|| {
-                "usage: flowarrow build [--target <target>] [--crate-type <bin|cdylib>] [-O0|-O1|-O2|-O3|-Os|-Oz] [--compiler-flag <flag>] [--linker-flag <flag>] [--emit-llvm <path.ll>] <path.flow> [-- <compiler flags...>]"
+                "usage: flowarrow build [--target <target>] [--crate-type <bin|cdylib>] [--workers] [-O0|-O1|-O2|-O3|-Os|-Oz] [--compiler-flag <flag>] [--linker-flag <flag>] [--emit-llvm <path.ll>] <path.flow> [-- <compiler flags...>]"
                     .to_string()
             })?;
             flowarrow::build_file_with_options(PathBuf::from(path).as_path(), &options)?;
