@@ -2,30 +2,51 @@ use crate::ast::*;
 use crate::module_resolver;
 use crate::monomorphize;
 use crate::stdlib::{self, RuntimeSupport};
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::AddressSpace;
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::IntPredicate;
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::OptimizationLevel;
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::attributes::{Attribute, AttributeLoc};
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::builder::Builder;
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::context::Context;
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::memory_buffer::MemoryBuffer;
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::module::{Linkage, Module as LlvmModule};
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::types::{AnyType, BasicType, BasicTypeEnum, StructType};
+#[cfg(not(target_arch = "wasm32"))]
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod llvm_stdlib;
 mod typescript;
 
 #[allow(dead_code)]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn emit_module(module: &Module) -> Result<String, String> {
     crate::llvm_backend::emit_module(module)
 }
 
+#[allow(dead_code)]
+#[cfg(target_arch = "wasm32")]
+pub fn emit_module(_module: &Module) -> Result<String, String> {
+    Err("LLVM output is unavailable in the wasm compiler; use TypeScript output".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn emit_direct_llvm_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let expanded = monomorphize::expand_module(&expanded)?;
@@ -33,12 +54,14 @@ pub fn emit_direct_llvm_with_base(module: &Module, base_dir: &Path) -> Result<St
     DirectLlvm::emit(codegen)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct WasmCdylibOutput {
     pub llvm: String,
     pub object: Vec<u8>,
     pub exports: Vec<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn emit_wasm_cdylib_llvm_with_base(
     module: &Module,
     base_dir: &Path,
@@ -68,6 +91,7 @@ pub(crate) fn emit_wasm_cdylib_llvm_with_base(
 }
 
 #[allow(dead_code)]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn emit_runtime_c(module: &Module) -> Result<String, String> {
     let expanded = module_resolver::expand_stdlib_sources(module)?;
     let expanded = monomorphize::expand_module(&expanded)?;
@@ -75,12 +99,14 @@ pub fn emit_runtime_c(module: &Module) -> Result<String, String> {
 }
 
 #[allow(dead_code)]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn emit_runtime_c_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let expanded = monomorphize::expand_module(&expanded)?;
     TypedCodegen::new(&expanded)?.emit()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn emit_runtime_support_c_with_base(
     module: &Module,
     base_dir: &Path,
@@ -91,6 +117,13 @@ pub fn emit_runtime_support_c_with_base(
     codegen.emit_runtime_support_c()
 }
 
+pub fn emit_typescript(module: &Module) -> Result<String, String> {
+    let expanded = module_resolver::expand_stdlib_sources(module)?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    typescript::emit_module(TypedCodegen::new(&expanded)?)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn emit_typescript_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let expanded = monomorphize::expand_module(&expanded)?;
@@ -4643,11 +4676,13 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
 }
 
 #[derive(Clone)]
+#[cfg(not(target_arch = "wasm32"))]
 struct LlvmValue<'ctx> {
     value: BasicValueEnum<'ctx>,
     ty: Ty,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct DirectLlvm<'ctx, 'a> {
     context: &'ctx Context,
     module: LlvmModule<'ctx>,
@@ -4660,6 +4695,7 @@ struct DirectLlvm<'ctx, 'a> {
     stream_helper: usize,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct DirectLlvmOptions {
     target_triple: Option<String>,
     emit_entrypoint: bool,
@@ -4668,6 +4704,7 @@ struct DirectLlvmOptions {
     optimization: OptimizationLevel,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Default for DirectLlvmOptions {
     fn default() -> Self {
         Self {
@@ -4680,12 +4717,14 @@ impl Default for DirectLlvmOptions {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct DirectLlvmEmission {
     llvm: String,
     object: Option<Vec<u8>>,
     exports: Vec<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<'a> DirectLlvm<'_, 'a> {
     fn emit(codegen: TypedCodegen<'a>) -> Result<String, String> {
         Ok(Self::emit_with_options(codegen, DirectLlvmOptions::default())?.llvm)
@@ -4743,6 +4782,7 @@ impl<'a> DirectLlvm<'_, 'a> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn emit_target_object(
     module: &LlvmModule<'_>,
     target_triple: &str,
@@ -4768,11 +4808,13 @@ fn emit_target_object(
     Ok(memory_buffer_without_nul(&object))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn memory_buffer_without_nul(buffer: &MemoryBuffer<'_>) -> Vec<u8> {
     let bytes = buffer.as_slice();
     bytes[..bytes.len().saturating_sub(1)].to_vec()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     fn declare_callables(&mut self) -> Result<(), String> {
         let names = self.codegen.callables.keys().cloned().collect::<Vec<_>>();
@@ -8660,11 +8702,13 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct LlvmTypeRegistry<'ctx> {
     context: &'ctx Context,
     structs: HashMap<String, StructType<'ctx>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<'ctx> LlvmTypeRegistry<'ctx> {
     fn new(context: &'ctx Context) -> Self {
         Self {

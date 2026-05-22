@@ -112,8 +112,8 @@ cargo bench
 
 `flowarrow build` defaults to the host native target. `--target native`,
 `--target host`, and the host target triple select the same native backend.
-WASM target triples are recognized for the target-aware build pipeline, but
-WASM code generation is not implemented yet.
+`wasm32-unknown-unknown` supports library-style WASM builds for exportable
+scalar nodes, and `typescript` emits generated TypeScript source.
 
 Native outputs are written under the source file's local build directory:
 
@@ -128,6 +128,18 @@ examples/<name>/build/<target>/.cache/
 ```
 
 These files are generated artifacts. Do not edit them by hand.
+
+## Static Demo
+
+The static demo in `static/index.html` loads `static/flowarrow.wasm` and compiles a
+FlowArrow Fibonacci example to TypeScript in the browser. Rebuild the WASM
+compiler artifact before serving or publishing `static/`:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo build --lib --target wasm32-unknown-unknown --release
+cp target/wasm32-unknown-unknown/release/flowarrow.wasm static/flowarrow.wasm
+```
 
 ## Optional Dependency Checks
 

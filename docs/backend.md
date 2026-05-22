@@ -178,7 +178,38 @@ by this backend until they have target-specific runtime support.
 Only nodes declared with `extern node` are emitted as exported
 TypeScript functions; ordinary nodes are generated as internal helpers.
 
-### 2.5 WebAssembly story
+### 2.5 WASM-hosted TypeScript compiler
+
+The compiler crate can also be built as a `wasm32-unknown-unknown`
+`cdylib` for documentation sites and browser-hosted demos. This artifact
+does not include the native LLVM backend; it exposes only the in-memory
+TypeScript compiler path.
+
+Build the browser compiler with:
+
+```sh
+cargo build --lib --target wasm32-unknown-unknown --release
+```
+
+The exported ABI is intentionally small and has no `wasm-bindgen`
+dependency:
+
+- `flowarrow_alloc(len) -> ptr`
+- `flowarrow_dealloc(ptr, len)`
+- `flowarrow_compile_typescript(source_ptr, source_len, mode) -> ok`
+- `flowarrow_result_ok() -> ok`
+- `flowarrow_result_ptr() -> ptr`
+- `flowarrow_result_len() -> len`
+- `flowarrow_result_clear()`
+
+`mode` is `0` for a `program` source and `1` for a library source that
+exports `extern node` declarations. The result buffer contains either
+generated TypeScript or an error message. It remains valid until the
+next compile call or `flowarrow_result_clear()`. This in-memory path
+supports embedded source-backed stdlib modules, but local string imports
+are rejected because the browser compiler has no source file path.
+
+### 2.6 WebAssembly story
 
 - The `wasm32-unknown-unknown` target produces a freestanding module
   suitable for browsers or JavaScript runtimes. The implemented first
@@ -200,7 +231,7 @@ TypeScript functions; ordinary nodes are generated as internal helpers.
   We are **not** taking a dependency on `wasm-bindgen` itself; we
   match its ABI and emit our own bindings.
 
-### 2.6 Runtime library
+### 2.7 Runtime library
 
 A small support library (`libflowarrow_rt`) is required for:
 

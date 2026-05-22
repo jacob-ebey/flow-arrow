@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FlowArrow Compiler Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --panel-strong: #eef3f7;
+        --text: #17202a;
+        --muted: #617080;
+        --line: #d6dee6;
+        --accent: #16745f;
+        --accent-strong: #0f5f4e;
+        --danger: #ad3b3b;
+        --code: #0f1822;
+        --code-bg: #f9fbfc;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      main {
+        width: min(1180px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 24px 0;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.45rem;
+        font-weight: 720;
+      }
+
+      .status {
+        display: inline-flex;
+        min-height: 34px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        padding: 0 10px;
+        color: var(--muted);
+        font-size: 0.92rem;
+        white-space: nowrap;
+      }
+
+      .status[data-state="ok"] {
+        color: var(--accent-strong);
+      }
+
+      .status[data-state="error"] {
+        color: var(--danger);
+      }
+
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px 8px 0 0;
+        background: var(--panel-strong);
+        padding: 10px;
+      }
+
+      .tabs {
+        display: inline-flex;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+      }
+
+      .tab {
+        border: 0;
+        border-right: 1px solid var(--line);
+        background: transparent;
+        color: var(--muted);
+        min-height: 34px;
+        padding: 0 12px;
+        font: inherit;
+      }
+
+      .tab:last-child {
+        border-right: 0;
+      }
+
+      .tab[aria-selected="true"] {
+        background: var(--panel);
+        color: var(--text);
+        font-weight: 650;
+      }
+
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .icon-button {
+        display: inline-flex;
+        min-width: 64px;
+        height: 34px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--text);
+        padding: 0 10px;
+        font: inherit;
+      }
+
+      .compile {
+        min-height: 34px;
+        border: 1px solid var(--accent-strong);
+        border-radius: 6px;
+        background: var(--accent);
+        color: #ffffff;
+        padding: 0 14px;
+        font: inherit;
+        font-weight: 680;
+      }
+
+      .compile:hover {
+        background: var(--accent-strong);
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        min-height: min(680px, calc(100vh - 128px));
+        border: 1px solid var(--line);
+        border-top: 0;
+        border-radius: 0 0 8px 8px;
+        overflow: hidden;
+        background: var(--panel);
+      }
+
+      .pane {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        min-width: 0;
+      }
+
+      .pane + .pane {
+        border-left: 1px solid var(--line);
+      }
+
+      .pane-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 38px;
+        border-bottom: 1px solid var(--line);
+        padding: 0 12px;
+        color: var(--muted);
+        font-size: 0.84rem;
+        font-weight: 650;
+        text-transform: uppercase;
+      }
+
+      textarea,
+      pre {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        border: 0;
+        outline: 0;
+        resize: none;
+        overflow: auto;
+        background: var(--code-bg);
+        color: var(--code);
+        padding: 16px;
+        font-family:
+          "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
+        font-size: 0.9rem;
+        line-height: 1.52;
+        tab-size: 4;
+      }
+
+      pre {
+        white-space: pre;
+      }
+
+      @media (max-width: 780px) {
+        main {
+          width: min(100vw - 20px, 1180px);
+          padding: 12px 0;
+        }
+
+        header,
+        .toolbar {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .status {
+          width: 100%;
+          white-space: normal;
+        }
+
+        .workspace {
+          grid-template-columns: 1fr;
+          min-height: 760px;
+        }
+
+        .pane + .pane {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>FlowArrow</h1>
+        <div id="status" class="status" data-state="idle">Loading compiler...</div>
+      </header>
+
+      <section aria-label="Compiler">
+        <div class="toolbar">
+          <div class="tabs" role="tablist" aria-label="Examples">
+            <button class="tab" type="button" role="tab" aria-selected="true">fib.flow</button>
+          </div>
+          <div class="actions">
+            <button id="reset" class="icon-button" type="button" title="Reset example" aria-label="Reset example">
+              Reset
+            </button>
+            <button id="compile" class="compile" type="button">Compile</button>
+          </div>
+        </div>
+        <div class="workspace">
+          <section class="pane" aria-label="FlowArrow source">
+            <div class="pane-title">FlowArrow</div>
+            <textarea id="source" spellcheck="false"></textarea>
+          </section>
+          <section class="pane" aria-label="TypeScript output">
+            <div class="pane-title">TypeScript</div>
+            <pre id="output" aria-live="polite"></pre>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script type="module">
+      const fibExample = `# Exports a pure Fibonacci node for the TypeScript source target.
+import std.math { add }
+
+extern node fib(depth: Int) -> result: Int {
+    (0, 1) -> repeat<$depth> _fib_step -> ($result, $)
+}
+
+node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
+    $b       -> $next_a
+    ($a, $b) -> add -> $next_b
+}
+`;
+
+      const decoder = new TextDecoder();
+      const encoder = new TextEncoder();
+      const status = document.querySelector("#status");
+      const source = document.querySelector("#source");
+      const output = document.querySelector("#output");
+      const compileButton = document.querySelector("#compile");
+      const resetButton = document.querySelector("#reset");
+
+      let wasm = null;
+
+      source.value = fibExample;
+      compileButton.disabled = true;
+
+      function setStatus(message, state = "idle") {
+        status.textContent = message;
+        status.dataset.state = state;
+      }
+
+      async function loadCompiler() {
+        const response = await fetch(new URL("./flowarrow.wasm", import.meta.url));
+        const imports = {};
+        if (WebAssembly.instantiateStreaming && response.headers.get("content-type") === "application/wasm") {
+          return (await WebAssembly.instantiateStreaming(response, imports)).instance.exports;
+        }
+        const bytes = await response.arrayBuffer();
+        return (await WebAssembly.instantiate(bytes, imports)).instance.exports;
+      }
+
+      function readResult() {
+        const ptr = wasm.flowarrow_result_ptr();
+        const len = wasm.flowarrow_result_len();
+        return decoder.decode(new Uint8Array(wasm.memory.buffer, ptr, len));
+      }
+
+      function compile() {
+        if (!wasm) return;
+        const bytes = encoder.encode(source.value);
+        const ptr = wasm.flowarrow_alloc(bytes.length);
+        new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
+        try {
+          const ok = wasm.flowarrow_compile_typescript(ptr, bytes.length, 1);
+          output.textContent = readResult();
+          setStatus(ok ? "Compiled" : "Compile error", ok ? "ok" : "error");
+        } finally {
+          wasm.flowarrow_dealloc(ptr, bytes.length);
+        }
+      }
+
+      compileButton.addEventListener("click", compile);
+      resetButton.addEventListener("click", () => {
+        source.value = fibExample;
+        compile();
+      });
+
+      try {
+        wasm = await loadCompiler();
+        compileButton.disabled = false;
+        setStatus("Compiler ready", "ok");
+        compile();
+      } catch (error) {
+        setStatus("Compiler failed to load", "error");
+        output.textContent = error instanceof Error ? error.message : String(error);
+      }
+    </script>
+  </body>
+</html>

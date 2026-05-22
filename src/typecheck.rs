@@ -12,6 +12,11 @@ pub fn check_module(module: &Module) -> Result<(), String> {
     Checker::new(&expanded)?.check()
 }
 
+pub(crate) fn check_library_module(module: &Module) -> Result<(), String> {
+    let expanded = module_resolver::expand_stdlib_sources(module)?;
+    Checker::new(&expanded)?.check_library()
+}
+
 pub fn check_module_with_base(module: &Module, base_dir: &Path) -> Result<(), String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     Checker::new(&expanded)?.check()

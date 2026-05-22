@@ -1,14 +1,22 @@
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
 mod ast;
+#[cfg(not(target_arch = "wasm32"))]
 mod build;
 mod codegen;
 mod diagnostic;
 mod fmt;
 mod lexer;
+#[cfg(not(target_arch = "wasm32"))]
 mod llvm_backend;
+#[cfg(not(target_arch = "wasm32"))]
 mod lsp;
+#[cfg(not(target_arch = "wasm32"))]
 mod mermaid;
 mod module_resolver;
 mod monomorphize;
@@ -16,21 +24,71 @@ mod node_ref;
 mod parser;
 mod stdlib;
 mod typecheck;
+#[cfg(target_arch = "wasm32")]
+mod wasm_api;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use build::{
     BuildOptimization, BuildOptions, BuildOutput, BuildTarget, CrateType, NativeTarget, WasmTarget,
     build_file, build_file_with_options,
 };
 pub use fmt::{check_file as check_format_file, format_file, format_source};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeScriptCompileMode {
+    Program,
+    Library,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypeScriptCompileOptions {
+    pub mode: TypeScriptCompileMode,
+}
+
+impl Default for TypeScriptCompileOptions {
+    fn default() -> Self {
+        Self {
+            mode: TypeScriptCompileMode::Program,
+        }
+    }
+}
+
+pub fn compile_typescript_source(source: &str) -> Result<String, String> {
+    compile_typescript_source_with_options(source, TypeScriptCompileOptions::default())
+}
+
+pub fn compile_typescript_library_source(source: &str) -> Result<String, String> {
+    compile_typescript_source_with_options(
+        source,
+        TypeScriptCompileOptions {
+            mode: TypeScriptCompileMode::Library,
+        },
+    )
+}
+
+pub fn compile_typescript_source_with_options(
+    source: &str,
+    options: TypeScriptCompileOptions,
+) -> Result<String, String> {
+    let module = parser::parse(source)?;
+    match options.mode {
+        TypeScriptCompileMode::Program => typecheck::check_module(&module)?,
+        TypeScriptCompileMode::Library => typecheck::check_library_module(&module)?,
+    }
+    codegen::emit_typescript(&module)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_lsp_server() -> Result<u8, String> {
     lsp::run_server()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_file(path: &Path) -> Result<u8, String> {
     run_file_with_args(path, std::iter::empty::<String>())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_file_with_args<I, S>(path: &Path, args: I) -> Result<u8, String>
 where
     I: IntoIterator<Item = S>,
@@ -47,6 +105,7 @@ where
     Ok(status.code().unwrap_or(1).try_into().unwrap_or(1))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn typecheck_file(path: &Path) -> Result<(), String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
@@ -54,6 +113,7 @@ pub fn typecheck_file(path: &Path) -> Result<(), String> {
     typecheck::check_module_with_base(&module, path.parent().unwrap_or_else(|| Path::new(".")))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn mermaid_file(path: &Path) -> Result<String, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
@@ -62,10 +122,12 @@ pub fn mermaid_file(path: &Path) -> Result<String, String> {
     mermaid::emit_module(&module)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn mermaid_file_compact(path: &Path) -> Result<String, String> {
     mermaid_file_with_options(path, mermaid::MermaidOptions { compact: true })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn mermaid_file_with_options(
     path: &Path,
     options: mermaid::MermaidOptions,
@@ -210,6 +272,33 @@ mod tests {
         "#;
         let module = parser::parse(source).expect("parse");
         typecheck::check_module(&module).expect("typecheck");
+    }
+
+    #[test]
+    fn compiles_typescript_source_in_memory() {
+        let source = r#"
+            import std.math { add }
+
+            extern node increment(value: Int) -> out: Int {
+                ($value, 1) -> add -> $out
+            }
+        "#;
+        let ts = compile_typescript_library_source(source).expect("typescript");
+        assert!(ts.contains("export function increment(value: bigint): bigint"));
+        assert!(ts.contains("1n"));
+    }
+
+    #[test]
+    fn in_memory_typescript_compile_rejects_local_imports() {
+        let source = r#"
+            import "./lib.flow" { helper }
+
+            extern node demo(value: Int) -> out: Int {
+                $value -> helper -> $out
+            }
+        "#;
+        let error = compile_typescript_library_source(source).expect_err("local import");
+        assert!(error.contains("local imports require a source file path"));
     }
 
     #[test]
