@@ -10,28 +10,44 @@ use oxc::span::SourceType;
 use oxc::transformer::{TransformOptions, Transformer};
 use std::path::Path;
 
+const INTERNAL_TYPE_ALIASES: &[&str] = &[
+    "FaArgs",
+    "FaFault",
+    "FaFaultable",
+    "FaStream",
+    "FaHttpServerConfig",
+    "FaHttpListener",
+    "FaHttpRequest",
+    "FaHttpResponse",
+    "FaSqliteConnection",
+    "FaSqliteRow",
+    "FaSqliteValue",
+];
+
 #[derive(Debug, Clone)]
-pub struct TypeScriptArtifacts {
+pub struct JavaScriptArtifacts {
     pub javascript: String,
     pub declarations: String,
 }
 
-pub fn emit_javascript(source: &str) -> Result<String, String> {
+pub fn emit_typescript(source: &str) -> Result<String, String> {
     let allocator = Allocator::default();
     let mut program = parse_typescript(&allocator, source)?;
-    transform_typescript(&allocator, &mut program, source)?;
     run_dce(&allocator, &mut program);
-    Ok(print_program(&program, SourceType::mjs()))
+    Ok(strip_unused_internal_type_aliases(print_program(
+        &program,
+        SourceType::ts(),
+    )))
 }
 
-pub fn emit_typescript_artifacts(source: &str) -> Result<TypeScriptArtifacts, String> {
+pub fn emit_javascript_artifacts(source: &str) -> Result<JavaScriptArtifacts, String> {
     let allocator = Allocator::default();
     let mut program = parse_typescript(&allocator, source)?;
+    run_dce(&allocator, &mut program);
     let declarations = emit_declarations(&allocator, &program, source)?;
     transform_typescript(&allocator, &mut program, source)?;
-    run_dce(&allocator, &mut program);
     let javascript = print_program(&program, SourceType::mjs());
-    Ok(TypeScriptArtifacts {
+    Ok(JavaScriptArtifacts {
         javascript,
         declarations,
     })
@@ -101,7 +117,10 @@ fn emit_declarations<'a>(
             ret.errors,
         ));
     }
-    Ok(print_program(&ret.program, SourceType::d_ts()))
+    Ok(strip_unused_internal_type_aliases(print_program(
+        &ret.program,
+        SourceType::d_ts(),
+    )))
 }
 
 fn print_program(program: &Program<'_>, source_type: SourceType) -> String {
@@ -122,4 +141,139 @@ fn format_oxc_errors(context: &str, source: &str, errors: Vec<OxcDiagnostic>) ->
         out.push_str(&format!("{:?}", error.with_source_code(source.to_string())));
     }
     out
+}
+
+fn strip_unused_internal_type_aliases(mut source: String) -> String {
+    // OXC DCE is runtime-focused and does not prune type-only aliases.
+    loop {
+        let mut changed = false;
+        for name in INTERNAL_TYPE_ALIASES {
+            let Some((start, end)) = find_top_level_type_alias(&source, name) else {
+                continue;
+            };
+            let without_alias = format!("{}{}", &source[..start], &source[end..]);
+            if !contains_identifier(&without_alias, name) {
+                source = without_alias;
+                changed = true;
+                break;
+            }
+        }
+        if !changed {
+            return source;
+        }
+    }
+}
+
+fn find_top_level_type_alias(source: &str, name: &str) -> Option<(usize, usize)> {
+    let mut search_from = 0;
+    let prefix = format!("type {name}");
+    while let Some(relative_start) = source[search_from..].find(&prefix) {
+        let start = search_from + relative_start;
+        if !starts_line_type_alias(source, start, name) {
+            search_from = start + prefix.len();
+            continue;
+        }
+
+        let mut brace_depth = 0usize;
+        for (relative_index, ch) in source[start..].char_indices() {
+            match ch {
+                '{' => brace_depth += 1,
+                '}' => brace_depth = brace_depth.saturating_sub(1),
+                ';' if brace_depth == 0 => {
+                    let mut end = start + relative_index + ch.len_utf8();
+                    while source[end..].starts_with('\n') {
+                        end += 1;
+                    }
+                    return Some((start, end));
+                }
+                _ => {}
+            }
+        }
+        return None;
+    }
+    None
+}
+
+fn starts_line_type_alias(source: &str, start: usize, name: &str) -> bool {
+    let line_prefix = &source[..start];
+    if !line_prefix
+        .rsplit_once('\n')
+        .map_or(line_prefix, |(_, line)| line)
+        .trim()
+        .is_empty()
+    {
+        return false;
+    }
+
+    let after_name = &source[start + "type ".len() + name.len()..];
+    after_name
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_whitespace() || ch == '<' || ch == '=')
+}
+
+fn contains_identifier(source: &str, name: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(relative_start) = source[search_from..].find(name) {
+        let start = search_from + relative_start;
+        let end = start + name.len();
+        let before = source[..start].chars().next_back();
+        let after = source[end..].chars().next();
+        if before.is_none_or(|ch| !is_identifier_char(ch))
+            && after.is_none_or(|ch| !is_identifier_char(ch))
+        {
+            return true;
+        }
+        search_from = end;
+    }
+    false
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch == '_' || ch == '$' || ch.is_ascii_alphanumeric()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_unused_internal_type_aliases_after_dce() {
+        let source = r#"
+type FaArgs = { argv: string[] };
+type FaFault = { message: string };
+type FaFaultable<T> = { is_fault: true; fault: FaFault } | { is_fault: false; value: T };
+
+export function live(value: bigint): bigint {
+    return value;
+}
+"#;
+
+        let output = emit_typescript(source).expect("typescript");
+
+        assert!(!output.contains("FaArgs"));
+        assert!(!output.contains("FaFault"));
+        assert!(!output.contains("FaFaultable"));
+        assert!(output.contains("export function live(value: bigint): bigint"));
+    }
+
+    #[test]
+    fn keeps_internal_type_aliases_used_by_exports() {
+        let source = r#"
+type FaArgs = { argv: string[] };
+type FaFault = { message: string };
+type FaFaultable<T> = { is_fault: true; fault: FaFault } | { is_fault: false; value: T };
+
+export function main(args: FaArgs): FaFaultable<bigint> {
+    return { is_fault: false, value: 0n };
+}
+"#;
+
+        let output = emit_typescript(source).expect("typescript");
+
+        assert!(output.contains("type FaArgs"));
+        assert!(output.contains("type FaFault"));
+        assert!(output.contains("type FaFaultable"));
+        assert!(!output.contains("export type FaArgs"));
+    }
 }

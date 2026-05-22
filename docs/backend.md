@@ -130,8 +130,8 @@ Current implementation status: `flowarrow build` defaults to the host
 native target and accepts `--target native`, `--target host`, or the host
 target triple for that backend. `wasm32-unknown-unknown` supports an
 initial `--crate-type cdylib` reactor-module path for pure scalar node
-exports. `typescript` emits JavaScript plus TypeScript declarations under
-`build/typescript/`, and `javascript` emits JavaScript source under
+exports. `typescript` emits TypeScript source under `build/typescript/`,
+and `javascript` emits JavaScript plus TypeScript declarations under
 `build/javascript/`.
 `wasm32-wasi` is parsed but not implemented yet.
 
@@ -172,13 +172,13 @@ typescript
 javascript
 ```
 
-The `typescript` target emits standalone `.js` runtime source plus a
-`.d.ts` declaration file instead of invoking a native compiler or linker.
-The `javascript` target runs the same TypeScript lowering through OXC's
-TypeScript transform and emits standalone `.js` source. Both source
-targets run OXC dead code elimination before writing JavaScript
-artifacts. The TypeScript target uses OXC isolated declarations for
-`.d.ts` generation. They support the core language lowering and core
+The `typescript` target emits standalone `.ts` source instead of invoking
+a native compiler or linker. The `javascript` target runs the same
+TypeScript lowering through OXC's TypeScript transform and emits
+standalone `.js` source plus a `.d.ts` declaration file. Both source
+targets run OXC dead code elimination before writing artifacts. The
+JavaScript target uses OXC isolated declarations for `.d.ts` generation.
+They support the core language lowering and core
 stdlib nodes for CLI arguments, text/bytes,
 integer/real conversion, math, predicates, faults, tuples, and sequences.
 Native-backed modules such as `std.cv`, `std.http`, and `std.sqlite` are
@@ -206,16 +206,20 @@ dependency:
 - `flowarrow_alloc(len) -> ptr`
 - `flowarrow_dealloc(ptr, len)`
 - `flowarrow_compile_typescript(source_ptr, source_len, mode) -> ok`
+- `flowarrow_compile_javascript_artifacts(source_ptr, source_len, mode) -> ok`
 - `flowarrow_result_ok() -> ok`
 - `flowarrow_result_ptr() -> ptr`
 - `flowarrow_result_len() -> len`
 - `flowarrow_result_clear()`
 
 `mode` is `0` for a `program` source and `1` for a library source that
-exports `extern node` declarations. The result buffer contains either
-generated TypeScript or an error message. It remains valid until the
-next compile call or `flowarrow_result_clear()`. This in-memory path
-supports embedded source-backed stdlib modules, but local string imports
+exports `extern node` declarations. `flowarrow_compile_typescript`
+returns generated TypeScript or an error message.
+`flowarrow_compile_javascript_artifacts` returns
+`declarations + "\0" + javascript` or an error message. The result
+buffer remains valid until the next compile call or
+`flowarrow_result_clear()`. This in-memory path supports embedded
+source-backed stdlib modules, but local string imports
 are rejected because the browser compiler has no source file path.
 
 ### 2.6 WebAssembly story

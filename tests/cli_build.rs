@@ -121,7 +121,7 @@ fn build_wasm_fib_example_and_run_node_script() {
 }
 
 #[test]
-fn build_typescript_fib_example_and_run_node_script() {
+fn build_typescript_fib_example_and_typecheck_output() {
     let output = Command::new(flowarrow())
         .args([
             "build",
@@ -140,15 +140,13 @@ fn build_typescript_fib_example_and_run_node_script() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let generated_js = fs::read_to_string("examples/typescript-fib/build/typescript/fib.js")
-        .expect("read generated TypeScript JavaScript");
-    let generated_dts = fs::read_to_string("examples/typescript-fib/build/typescript/fib.d.ts")
-        .expect("read generated TypeScript declarations");
-    assert!(generated_js.contains("export function fib(depth)"));
-    assert!(generated_js.contains("for (let"));
-    assert!(!generated_js.contains(": bigint"));
-    assert!(!generated_js.contains("faParseReal"));
-    assert!(generated_dts.contains("export declare function fib(depth: bigint): bigint"));
+    let generated_ts = fs::read_to_string("examples/typescript-fib/build/typescript/fib.ts")
+        .expect("read generated TypeScript");
+    assert!(generated_ts.contains("export function fib(depth: bigint): bigint"));
+    assert!(generated_ts.contains("for (let"));
+    assert!(!generated_ts.contains("faParseReal"));
+    assert!(!generated_ts.contains("FaArgs"));
+    assert!(!generated_ts.contains("FaFaultable"));
 
     if Command::new("tsc").arg("--version").output().is_ok() {
         let output = Command::new("tsc")
@@ -160,8 +158,7 @@ fn build_typescript_fib_example_and_run_node_script() {
                 "NodeNext",
                 "--moduleResolution",
                 "NodeNext",
-                "examples/typescript-fib/run.ts",
-                "examples/typescript-fib/build/typescript/fib.d.ts",
+                "examples/typescript-fib/build/typescript/fib.ts",
             ])
             .output()
             .expect("run tsc");
@@ -174,23 +171,6 @@ fn build_typescript_fib_example_and_run_node_script() {
     } else {
         eprintln!("skipping TypeScript typecheck: tsc is not installed");
     }
-
-    if Command::new("node").arg("--version").output().is_err() {
-        eprintln!("skipping TypeScript example runtime test: node is not installed");
-        return;
-    }
-
-    let output = Command::new("node")
-        .arg("examples/typescript-fib/run.ts")
-        .output()
-        .expect("run node TypeScript example");
-    assert!(
-        output.status.success(),
-        "node TypeScript example failed:\n{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "55");
 }
 
 #[test]
@@ -215,9 +195,13 @@ fn build_javascript_fib_example_and_run_node_script() {
 
     let generated = fs::read_to_string("examples/typescript-fib/build/javascript/fib.js")
         .expect("read generated JavaScript");
+    let generated_dts = fs::read_to_string("examples/typescript-fib/build/javascript/fib.d.ts")
+        .expect("read generated JavaScript declarations");
     assert!(generated.contains("export function fib(depth)"));
     assert!(!generated.contains(": bigint"));
     assert!(!generated.contains("faParseReal"));
+    assert!(generated_dts.contains("export declare function fib(depth: bigint): bigint"));
+    assert!(!generated_dts.contains("FaArgs"));
 
     if Command::new("node").arg("--version").output().is_err() {
         eprintln!("skipping JavaScript example runtime test: node is not installed");
@@ -244,12 +228,12 @@ fn build_javascript_fib_example_and_run_node_script() {
 }
 
 #[test]
-fn build_typescript_program_with_core_stdlib_and_run_node() {
+fn build_javascript_program_with_core_stdlib_and_run_node() {
     let output = Command::new(flowarrow())
         .args([
             "build",
             "--target",
-            "typescript",
+            "javascript",
             "examples/add-numbers-from-args/main.flow",
         ])
         .output()
@@ -261,6 +245,12 @@ fn build_typescript_program_with_core_stdlib_and_run_node() {
         String::from_utf8_lossy(&output.stderr)
     );
 
+    let generated_dts =
+        fs::read_to_string("examples/add-numbers-from-args/build/javascript/main.d.ts")
+            .expect("read generated JavaScript declarations");
+    assert!(generated_dts.contains("type FaArgs"));
+    assert!(!generated_dts.contains("export type FaArgs"));
+
     if Command::new("tsc").arg("--version").output().is_ok() {
         let output = Command::new("tsc")
             .args([
@@ -269,7 +259,7 @@ fn build_typescript_program_with_core_stdlib_and_run_node() {
                 "ES2022",
                 "--module",
                 "ES2022",
-                "examples/add-numbers-from-args/build/typescript/main.d.ts",
+                "examples/add-numbers-from-args/build/javascript/main.d.ts",
             ])
             .output()
             .expect("run tsc");
@@ -290,7 +280,7 @@ fn build_typescript_program_with_core_stdlib_and_run_node() {
 
     let output = Command::new("node")
         .args([
-            "examples/add-numbers-from-args/build/typescript/main.js",
+            "examples/add-numbers-from-args/build/javascript/main.js",
             "1.5",
             "2.5",
             "3",

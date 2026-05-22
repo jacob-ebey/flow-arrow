@@ -1,8 +1,9 @@
 {
   "type": "module",
   "scripts": {
-    "build": "flowarrow build --target typescript --crate-type cdylib fib.flow",
-    "check": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext run.ts build/typescript/fib.d.ts",
+    "build": "flowarrow build --target javascript --crate-type cdylib fib.flow",
+    "build:ts": "flowarrow build --target typescript --crate-type cdylib fib.flow",
+    "check": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext run.ts build/javascript/fib.d.ts",
     "start": "node run.ts"
   }
 }

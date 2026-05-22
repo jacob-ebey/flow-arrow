@@ -113,8 +113,8 @@ cargo bench
 `flowarrow build` defaults to the host native target. `--target native`,
 `--target host`, and the host target triple select the same native backend.
 `wasm32-unknown-unknown` supports library-style WASM builds for exportable
-scalar nodes, `typescript` emits generated JavaScript plus TypeScript
-declarations, and `javascript` emits generated JavaScript transpiled from the
+scalar nodes, `typescript` emits generated TypeScript source, and
+`javascript` emits generated JavaScript plus TypeScript declarations from the
 TypeScript backend with OXC.
 
 Native outputs are written under the source file's local build directory:

@@ -1,3 +1,3 @@
-import { fib } from "./build/typescript/fib.js";
+import { fib } from "./build/javascript/fib.js";
 
 console.log(fib(10n).toString());

@@ -1,6 +1,6 @@
 use crate::{
     TypeScriptCompileMode, TypeScriptCompileOptions,
-    compile_typescript_artifacts_source_with_options, compile_typescript_source_with_options,
+    compile_javascript_artifacts_source_with_options, compile_typescript_source_with_options,
 };
 use std::cell::{Cell, RefCell};
 use std::mem;
@@ -62,7 +62,7 @@ pub unsafe extern "C" fn flowarrow_compile_typescript(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn flowarrow_compile_typescript_artifacts(
+pub unsafe extern "C" fn flowarrow_compile_javascript_artifacts(
     source_ptr: *const u8,
     source_len: usize,
     mode: u32,
@@ -82,7 +82,7 @@ pub unsafe extern "C" fn flowarrow_compile_typescript_artifacts(
             return 0;
         }
     };
-    match compile_typescript_artifacts_source_with_options(
+    match compile_javascript_artifacts_source_with_options(
         source,
         TypeScriptCompileOptions { mode },
     ) {

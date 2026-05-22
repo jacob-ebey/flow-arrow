@@ -78,7 +78,7 @@ pub fn compile_typescript_source_with_options(
     codegen::emit_typescript(&module)
 }
 
-pub fn compile_typescript_artifacts_source_with_options(
+pub fn compile_javascript_artifacts_source_with_options(
     source: &str,
     options: TypeScriptCompileOptions,
 ) -> Result<(String, String), String> {
@@ -87,7 +87,7 @@ pub fn compile_typescript_artifacts_source_with_options(
         TypeScriptCompileMode::Program => typecheck::check_module(&module)?,
         TypeScriptCompileMode::Library => typecheck::check_library_module(&module)?,
     }
-    let artifacts = codegen::emit_typescript_artifacts(&module)?;
+    let artifacts = codegen::emit_javascript_artifacts(&module)?;
     Ok((artifacts.declarations, artifacts.javascript))
 }
 

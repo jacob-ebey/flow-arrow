@@ -288,7 +288,7 @@ fn build_typescript(
 ) -> Result<BuildOutput, String> {
     if !options.compiler_flags.is_empty() || !options.linker_flags.is_empty() {
         return Err(
-            "TypeScript builds emit JavaScript and declarations directly and do not accept compiler or linker flags"
+            "TypeScript builds emit source directly and do not accept compiler or linker flags"
                 .to_string(),
         );
     }
@@ -296,18 +296,15 @@ fn build_typescript(
         return Err("TypeScript builds do not support `--emit-llvm`".to_string());
     }
 
-    let artifacts = codegen::emit_typescript_artifacts_with_base(module, base_dir)?;
+    let source = codegen::emit_typescript_with_base(module, base_dir)?;
     let target = BuildTarget::Typescript;
     let build_dir = build_dir(path, &target);
     fs::create_dir_all(&build_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", build_dir.display()))?;
     let executable_name = executable_name(path)?;
-    let artifact = build_dir.join(format!("{executable_name}.js"));
-    let declarations = build_dir.join(format!("{executable_name}.d.ts"));
-    fs::write(&artifact, artifacts.javascript)
+    let artifact = build_dir.join(format!("{executable_name}.ts"));
+    fs::write(&artifact, source)
         .map_err(|error| format!("failed to write `{}`: {error}", artifact.display()))?;
-    fs::write(&declarations, artifacts.declarations)
-        .map_err(|error| format!("failed to write `{}`: {error}", declarations.display()))?;
     Ok(BuildOutput {
         build_dir,
         executable: artifact,
@@ -330,14 +327,18 @@ fn build_javascript(
         return Err("JavaScript builds do not support `--emit-llvm`".to_string());
     }
 
-    let source = codegen::emit_javascript_with_base(module, base_dir)?;
+    let artifacts = codegen::emit_javascript_artifacts_with_base(module, base_dir)?;
     let target = BuildTarget::Javascript;
     let build_dir = build_dir(path, &target);
     fs::create_dir_all(&build_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", build_dir.display()))?;
-    let artifact = build_dir.join(format!("{}.js", executable_name(path)?));
-    fs::write(&artifact, source)
+    let executable_name = executable_name(path)?;
+    let artifact = build_dir.join(format!("{executable_name}.js"));
+    let declarations = build_dir.join(format!("{executable_name}.d.ts"));
+    fs::write(&artifact, artifacts.javascript)
         .map_err(|error| format!("failed to write `{}`: {error}", artifact.display()))?;
+    fs::write(&declarations, artifacts.declarations)
+        .map_err(|error| format!("failed to write `{}`: {error}", declarations.display()))?;
     Ok(BuildOutput {
         build_dir,
         executable: artifact,
@@ -484,7 +485,7 @@ impl BuildPlan {
                 build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX))
             }
             BuildTarget::Wasm(_) => build_dir.join(format!("{executable_name}.wasm")),
-            BuildTarget::Typescript => build_dir.join(format!("{executable_name}.js")),
+            BuildTarget::Typescript => build_dir.join(format!("{executable_name}.ts")),
             BuildTarget::Javascript => build_dir.join(format!("{executable_name}.js")),
         };
         Ok(Self {
