@@ -312,12 +312,38 @@
       }
 
       .editor-stack {
-        position: relative;
+        display: grid;
+        grid-template-columns: 48px minmax(0, 1fr);
         height: 100%;
         min-height: 0;
         min-width: 0;
         overflow: hidden;
         background: var(--code-bg);
+      }
+
+      .line-numbers {
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+        border-right: 1px solid var(--line);
+        background: #f1f5f8;
+        color: var(--muted);
+        padding: 16px 8px;
+        text-align: right;
+        user-select: none;
+        font-family:
+          "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
+        font-size: 0.9rem;
+        line-height: 1.52;
+        tab-size: 4;
+      }
+
+      .editor-code {
+        position: relative;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
       }
 
       .source-highlight {
@@ -504,8 +530,11 @@
           <section class="pane" aria-label="FlowArrow source">
             <div class="pane-title">FlowArrow</div>
             <div class="editor-stack">
-              <pre id="source-highlight" class="source-highlight" aria-hidden="true"><code class="language-flowarrow"></code></pre>
-              <textarea id="source" spellcheck="false" wrap="off"></textarea>
+              <pre id="line-numbers" class="line-numbers" aria-hidden="true"></pre>
+              <div class="editor-code">
+                <pre id="source-highlight" class="source-highlight" aria-hidden="true"><code class="language-flowarrow"></code></pre>
+                <textarea id="source" spellcheck="false" wrap="off"></textarea>
+              </div>
             </div>
           </section>
           <div id="results" class="results" data-mode="javascript">
@@ -579,6 +608,7 @@ node score_job(n: Int) -> score: Int {
       const encoder = new TextEncoder();
       const status = document.querySelector("#status");
       const source = document.querySelector("#source");
+      const lineNumbers = document.querySelector("#line-numbers");
       const sourceHighlight = document.querySelector("#source-highlight");
       const sourceHighlightCode = document.querySelector("#source-highlight code");
       const results = document.querySelector("#results");
@@ -675,12 +705,19 @@ node score_job(n: Int) -> score: Int {
 
       function updateSourceHighlight() {
         sourceHighlightCode.innerHTML = `${highlight(source.value, "flowarrow")}\n`;
+        updateLineNumbers();
         syncSourceScroll();
+      }
+
+      function updateLineNumbers() {
+        const count = source.value.split("\n").length;
+        lineNumbers.textContent = Array.from({ length: count }, (_, index) => index + 1).join("\n");
       }
 
       function syncSourceScroll() {
         sourceHighlight.scrollTop = source.scrollTop;
         sourceHighlight.scrollLeft = source.scrollLeft;
+        lineNumbers.scrollTop = source.scrollTop;
       }
 
       function clearDiagnostics() {
