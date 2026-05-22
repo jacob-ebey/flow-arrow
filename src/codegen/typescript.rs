@@ -6,7 +6,7 @@ use super::{
 use crate::ast::{
     BindingTarget, Callable, Chain, Decl, Endpoint, MatchArm, MatchGuard, MatchTarget, Stage,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(super) fn emit_module(codegen: TypedCodegen<'_>) -> Result<String, String> {
     TypeScriptCodegen::new(codegen).emit()
@@ -22,11 +22,16 @@ struct TsValue {
 struct TypeScriptCodegen<'a> {
     codegen: TypedCodegen<'a>,
     temp: usize,
+    used_idents: HashSet<String>,
 }
 
 impl<'a> TypeScriptCodegen<'a> {
     fn new(codegen: TypedCodegen<'a>) -> Self {
-        Self { codegen, temp: 0 }
+        Self {
+            codegen,
+            temp: 0,
+            used_idents: HashSet::new(),
+        }
     }
 
     fn emit(mut self) -> Result<String, String> {
@@ -70,6 +75,17 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         is_program: bool,
     ) -> Result<(), String> {
         self.temp = 0;
+        self.used_idents.clear();
+        self.reserve_internal_idents();
+        let callable_idents = self
+            .codegen
+            .callables
+            .keys()
+            .map(|name| ts_ident(name))
+            .collect::<Vec<_>>();
+        for ident in callable_idents {
+            self.reserve_ident(&ident);
+        }
         let signature = self
             .codegen
             .signatures
@@ -87,15 +103,17 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         } else {
             ts_ident(&callable.name)
         };
+        self.reserve_ident(&fn_name);
         let return_ty = ts_type(&signature.output);
 
         let params = callable
             .inputs
             .iter()
             .map(|port| {
+                let name = ts_ident(&port.name);
+                self.reserve_ident(&name);
                 Ok(format!(
-                    "{}: {}",
-                    ts_ident(&port.name),
+                    "{name}: {}",
                     ts_type(&self.codegen.parse_declared_type(&port.ty)?)
                 ))
             })
@@ -178,7 +196,9 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                     self.bind_target(out, target, value.clone(), env, indent)?;
                 }
                 Stage::Endpoint(Endpoint::Name(name)) => {
-                    value = self.emit_call(out, name, value, indent)?;
+                    let preferred =
+                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                    value = self.emit_call_preferred(out, name, value, indent, preferred)?;
                 }
                 Stage::Endpoint(_) => {
                     return Err("non-name endpoints may only appear as source values".to_string());
@@ -187,14 +207,16 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                     return Err("binding targets may only appear as final stages".to_string());
                 }
                 Stage::Map(name) => {
-                    value = self.emit_map(out, name, value, indent)?;
+                    let preferred =
+                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                    value = self.emit_map(out, name, value, indent, preferred)?;
                 }
                 Stage::FaultMap { node, ok, fault } => {
                     if !is_last {
                         return Err("`fault map` must be the final stage in a chain".to_string());
                     }
                     let (ok_value, fault_value) =
-                        self.emit_fault_map(out, node, value.clone(), indent)?;
+                        self.emit_fault_map(out, node, value.clone(), indent, ok, fault)?;
                     if env.insert(ok.clone(), ok_value).is_some() {
                         return Err(format!("value `{ok}` is bound more than once"));
                     }
@@ -203,22 +225,32 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                     }
                 }
                 Stage::Filter(name) => {
-                    value = self.emit_filter(out, name, value, indent)?;
+                    let preferred =
+                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                    value = self.emit_filter(out, name, value, indent, preferred)?;
                 }
                 Stage::Repeat { count, node } => {
                     let count = self.emit_endpoint(out, count, env, indent)?;
-                    value = self.emit_repeat(out, node, value, count, indent)?;
+                    let preferred_target =
+                        final_bind_target_for_stage(chain, index).map(|target| target as &_);
+                    value = self.emit_repeat(out, node, value, count, indent, preferred_target)?;
                 }
                 Stage::Reduce { op, identity } => {
                     let identity = self.emit_endpoint(out, identity, env, indent)?;
-                    value = self.emit_reduce(out, op, value, identity, indent)?;
+                    let preferred =
+                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                    value = self.emit_reduce(out, op, value, identity, indent, preferred)?;
                 }
                 Stage::Scan { op, identity } => {
                     let identity = self.emit_endpoint(out, identity, env, indent)?;
-                    value = self.emit_scan(out, op, value, identity, indent)?;
+                    let preferred =
+                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                    value = self.emit_scan(out, op, value, identity, indent, preferred)?;
                 }
                 Stage::Match { arms } => {
-                    value = self.emit_match(out, arms, value, env, indent)?;
+                    let preferred =
+                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                    value = self.emit_match(out, arms, value, env, indent, preferred)?;
                 }
             }
         }
@@ -351,22 +383,22 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             Stage::Endpoint(_) => {
                 Err("non-name endpoints may only appear as inline evaluation sources".to_string())
             }
-            Stage::Map(name) => self.emit_map(out, name, value, indent),
+            Stage::Map(name) => self.emit_map(out, name, value, indent, None),
             Stage::FaultMap { .. } => Err("inline evaluations cannot use `fault map`".to_string()),
-            Stage::Filter(name) => self.emit_filter(out, name, value, indent),
+            Stage::Filter(name) => self.emit_filter(out, name, value, indent, None),
             Stage::Repeat { count, node } => {
                 let count = self.emit_endpoint(out, count, env, indent)?;
-                self.emit_repeat(out, node, value, count, indent)
+                self.emit_repeat(out, node, value, count, indent, None)
             }
             Stage::Reduce { op, identity } => {
                 let identity = self.emit_endpoint(out, identity, env, indent)?;
-                self.emit_reduce(out, op, value, identity, indent)
+                self.emit_reduce(out, op, value, identity, indent, None)
             }
             Stage::Scan { op, identity } => {
                 let identity = self.emit_endpoint(out, identity, env, indent)?;
-                self.emit_scan(out, op, value, identity, indent)
+                self.emit_scan(out, op, value, identity, indent, None)
             }
-            Stage::Match { arms } => self.emit_match(out, arms, value, env, indent),
+            Stage::Match { arms } => self.emit_match(out, arms, value, env, indent, None),
         }
     }
 
@@ -381,6 +413,19 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         match target {
             BindingTarget::Discard => Ok(()),
             BindingTarget::Variable(name) => {
+                let ident = ts_ident(name);
+                let value = if value.code == ident {
+                    value
+                } else if self.try_reserve_ident(&ident) {
+                    out.push_str(&format!(
+                        "{indent}const {ident}: {} = {};\n",
+                        ts_type(&value.ty),
+                        value.code
+                    ));
+                    ts_value(ident, value.ty)
+                } else {
+                    value
+                };
                 if env.insert(name.clone(), value).is_some() {
                     return Err(format!("value `{name}` is bound more than once"));
                 }
@@ -472,8 +517,19 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         &mut self,
         out: &mut String,
         name: &str,
+        input: TsValue,
+        indent: &str,
+    ) -> Result<TsValue, String> {
+        self.emit_call_preferred(out, name, input, indent, None)
+    }
+
+    fn emit_call_preferred(
+        &mut self,
+        out: &mut String,
+        name: &str,
         mut input: TsValue,
         indent: &str,
+        preferred: Option<&str>,
     ) -> Result<TsValue, String> {
         if matches!(input.ty, Ty::Faultable(_)) && !ts_value_code_is_stable(&input.code) {
             let input_tmp = self.next_temp();
@@ -488,7 +544,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
 
         if let (Ty::Faultable(input_inner), Ty::Faultable(output_inner)) = (&input.ty, &output_ty) {
             let plain_output = self.plain_output_type(name, input_inner)?;
-            let tmp = self.next_temp();
+            let tmp = self.next_temp_or_preferred(preferred);
             out.push_str(&format!("{indent}let {tmp}: {};\n", ts_type(&output_ty)));
             out.push_str(&format!(
                 "{indent}if ({}.is_fault === true) {{\n",
@@ -509,6 +565,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                 plain_input,
                 &plain_output,
                 &(indent.to_string() + "  "),
+                None,
             )?;
             if plain_output == output_ty {
                 out.push_str(&format!("{indent}  {tmp} = {};\n", called.code));
@@ -525,7 +582,8 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
 
         if let Ty::Faultable(output_inner) = &output_ty {
             let plain_output = self.plain_output_type(name, &input.ty)?;
-            let called = self.emit_plain_call(out, name, input.clone(), &plain_output, indent)?;
+            let called =
+                self.emit_plain_call(out, name, input.clone(), &plain_output, indent, preferred)?;
             if plain_output == output_ty {
                 return Ok(called);
             }
@@ -534,7 +592,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             }
         }
 
-        self.emit_plain_call(out, name, input, &output_ty, indent)
+        self.emit_plain_call(out, name, input, &output_ty, indent, preferred)
     }
 
     fn emit_plain_call(
@@ -544,6 +602,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         input: TsValue,
         output_ty: &Ty,
         indent: &str,
+        preferred: Option<&str>,
     ) -> Result<TsValue, String> {
         let expr = if self.codegen.signatures.contains_key(name) {
             let arity = self
@@ -559,7 +618,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         if expression_is_simple(&expr) {
             Ok(ts_value(expr, output_ty.clone()))
         } else {
-            let tmp = self.next_temp();
+            let tmp = self.next_temp_or_preferred(preferred);
             out.push_str(&format!(
                 "{indent}const {tmp}: {} = {expr};\n",
                 ts_type(output_ty)
@@ -768,6 +827,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         name: &str,
         input: TsValue,
         indent: &str,
+        preferred: Option<&str>,
     ) -> Result<TsValue, String> {
         let (is_faultable, seq_ty) = match input.ty.clone() {
             Ty::Faultable(inner) => (true, inner.as_ref().clone()),
@@ -783,7 +843,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         } else {
             output_seq_ty.clone()
         };
-        let tmp = self.next_temp();
+        let tmp = self.next_temp_or_preferred(preferred);
         out.push_str(&format!("{indent}let {tmp}: {};\n", ts_type(&output_ty)));
         if is_faultable {
             out.push_str(&format!(
@@ -839,11 +899,12 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         name: &str,
         input: TsValue,
         indent: &str,
+        preferred: Option<&str>,
     ) -> Result<TsValue, String> {
         let Ty::Seq(item_ty) = input.ty.clone() else {
             return Err(format!("`filter {name}` expected Seq input"));
         };
-        let tmp = self.next_temp();
+        let tmp = self.next_temp_or_preferred(preferred);
         let item = self.next_temp();
         out.push_str(&format!(
             "{indent}const {tmp}: {} = [];\n",
@@ -874,6 +935,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         input: TsValue,
         identity: TsValue,
         indent: &str,
+        preferred: Option<&str>,
     ) -> Result<TsValue, String> {
         let input_faultable = matches!(input.ty, Ty::Faultable(_));
         let seq_ty = match input.ty.clone() {
@@ -893,7 +955,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         } else {
             plain_item_ty.clone()
         };
-        let tmp = self.next_temp();
+        let tmp = self.next_temp_or_preferred(preferred);
         out.push_str(&format!("{indent}let {tmp}: {};\n", ts_type(&output_ty)));
         if input_faultable {
             out.push_str(&format!(
@@ -978,11 +1040,12 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         input: TsValue,
         identity: TsValue,
         indent: &str,
+        preferred: Option<&str>,
     ) -> Result<TsValue, String> {
         let Ty::Seq(item_ty) = input.ty.clone() else {
             return Err(format!("`scan {op}` expected Seq input"));
         };
-        let tmp = self.next_temp();
+        let tmp = self.next_temp_or_preferred(preferred);
         let acc = self.next_temp();
         let item = self.next_temp();
         let output_ty = input.ty.clone();
@@ -1021,8 +1084,15 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         input: TsValue,
         count: TsValue,
         indent: &str,
+        preferred_target: Option<&BindingTarget>,
     ) -> Result<TsValue, String> {
-        let tmp = self.next_temp();
+        if let Some(target @ BindingTarget::Tuple(_)) = preferred_target
+            && matches!(&input.ty, Ty::Tuple(_))
+        {
+            return self.emit_repeat_tuple_state(out, node, input, count, indent, target);
+        }
+
+        let tmp = self.next_temp_or_preferred(preferred_target.and_then(binding_target_name));
         let i = self.next_temp();
         out.push_str(&format!(
             "{indent}let {tmp}: {} = {};\n",
@@ -1044,6 +1114,65 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         Ok(ts_value(tmp, input.ty))
     }
 
+    fn emit_repeat_tuple_state(
+        &mut self,
+        out: &mut String,
+        node: &str,
+        input: TsValue,
+        count: TsValue,
+        indent: &str,
+        target: &BindingTarget,
+    ) -> Result<TsValue, String> {
+        let BindingTarget::Tuple(targets) = target else {
+            return Err("repeat tuple state expected tuple binding target".to_string());
+        };
+        let Ty::Tuple(items) = input.ty.clone() else {
+            return Err("repeat tuple state expected tuple input".to_string());
+        };
+        if items.len() != targets.len() {
+            return Err(format!(
+                "repeat tuple state expected {} tuple fields, found {}",
+                targets.len(),
+                items.len()
+            ));
+        }
+
+        let mut state = Vec::with_capacity(items.len());
+        for (index, (target, ty)) in targets.iter().zip(items.iter()).enumerate() {
+            let state_name = self.next_temp_or_preferred(binding_target_name(target));
+            out.push_str(&format!(
+                "{indent}let {state_name}: {} = {};\n",
+                ts_type(ty),
+                tuple_field(&input, index)
+            ));
+            state.push(ts_value(state_name, ty.clone()));
+        }
+
+        let i = self.next_temp();
+        let state_ty = Ty::Tuple(items);
+        out.push_str(&format!(
+            "{indent}for (let {i} = 0n; {i} < {}; {i}++) {{\n",
+            count.code
+        ));
+        let next = self.emit_call(
+            out,
+            node,
+            ts_tuple_value(state.clone(), state_ty.clone()),
+            &(indent.to_string() + "  "),
+        )?;
+        out.push_str(&format!(
+            "{indent}  [{}] = {};\n",
+            state
+                .iter()
+                .map(|value| value.code.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            next.code
+        ));
+        out.push_str(&format!("{indent}}}\n"));
+        Ok(ts_tuple_value(state, state_ty))
+    }
+
     fn emit_match(
         &mut self,
         out: &mut String,
@@ -1051,9 +1180,10 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         subject: TsValue,
         env: &HashMap<String, TsValue>,
         indent: &str,
+        preferred: Option<&str>,
     ) -> Result<TsValue, String> {
         let output_ty = self.match_output_type(arms, &subject.ty, env)?;
-        let tmp = self.next_temp();
+        let tmp = self.next_temp_or_preferred(preferred);
         out.push_str(&format!("{indent}let {tmp}: {};\n", ts_type(&output_ty)));
         for (index, arm) in arms.iter().enumerate() {
             match &arm.guard {
@@ -1147,6 +1277,8 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         node: &str,
         input: TsValue,
         indent: &str,
+        ok: &str,
+        fault: &str,
     ) -> Result<(TsValue, TsValue), String> {
         let Ty::Seq(item_ty) = input.ty.clone() else {
             return Err(format!("`fault map {node}` expected Seq input"));
@@ -1156,8 +1288,8 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                 "`fault map {node}` expected Seq[Faultable[V]] input"
             ));
         };
-        let ok_tmp = self.next_temp();
-        let fault_tmp = self.next_temp();
+        let ok_tmp = self.next_temp_or_preferred(Some(ok));
+        let fault_tmp = self.next_temp_or_preferred(Some(fault));
         let item = self.next_temp();
         let ok_seq_ty = Ty::Seq(ok_ty.clone());
         let fault_seq_ty = Ty::Seq(Box::new(Ty::Fault));
@@ -1339,9 +1471,54 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
     }
 
     fn next_temp(&mut self) -> String {
-        let tmp = format!("t{}", self.temp);
-        self.temp += 1;
-        tmp
+        loop {
+            let tmp = format!("t{}", self.temp);
+            self.temp += 1;
+            if self.try_reserve_ident(&tmp) {
+                return tmp;
+            }
+        }
+    }
+
+    fn next_temp_or_preferred(&mut self, preferred: Option<&str>) -> String {
+        if let Some(preferred) = preferred {
+            let ident = ts_ident(preferred);
+            if self.try_reserve_ident(&ident) {
+                return ident;
+            }
+        }
+        self.next_temp()
+    }
+
+    fn reserve_ident(&mut self, ident: &str) {
+        self.used_idents.insert(ident.to_string());
+    }
+
+    fn try_reserve_ident(&mut self, ident: &str) -> bool {
+        self.used_idents.insert(ident.to_string())
+    }
+
+    fn reserve_internal_idents(&mut self) {
+        for ident in TS_INTERNAL_VALUE_IDENTS {
+            self.reserve_ident(ident);
+        }
+    }
+}
+
+fn final_bind_target_for_stage(chain: &Chain, index: usize) -> Option<&BindingTarget> {
+    if index + 2 != chain.stages.len() {
+        return None;
+    }
+    match chain.stages.last() {
+        Some(Stage::Bind(target)) => Some(target),
+        _ => None,
+    }
+}
+
+fn binding_target_name(target: &BindingTarget) -> Option<&str> {
+    match target {
+        BindingTarget::Variable(name) => Some(name),
+        BindingTarget::Discard | BindingTarget::Tuple(_) => None,
     }
 }
 
@@ -1531,6 +1708,41 @@ const TS_RESERVED: &[&str] = &[
     "while",
     "with",
     "yield",
+];
+
+const TS_INTERNAL_VALUE_IDENTS: &[&str] = &[
+    "faAt",
+    "faBroadcastLeft",
+    "faBroadcastRight",
+    "faCollect",
+    "faConcatBytes",
+    "faExitCode",
+    "faExpect",
+    "faFault",
+    "faFaultMessage",
+    "faFill",
+    "faFlagPresent",
+    "faFlagValue",
+    "faGet",
+    "faGetOr",
+    "faGroupById",
+    "faHead",
+    "faLast",
+    "faOk",
+    "faParseInt",
+    "faParseReal",
+    "faRangeStep",
+    "faReadStdin",
+    "faSet",
+    "faShiftLeft",
+    "faShiftRight",
+    "faSplitLines",
+    "faStripPrefix",
+    "faStripSuffix",
+    "faTranspose",
+    "faWriteStderr",
+    "faWriteStdout",
+    "faZip",
 ];
 
 const TS_PRELUDE: &str = r#"// Generated by FlowArrow. Do not edit by hand.

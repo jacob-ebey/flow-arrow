@@ -336,6 +336,21 @@ mod tests {
     }
 
     #[test]
+    fn typescript_source_names_do_not_shadow_runtime_helpers() {
+        let source = r#"
+            import std.int { parse_int }
+
+            extern node parse(bytes: Bytes) -> out: Faultable[Int] {
+                $bytes -> parse_int -> $faOk
+                $faOk -> $out
+            }
+        "#;
+        let ts = compile_typescript_library_source(source).expect("typescript");
+        assert!(ts.contains("return faParseInt(bytes);"));
+        assert!(!ts.contains("const faOk"));
+    }
+
+    #[test]
     fn compiles_llvm_ir_preview_in_memory() {
         let fib_source = r#"
             import std.math { add }
