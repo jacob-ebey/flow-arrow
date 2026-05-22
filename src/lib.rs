@@ -1,9 +1,8 @@
 use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::Path;
 
 mod ast;
+mod build;
 mod codegen;
 mod diagnostic;
 mod fmt;
@@ -16,6 +15,10 @@ mod parser;
 mod stdlib;
 mod typecheck;
 
+pub use build::{
+    BuildOptions, BuildOutput, BuildTarget, NativeTarget, WasmTarget, build_file,
+    build_file_with_options,
+};
 pub use fmt::{check_file as check_format_file, format_file, format_source};
 
 pub fn run_lsp_server() -> Result<u8, String> {
@@ -32,174 +35,14 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     let build = build_file(path, None)?;
-    let status = Command::new(&build.executable)
+    let status = std::process::Command::new(&build.executable)
         .args(args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
         .status()
         .map_err(|error| format!("failed to run `{}`: {error}", build.executable.display()))?;
     Ok(status.code().unwrap_or(1).try_into().unwrap_or(1))
-}
-
-pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
-    let module = parser::parse(&source)?;
-    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    typecheck::check_module_with_base(&module, base_dir)?;
-    let llvm = codegen::emit_direct_llvm_with_base(&module, base_dir)?;
-    let runtime_c = codegen::emit_runtime_support_c_with_base(&module, base_dir)?;
-
-    let build_dir = build_dir(path);
-    let cache_dir = build_dir.join(".cache");
-    fs::create_dir_all(&cache_dir)
-        .map_err(|error| format!("failed to create `{}`: {error}", cache_dir.display()))?;
-    let executable_name = executable_name(path)?;
-    let llvm_path = cache_dir.join("main.ll");
-    let runtime_llvm_path = cache_dir.join("runtime.ll");
-    let stale_runtime_c_path = cache_dir.join("runtime.c");
-    let hash_path = cache_dir.join("build.hash");
-    let executable = build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX));
-    let build_hash = format!("{:016x}", build_hash(&llvm, &runtime_c));
-
-    if executable.exists()
-        && runtime_llvm_path.exists()
-        && llvm_path.exists()
-        && fs::read_to_string(&hash_path)
-            .map(|cached_hash| cached_hash == build_hash)
-            .unwrap_or(false)
-    {
-        if let Some(out) = emit_llvm {
-            fs::copy(&llvm_path, out).map_err(|error| {
-                format!(
-                    "failed to copy emitted LLVM from `{}` to `{}`: {error}",
-                    llvm_path.display(),
-                    out.display()
-                )
-            })?;
-        }
-        return Ok(BuildOutput {
-            build_dir,
-            executable,
-        });
-    }
-
-    fs::write(&llvm_path, llvm)
-        .map_err(|error| format!("failed to write `{}`: {error}", llvm_path.display()))?;
-    emit_runtime_llvm(&runtime_c, &runtime_llvm_path)?;
-    if let Some(out) = emit_llvm {
-        fs::copy(&llvm_path, out).map_err(|error| {
-            format!(
-                "failed to copy emitted LLVM from `{}` to `{}`: {error}",
-                llvm_path.display(),
-                out.display()
-            )
-        })?;
-    }
-    if stale_runtime_c_path.exists() {
-        fs::remove_file(&stale_runtime_c_path).map_err(|error| {
-            format!(
-                "failed to remove stale generated C artifact `{}`: {error}",
-                stale_runtime_c_path.display()
-            )
-        })?;
-    }
-
-    let mut clang = Command::new("clang");
-    clang
-        .arg("-O3")
-        .arg("-pthread")
-        .arg(&llvm_path)
-        .arg(&runtime_llvm_path);
-    if runtime_c.contains("jpeglib.h") || runtime_c.contains("png.h") {
-        for flag in cv_compiler_flags(&runtime_c)? {
-            clang.arg(flag);
-        }
-    }
-    if runtime_c.contains("h2o.h") {
-        for flag in http_compiler_flags()? {
-            clang.arg(flag);
-        }
-    }
-    if runtime_c.contains("sqlite3.h") {
-        for flag in sqlite_compiler_flags()? {
-            clang.arg(flag);
-        }
-    }
-    let output = clang.arg("-o").arg(&executable).output().map_err(|error| {
-        "failed to invoke clang for LLVM backend: ".to_string() + &error.to_string()
-    })?;
-    if !output.status.success() {
-        return Err(format!(
-            "LLVM backend failed:\n{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    fs::write(&hash_path, build_hash)
-        .map_err(|error| format!("failed to write `{}`: {error}", hash_path.display()))?;
-
-    Ok(BuildOutput {
-        build_dir,
-        executable,
-    })
-}
-
-fn emit_runtime_llvm(runtime_c: &str, runtime_llvm_path: &Path) -> Result<(), String> {
-    let mut clang = Command::new("clang");
-    clang
-        .arg("-O3")
-        .arg("-pthread")
-        .arg("-x")
-        .arg("c")
-        .arg("-S")
-        .arg("-emit-llvm")
-        .arg("-o")
-        .arg(runtime_llvm_path)
-        .arg("-");
-    if runtime_c.contains("jpeglib.h") || runtime_c.contains("png.h") {
-        for flag in cv_compiler_flags(runtime_c)? {
-            clang.arg(flag);
-        }
-    }
-    if runtime_c.contains("h2o.h") {
-        for flag in http_compiler_flags()? {
-            clang.arg(flag);
-        }
-    }
-    if runtime_c.contains("sqlite3.h") {
-        for flag in sqlite_compiler_flags()? {
-            clang.arg(flag);
-        }
-    }
-
-    let mut child = clang
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("failed to invoke clang for LLVM runtime emission: {error}"))?;
-    let runtime_c = runtime_c
-        .replace("static inline ", "inline ")
-        .replace("static ", "");
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| "failed to open clang stdin".to_string())?
-        .write_all(runtime_c.as_bytes())
-        .map_err(|error| format!("failed to write generated runtime to clang stdin: {error}"))?;
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("failed to wait for clang runtime emission: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "LLVM runtime emission failed:\n{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(())
 }
 
 pub fn typecheck_file(path: &Path) -> Result<(), String> {
@@ -232,154 +75,11 @@ fn mermaid_file_with_options(
     mermaid::emit_module_with_options(&module, options)
 }
 
-#[derive(Debug, Clone)]
-pub struct BuildOutput {
-    pub build_dir: PathBuf,
-    pub executable: PathBuf,
-}
-
-fn build_dir(path: &Path) -> PathBuf {
-    let root = path.parent().unwrap_or_else(|| Path::new("."));
-    root.join("build").join(host_target())
-}
-
-fn executable_name(path: &Path) -> Result<String, String> {
-    let name = path
-        .file_stem()
-        .ok_or_else(|| format!("`{}` has no file basename", path.display()))?
-        .to_string_lossy();
-    if name.is_empty() {
-        return Err(format!("`{}` has no file basename", path.display()));
-    }
-    Ok(name.into_owned())
-}
-
-fn host_target() -> String {
-    let arch = std::env::consts::ARCH;
-    let os = match std::env::consts::OS {
-        "macos" => "apple-darwin",
-        "windows" => "pc-windows-msvc",
-        "linux" => "unknown-linux-gnu",
-        other => return format!("{arch}-unknown-{other}"),
-    };
-    format!("{arch}-{os}")
-}
-
-fn build_hash(source: &str, runtime_c: &str) -> u64 {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-
-    let mut hash = FNV_OFFSET;
-    for byte in env!("CARGO_PKG_VERSION")
-        .as_bytes()
-        .iter()
-        .chain(b":llvm-runtime-ir-v1")
-        .chain(source.as_bytes())
-        .chain(runtime_c.as_bytes())
-    {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
-}
-
-fn cv_compiler_flags(runtime_c: &str) -> Result<Vec<String>, String> {
-    let mut flags = Vec::new();
-    if runtime_c.contains("jpeglib.h") {
-        flags.extend(pkg_config_flags("libjpeg", "JPEG")?);
-    }
-    if runtime_c.contains("png.h") {
-        flags.extend(pkg_config_flags("libpng", "PNG")?);
-    }
-    Ok(dedup_flags(flags))
-}
-
-fn http_compiler_flags() -> Result<Vec<String>, String> {
-    let mut flags = pkg_config_flags_any(&["libh2o-evloop", "libh2o"], "std.http", "HTTP/H2O")?;
-    if cfg!(target_os = "macos") {
-        flags.push("-DH2O_USE_KQUEUE=1".to_string());
-    } else if cfg!(target_os = "linux") {
-        flags.push("-DH2O_USE_EPOLL=1".to_string());
-    } else {
-        flags.push("-DH2O_USE_SELECT=1".to_string());
-    }
-    flags.extend(pkg_config_flags_for("std.http", "openssl", "OpenSSL")?);
-    flags.extend(pkg_config_flags_for("std.http", "libuv", "libuv")?);
-    Ok(dedup_flags(flags))
-}
-
-fn sqlite_compiler_flags() -> Result<Vec<String>, String> {
-    Ok(dedup_flags(pkg_config_flags_for(
-        "std.sqlite",
-        "sqlite3",
-        "SQLite",
-    )?))
-}
-
-fn pkg_config_flags_any(
-    packages: &[&str],
-    feature: &str,
-    label: &str,
-) -> Result<Vec<String>, String> {
-    let mut errors = Vec::new();
-    for package in packages {
-        match pkg_config_flags_for(feature, package, label) {
-            Ok(flags) => return Ok(flags),
-            Err(error) => errors.push(error),
-        }
-    }
-    Err(format!(
-        "std.http {label} support requires H2O development headers and libraries; tried pkg-config packages `{}`:\n{}",
-        packages.join("`, `"),
-        errors.join("\n")
-    ))
-}
-
-fn pkg_config_flags(package: &str, label: &str) -> Result<Vec<String>, String> {
-    pkg_config_flags_for("std.cv", package, label)
-}
-
-fn pkg_config_flags_for(feature: &str, package: &str, label: &str) -> Result<Vec<String>, String> {
-    let output = Command::new("pkg-config")
-        .args(["--libs", "--cflags", package])
-        .output()
-        .map_err(|error| format!("failed to invoke pkg-config for {package}: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "{feature} {label} support requires development headers and libraries; pkg-config {package} failed:\n{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    let mut flags = String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    if cfg!(target_os = "macos") {
-        let rpaths = flags
-            .iter()
-            .filter_map(|flag| flag.strip_prefix("-L"))
-            .map(|path| format!("-Wl,-rpath,{path}"))
-            .collect::<Vec<_>>();
-        flags.extend(rpaths);
-    }
-    Ok(flags)
-}
-
-fn dedup_flags(flags: Vec<String>) -> Vec<String> {
-    let mut deduped = Vec::new();
-    for flag in flags {
-        if !deduped.contains(&flag) {
-            deduped.push(flag);
-        }
-    }
-    deduped
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1020,7 +720,10 @@ mod tests {
 
         let build = build_file(&path, None).expect("build");
 
-        assert_eq!(build.build_dir, root.join("build").join(host_target()));
+        assert_eq!(
+            build.build_dir,
+            root.join("build").join(build::host_target())
+        );
         assert_eq!(
             build.executable,
             build

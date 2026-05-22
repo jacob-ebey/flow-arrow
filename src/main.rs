@@ -23,22 +23,34 @@ fn run_cli() -> Result<u8, String> {
             flowarrow::run_file_with_args(PathBuf::from(path).as_path(), args)
         }
         Some("build") => {
-            let path = args.next().ok_or_else(|| {
-                "usage: flowarrow build <path.flow> [--emit-llvm <path.ll>]".to_string()
-            })?;
-            let mut emit_llvm = None;
+            let mut path = None;
+            let mut options = flowarrow::BuildOptions::default();
             while let Some(flag) = args.next() {
                 match flag.as_str() {
+                    "--target" => {
+                        let target = args
+                            .next()
+                            .ok_or_else(|| "--target requires a target triple".to_string())?;
+                        options.target = target.parse()?;
+                    }
                     "--emit-llvm" => {
                         let out = args
                             .next()
                             .ok_or_else(|| "--emit-llvm requires an output path".to_string())?;
-                        emit_llvm = Some(PathBuf::from(out));
+                        options.emit_llvm = Some(PathBuf::from(out));
                     }
+                    other if other.starts_with("--") => {
+                        return Err(format!("unknown build option `{other}`"));
+                    }
+                    _ if path.is_none() => path = Some(flag),
                     other => return Err(format!("unknown build option `{other}`")),
                 }
             }
-            flowarrow::build_file(PathBuf::from(path).as_path(), emit_llvm.as_deref())?;
+            let path = path.ok_or_else(|| {
+                "usage: flowarrow build [--target <target>] [--emit-llvm <path.ll>] <path.flow>"
+                    .to_string()
+            })?;
+            flowarrow::build_file_with_options(PathBuf::from(path).as_path(), &options)?;
             Ok(0)
         }
         Some("typecheck") => {

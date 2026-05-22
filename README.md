@@ -80,6 +80,7 @@ Build an example:
 
 ```sh
 cargo run -- build examples/add-numbers-from-stdin/main.flow
+cargo run -- build examples/add-numbers-from-stdin/main.flow --target native
 ```
 
 Print a Mermaid execution graph:
@@ -109,17 +110,21 @@ cargo bench
 
 ## Build Artifacts
 
-`flowarrow build` writes native outputs under the source file's local build
-directory:
+`flowarrow build` defaults to the host native target. `--target native`,
+`--target host`, and the host target triple select the same native backend.
+WASM target triples are recognized for the target-aware build pipeline, but
+WASM code generation is not implemented yet.
+
+Native outputs are written under the source file's local build directory:
 
 ```text
-examples/<name>/build/<host-target>/
+examples/<name>/build/<target>/
 ```
 
 The generated LLVM modules are cached in:
 
 ```text
-examples/<name>/build/<host-target>/.cache/
+examples/<name>/build/<target>/.cache/
 ```
 
 These files are generated artifacts. Do not edit them by hand.

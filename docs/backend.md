@@ -126,6 +126,12 @@ The CLI follows Rust's convention because users already know it:
 flowarrow build --target <triple> --crate-type <kind>
 ```
 
+Current implementation status: `flowarrow build` defaults to the host
+native target and accepts `--target native`, `--target host`, or the host
+target triple for that backend. WASM triples are parsed and routed through
+the target-aware build pipeline, but the WASM backend is not implemented
+yet.
+
 Supported `--crate-type` values:
 
 | Kind         | Native artifact         | WASM artifact            |
