@@ -38,6 +38,41 @@ fn build_accepts_target_option_before_path() {
 }
 
 #[test]
+fn build_accepts_optimization_and_extra_compiler_flags() {
+    let path = temp_flow_path("flowarrow-build-flags");
+    fs::write(
+        &path,
+        r#"
+            import std.cli { Args }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> $exit_code
+            }
+        "#,
+    )
+    .expect("write source");
+
+    let output = Command::new(flowarrow())
+        .args([
+            "build",
+            "-O2",
+            "--compiler-flag",
+            "-fno-builtin",
+            path.to_str().expect("utf8 path"),
+        ])
+        .output()
+        .expect("run flowarrow build");
+    fs::remove_file(&path).expect("remove temp source");
+
+    assert!(
+        output.status.success(),
+        "flowarrow build failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn build_wasm_fib_example_and_run_node_script() {
     let output = Command::new(flowarrow())
         .args([

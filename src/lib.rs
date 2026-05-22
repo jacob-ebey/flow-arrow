@@ -16,8 +16,8 @@ mod stdlib;
 mod typecheck;
 
 pub use build::{
-    BuildOptions, BuildOutput, BuildTarget, CrateType, NativeTarget, WasmTarget, build_file,
-    build_file_with_options,
+    BuildOptimization, BuildOptions, BuildOutput, BuildTarget, CrateType, NativeTarget, WasmTarget,
+    build_file, build_file_with_options,
 };
 pub use fmt::{check_file as check_format_file, format_file, format_source};
 
@@ -947,7 +947,7 @@ mod tests {
             "program failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "89\n");
+        assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "144\n");
     }
 
     #[test]

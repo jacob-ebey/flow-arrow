@@ -40,6 +40,7 @@ pub(crate) fn emit_wasm_cdylib_llvm_with_base(
     module: &Module,
     base_dir: &Path,
     target_triple: &str,
+    optimization: OptimizationLevel,
 ) -> Result<WasmCdylibOutput, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let codegen = TypedCodegen::new(&expanded)?;
@@ -50,6 +51,7 @@ pub(crate) fn emit_wasm_cdylib_llvm_with_base(
             emit_entrypoint: false,
             export_nodes: true,
             emit_object: true,
+            optimization,
         },
     )?;
     Ok(WasmCdylibOutput {
@@ -4650,6 +4652,7 @@ struct DirectLlvmOptions {
     emit_entrypoint: bool,
     export_nodes: bool,
     emit_object: bool,
+    optimization: OptimizationLevel,
 }
 
 impl Default for DirectLlvmOptions {
@@ -4659,6 +4662,7 @@ impl Default for DirectLlvmOptions {
             emit_entrypoint: true,
             export_nodes: false,
             emit_object: false,
+            optimization: OptimizationLevel::Aggressive,
         }
     }
 }
@@ -4710,7 +4714,11 @@ impl<'a> DirectLlvm<'_, 'a> {
                 .target_triple
                 .as_deref()
                 .ok_or_else(|| "object emission requires a target triple".to_string())?;
-            Some(emit_target_object(&direct.module, target_triple)?)
+            Some(emit_target_object(
+                &direct.module,
+                target_triple,
+                direct.options.optimization,
+            )?)
         } else {
             None
         };
@@ -4722,7 +4730,11 @@ impl<'a> DirectLlvm<'_, 'a> {
     }
 }
 
-fn emit_target_object(module: &LlvmModule<'_>, target_triple: &str) -> Result<Vec<u8>, String> {
+fn emit_target_object(
+    module: &LlvmModule<'_>,
+    target_triple: &str,
+    optimization: OptimizationLevel,
+) -> Result<Vec<u8>, String> {
     Target::initialize_webassembly(&InitializationConfig::default());
     let triple = TargetTriple::create(target_triple);
     let target = Target::from_triple(&triple)
@@ -4732,7 +4744,7 @@ fn emit_target_object(module: &LlvmModule<'_>, target_triple: &str) -> Result<Ve
             &triple,
             "generic",
             "",
-            OptimizationLevel::Aggressive,
+            optimization,
             RelocMode::Default,
             CodeModel::Default,
         )

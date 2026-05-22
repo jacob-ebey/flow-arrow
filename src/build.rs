@@ -17,6 +17,9 @@ const NATIVE_TARGETS: &[&str] = &[
 pub struct BuildOptions {
     pub target: BuildTarget,
     pub crate_type: CrateType,
+    pub optimization: BuildOptimization,
+    pub compiler_flags: Vec<String>,
+    pub linker_flags: Vec<String>,
     pub emit_llvm: Option<PathBuf>,
 }
 
@@ -29,6 +32,9 @@ impl BuildOptions {
         Self {
             target,
             crate_type: CrateType::Bin,
+            optimization: BuildOptimization::default(),
+            compiler_flags: Vec::new(),
+            linker_flags: Vec::new(),
             emit_llvm: None,
         }
     }
@@ -44,8 +50,61 @@ impl Default for BuildOptions {
         Self {
             target: BuildTarget::native_host(),
             crate_type: CrateType::Bin,
+            optimization: BuildOptimization::default(),
+            compiler_flags: Vec::new(),
+            linker_flags: Vec::new(),
             emit_llvm: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildOptimization {
+    O0,
+    O1,
+    O2,
+    O3,
+    Os,
+    Oz,
+}
+
+impl BuildOptimization {
+    pub fn from_clang_flag(flag: &str) -> Option<Self> {
+        match flag {
+            "-O0" => Some(Self::O0),
+            "-O1" | "-Og" => Some(Self::O1),
+            "-O2" => Some(Self::O2),
+            "-O3" => Some(Self::O3),
+            "-Os" => Some(Self::Os),
+            "-Oz" => Some(Self::Oz),
+            _ => None,
+        }
+    }
+
+    fn clang_flag(self) -> &'static str {
+        match self {
+            Self::O0 => "-O0",
+            Self::O1 => "-O1",
+            Self::O2 => "-O2",
+            Self::O3 => "-O3",
+            Self::Os => "-Os",
+            Self::Oz => "-Oz",
+        }
+    }
+
+    fn llvm_level(self) -> inkwell::OptimizationLevel {
+        match self {
+            Self::O0 => inkwell::OptimizationLevel::None,
+            Self::O1 => inkwell::OptimizationLevel::Less,
+            Self::O2 | Self::Os | Self::Oz => inkwell::OptimizationLevel::Default,
+            Self::O3 => inkwell::OptimizationLevel::Aggressive,
+        }
+    }
+}
+
+impl Default for BuildOptimization {
+    fn default() -> Self {
+        Self::O3
     }
 }
 
@@ -234,7 +293,7 @@ fn build_native(
     let plan = BuildPlan::new(
         path,
         &BuildTarget::Native(target.clone()),
-        options.crate_type,
+        options,
         &llvm,
         &runtime_c,
     )?;
@@ -251,10 +310,10 @@ fn build_native(
 
     fs::write(&plan.llvm_path, llvm)
         .map_err(|error| format!("failed to write `{}`: {error}", plan.llvm_path.display()))?;
-    emit_native_runtime_llvm(&runtime_c, &plan.runtime_llvm_path)?;
+    emit_native_runtime_llvm(&runtime_c, &plan.runtime_llvm_path, options)?;
     copy_emitted_llvm(&plan.llvm_path, options.emit_llvm.as_deref())?;
     remove_stale_runtime_c(&plan.stale_runtime_c_path)?;
-    link_native_executable(&plan, &runtime_c)?;
+    link_native_executable(&plan, &runtime_c, options)?;
     fs::write(&plan.hash_path, plan.build_hash)
         .map_err(|error| format!("failed to write `{}`: {error}", plan.hash_path.display()))?;
 
@@ -283,8 +342,19 @@ fn build_wasm(
                 .to_string(),
         );
     }
+    if !options.compiler_flags.is_empty() {
+        return Err(
+            "WASM cdylib builds use the direct LLVM backend; use `-O*` for optimization and `--linker-flag` for wasm-ld flags"
+                .to_string(),
+        );
+    }
 
-    let emitted = codegen::emit_wasm_cdylib_llvm_with_base(module, base_dir, target.triple())?;
+    let emitted = codegen::emit_wasm_cdylib_llvm_with_base(
+        module,
+        base_dir,
+        target.triple(),
+        options.optimization.llvm_level(),
+    )?;
     if emitted.exports.is_empty() {
         return Err("WASM cdylib build requires at least one top-level node export".to_string());
     }
@@ -292,7 +362,7 @@ fn build_wasm(
     let plan = BuildPlan::new(
         path,
         &BuildTarget::Wasm(target),
-        options.crate_type,
+        options,
         &emitted.llvm,
         &export_hash,
     )?;
@@ -312,7 +382,7 @@ fn build_wasm(
     fs::write(&plan.object_path, emitted.object)
         .map_err(|error| format!("failed to write `{}`: {error}", plan.object_path.display()))?;
     copy_emitted_llvm(&plan.llvm_path, options.emit_llvm.as_deref())?;
-    link_wasm_cdylib(&plan, target, &emitted.exports)?;
+    link_wasm_cdylib(&plan, target, &emitted.exports, options)?;
     fs::write(&plan.hash_path, plan.build_hash)
         .map_err(|error| format!("failed to write `{}`: {error}", plan.hash_path.display()))?;
 
@@ -326,7 +396,7 @@ impl BuildPlan {
     fn new(
         path: &Path,
         target: &BuildTarget,
-        crate_type: CrateType,
+        options: &BuildOptions,
         llvm: &str,
         runtime_c: &str,
     ) -> Result<Self, String> {
@@ -348,7 +418,7 @@ impl BuildPlan {
             runtime_llvm_path: cache_dir.join("runtime.ll"),
             stale_runtime_c_path: cache_dir.join("runtime.c"),
             hash_path: cache_dir.join("build.hash"),
-            build_hash: format!("{:016x}", build_hash(target, crate_type, llvm, runtime_c)),
+            build_hash: format!("{:016x}", build_hash(target, options, llvm, runtime_c)),
         })
     }
 
@@ -396,14 +466,20 @@ fn remove_stale_runtime_c(stale_runtime_c_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn link_native_executable(plan: &BuildPlan, runtime_c: &str) -> Result<(), String> {
+fn link_native_executable(
+    plan: &BuildPlan,
+    runtime_c: &str,
+    options: &BuildOptions,
+) -> Result<(), String> {
     let mut clang = Command::new("clang");
     clang
-        .arg("-O3")
+        .arg(options.optimization.clang_flag())
         .arg("-pthread")
+        .args(&options.compiler_flags)
         .arg(&plan.llvm_path)
         .arg(&plan.runtime_llvm_path);
     add_native_compiler_flags(&mut clang, runtime_c)?;
+    clang.args(&options.linker_flags);
     let output = clang
         .arg("-o")
         .arg(&plan.executable)
@@ -425,6 +501,7 @@ fn link_wasm_cdylib(
     plan: &BuildPlan,
     _target: WasmTarget,
     exports: &[String],
+    options: &BuildOptions,
 ) -> Result<(), String> {
     let linker = wasm_linker()?;
     let mut command = Command::new(&linker.path);
@@ -435,6 +512,7 @@ fn link_wasm_cdylib(
     for export in exports {
         command.arg(format!("--export={export}"));
     }
+    command.args(&options.linker_flags);
     let output = command
         .arg("-o")
         .arg(&plan.executable)
@@ -560,11 +638,16 @@ fn rustup_wasm_linker_candidates() -> Vec<WasmLinker> {
     candidates
 }
 
-fn emit_native_runtime_llvm(runtime_c: &str, runtime_llvm_path: &Path) -> Result<(), String> {
+fn emit_native_runtime_llvm(
+    runtime_c: &str,
+    runtime_llvm_path: &Path,
+    options: &BuildOptions,
+) -> Result<(), String> {
     let mut clang = Command::new("clang");
     clang
-        .arg("-O3")
+        .arg(options.optimization.clang_flag())
         .arg("-pthread")
+        .args(&options.compiler_flags)
         .arg("-x")
         .arg("c")
         .arg("-S")
@@ -648,19 +731,22 @@ pub(crate) fn host_target() -> String {
     format!("{arch}-{os}")
 }
 
-fn build_hash(target: &BuildTarget, crate_type: CrateType, source: &str, runtime_c: &str) -> u64 {
+fn build_hash(target: &BuildTarget, options: &BuildOptions, source: &str, runtime_c: &str) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
 
     let mut hash = FNV_OFFSET;
-    let crate_type = format!("{crate_type:?}");
+    let options_hash = format!(
+        "{:?}:{:?}:{:?}:{:?}",
+        options.crate_type, options.optimization, options.compiler_flags, options.linker_flags
+    );
     for byte in env!("CARGO_PKG_VERSION")
         .as_bytes()
         .iter()
         .chain(b":llvm-runtime-ir-v2:")
         .chain(target.triple().as_bytes())
         .chain(b":")
-        .chain(crate_type.as_bytes())
+        .chain(options_hash.as_bytes())
         .chain(b":")
         .chain(source.as_bytes())
         .chain(runtime_c.as_bytes())
@@ -801,6 +887,27 @@ mod tests {
     fn parses_supported_crate_types() {
         assert_eq!(CrateType::from_str("bin"), Ok(CrateType::Bin));
         assert_eq!(CrateType::from_str("cdylib"), Ok(CrateType::Cdylib));
+    }
+
+    #[test]
+    fn parses_clang_style_optimization_flags() {
+        assert_eq!(
+            BuildOptimization::from_clang_flag("-O0"),
+            Some(BuildOptimization::O0)
+        );
+        assert_eq!(
+            BuildOptimization::from_clang_flag("-O2"),
+            Some(BuildOptimization::O2)
+        );
+        assert_eq!(
+            BuildOptimization::from_clang_flag("-O3"),
+            Some(BuildOptimization::O3)
+        );
+        assert_eq!(
+            BuildOptimization::from_clang_flag("-Oz"),
+            Some(BuildOptimization::Oz)
+        );
+        assert_eq!(BuildOptimization::from_clang_flag("-g"), None);
     }
 
     #[test]

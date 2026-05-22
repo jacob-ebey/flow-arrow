@@ -20,12 +20,13 @@ import std.int { parse_int, format_int }
 import std.math { add }
 
 program main(args: Args) -> exit_code: Faultable[Int] {
-    10              -> fib_result   -> format_int -> $result
+    ()              -> read_stdin   -> parse_int  -> $depth
+    $depth          -> fib   -> format_int -> $result
     [$result, "\n"] -> concat_bytes -> $output
     $output         -> write_stdout -> $exit_code
 }
 
-node fib_result(depth: Int) -> result: Int {
+node fib(depth: Int) -> result: Int {
     (0, 1) -> repeat<$depth> fib_step -> ($result, $)
 }
 

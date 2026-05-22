@@ -132,6 +132,21 @@ target triple for that backend. `wasm32-unknown-unknown` supports an
 initial `--crate-type cdylib` reactor-module path for pure scalar node
 exports. `wasm32-wasi` is parsed but not implemented yet.
 
+Build optimization defaults to `-O3`. Users can select a clang-style
+optimization level with `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, or `-Oz`.
+Native builds pass that optimization flag to the clang invocations used
+for runtime LLVM emission and final linking. WASM `cdylib` builds map
+the optimization level to LLVM target-machine optimization, with `-O3`
+using LLVM's aggressive optimization level.
+
+Additional native compiler and linker flags can be passed with repeated
+`--compiler-flag <flag>` / `--cflag <flag>` and
+`--linker-flag <flag>` / `--ldflag <flag>`. A `--` delimiter also
+collects the remaining build arguments as compiler flags. WASM `cdylib`
+builds use the direct LLVM backend rather than a clang frontend, so they
+accept optimization flags and `--linker-flag` values for `wasm-ld` but
+reject arbitrary compiler flags.
+
 Supported `--crate-type` values:
 
 | Kind         | Native artifact         | WASM artifact            |

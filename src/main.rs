@@ -39,11 +39,37 @@ fn run_cli() -> Result<u8, String> {
                             .ok_or_else(|| "--crate-type requires `bin` or `cdylib`".to_string())?;
                         options.crate_type = crate_type.parse()?;
                     }
+                    "--compiler-flag" | "--cflag" => {
+                        let flag = args
+                            .next()
+                            .ok_or_else(|| format!("{flag} requires a compiler flag"))?;
+                        if let Some(optimization) =
+                            flowarrow::BuildOptimization::from_clang_flag(&flag)
+                        {
+                            options.optimization = optimization;
+                        } else {
+                            options.compiler_flags.push(flag);
+                        }
+                    }
+                    "--linker-flag" | "--ldflag" => {
+                        let flag = args
+                            .next()
+                            .ok_or_else(|| format!("{flag} requires a linker flag"))?;
+                        options.linker_flags.push(flag);
+                    }
                     "--emit-llvm" => {
                         let out = args
                             .next()
                             .ok_or_else(|| "--emit-llvm requires an output path".to_string())?;
                         options.emit_llvm = Some(PathBuf::from(out));
+                    }
+                    "--" => {
+                        options.compiler_flags.extend(args);
+                        break;
+                    }
+                    opt if flowarrow::BuildOptimization::from_clang_flag(opt).is_some() => {
+                        options.optimization =
+                            flowarrow::BuildOptimization::from_clang_flag(opt).expect("checked");
                     }
                     other if other.starts_with("--") => {
                         return Err(format!("unknown build option `{other}`"));
@@ -53,7 +79,7 @@ fn run_cli() -> Result<u8, String> {
                 }
             }
             let path = path.ok_or_else(|| {
-                "usage: flowarrow build [--target <target>] [--crate-type <bin|cdylib>] [--emit-llvm <path.ll>] <path.flow>"
+                "usage: flowarrow build [--target <target>] [--crate-type <bin|cdylib>] [-O0|-O1|-O2|-O3|-Os|-Oz] [--compiler-flag <flag>] [--linker-flag <flag>] [--emit-llvm <path.ll>] <path.flow> [-- <compiler flags...>]"
                     .to_string()
             })?;
             flowarrow::build_file_with_options(PathBuf::from(path).as_path(), &options)?;
