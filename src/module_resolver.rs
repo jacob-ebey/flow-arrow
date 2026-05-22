@@ -83,6 +83,11 @@ impl Resolver {
                     &references,
                     callable.name.clone(),
                 ))),
+                Decl::Foreign(foreign) => declarations.push(Decl::Foreign(rewrite_foreign_block(
+                    foreign.clone(),
+                    &references,
+                    None,
+                ))),
                 Decl::Import(_) => declarations.push(decl.clone()),
             }
         }
@@ -205,6 +210,9 @@ impl Resolver {
                         name,
                     )));
                 }
+                Decl::Foreign(foreign) => module_declarations.push(Decl::Foreign(
+                    rewrite_foreign_block(foreign, &references, Some(module)),
+                )),
                 Decl::Program(callable) => {
                     return Err(format!(
                         "stdlib module `{module}` declares program `{}`; source-backed stdlib modules may only export nodes",
@@ -338,6 +346,9 @@ impl Resolver {
                         name,
                     )));
                 }
+                Decl::Foreign(foreign) => module_declarations.push(Decl::Foreign(
+                    rewrite_foreign_block(foreign, &references, Some(&module_id)),
+                )),
                 Decl::Program(callable) => {
                     return Err(format!(
                         "local module `{}` declares program `{}`; imported local modules may only export types and nodes",
@@ -461,6 +472,25 @@ fn rewrite_struct_decl(
     struct_decl
 }
 
+fn rewrite_foreign_block(
+    mut foreign: ForeignBlock,
+    references: &HashMap<String, String>,
+    module_id: Option<&str>,
+) -> ForeignBlock {
+    for node in &mut foreign.nodes {
+        if let Some(module_id) = module_id {
+            node.name = internal_name(module_id, &node.name);
+        }
+        for port in &mut node.inputs {
+            port.ty = rewrite_type_text(&port.ty, references);
+        }
+        for port in &mut node.outputs {
+            port.ty = rewrite_type_text(&port.ty, references);
+        }
+    }
+    foreign
+}
+
 fn rewrite_endpoint(endpoint: &mut Endpoint, references: &HashMap<String, String>) {
     match endpoint {
         Endpoint::Name(name) => rewrite_name(name, references),
@@ -571,9 +601,14 @@ fn callable_names(module: &Module) -> HashSet<String> {
     module
         .declarations
         .iter()
-        .filter_map(|decl| match decl {
-            Decl::Node(callable) | Decl::Program(callable) => Some(callable.name.clone()),
-            Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => None,
+        .flat_map(|decl| match decl {
+            Decl::Node(callable) | Decl::Program(callable) => vec![callable.name.clone()],
+            Decl::Foreign(foreign) => foreign
+                .nodes
+                .iter()
+                .map(|node| node.name.clone())
+                .collect::<Vec<_>>(),
+            Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => Vec::new(),
         })
         .collect()
 }
@@ -583,11 +618,19 @@ fn declaration_names(module: &Module) -> HashSet<String> {
         .declarations
         .iter()
         .filter_map(|decl| match decl {
-            Decl::TypeAlias(alias) => Some(alias.name.clone()),
-            Decl::Struct(struct_decl) => Some(struct_decl.name.clone()),
-            Decl::Node(callable) | Decl::Program(callable) => Some(callable.name.clone()),
+            Decl::TypeAlias(alias) => Some(vec![alias.name.clone()]),
+            Decl::Struct(struct_decl) => Some(vec![struct_decl.name.clone()]),
+            Decl::Node(callable) | Decl::Program(callable) => Some(vec![callable.name.clone()]),
+            Decl::Foreign(foreign) => Some(
+                foreign
+                    .nodes
+                    .iter()
+                    .map(|node| node.name.clone())
+                    .collect::<Vec<_>>(),
+            ),
             Decl::Import(_) => None,
         })
+        .flatten()
         .collect()
 }
 
@@ -598,7 +641,7 @@ fn type_names(module: &Module) -> HashSet<String> {
         .filter_map(|decl| match decl {
             Decl::TypeAlias(alias) => Some(alias.name.clone()),
             Decl::Struct(struct_decl) => Some(struct_decl.name.clone()),
-            Decl::Node(_) | Decl::Program(_) | Decl::Import(_) => None,
+            Decl::Node(_) | Decl::Program(_) | Decl::Foreign(_) | Decl::Import(_) => None,
         })
         .collect()
 }
@@ -613,6 +656,7 @@ fn extern_node_names(module: &Module) -> HashSet<String> {
             | Decl::Struct(_)
             | Decl::Node(_)
             | Decl::Program(_)
+            | Decl::Foreign(_)
             | Decl::Import(_) => None,
         })
         .collect()

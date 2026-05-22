@@ -221,7 +221,10 @@ mod tests {
                 ast::Decl::Node(callable) | ast::Decl::Program(callable) => {
                     Some(callable.name.as_str())
                 }
-                ast::Decl::TypeAlias(_) | ast::Decl::Struct(_) | ast::Decl::Import(_) => None,
+                ast::Decl::TypeAlias(_)
+                | ast::Decl::Struct(_)
+                | ast::Decl::Import(_)
+                | ast::Decl::Foreign(_) => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -364,6 +367,80 @@ mod tests {
         let ts = compile_typescript_library_source(source).expect("typescript");
         assert!(ts.contains("return faParseInt(bytes);"));
         assert!(!ts.contains("const faOk"));
+    }
+
+    #[test]
+    fn compiles_typescript_foreign_js_imports() {
+        let source = r#"
+            import std.cli { Args }
+
+            foreign js module "node:os" {
+                pure node platform() -> value: Bytes = platform
+                pure node available_parallelism() -> value: Int = availableParallelism
+            }
+
+            foreign js global "console" {
+                io node log(message: Bytes) -> done: Unit = log
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                () -> platform -> $platform
+                () -> available_parallelism -> $parallelism
+                $platform -> log -> success -> $exit_code
+            }
+
+            node success(done: Unit) -> exit_code: Int {
+                0 -> $exit_code
+            }
+        "#;
+        let ts = compile_typescript_source(source).expect("typescript");
+        assert!(ts.contains("import * as __fa_foreign_node_os from \"node:os\";"));
+        assert!(ts.contains("function platform(): string"));
+        assert!(ts.contains("return String(__fa_result);"));
+        assert!(ts.contains("function available_parallelism(): bigint"));
+        assert!(ts.contains("return BigInt(__fa_result);"));
+        assert!(ts.contains("function log(message: string): undefined"));
+        assert!(ts.contains("console.log(message);"));
+        assert!(ts.contains("platform();"));
+        assert!(ts.contains("available_parallelism();"));
+        assert!(ts.contains("return success(log("));
+    }
+
+    #[test]
+    fn typecheck_tracks_foreign_js_effects() {
+        let source = r#"
+            import std.cli { Args }
+
+            foreign js global "console" {
+                io node log(message: Bytes) -> done: Unit = log
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                ["a", "b"] -> filter log -> $kept
+                0 -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("`log` cannot be used as a map/filter function"));
+    }
+
+    #[test]
+    fn llvm_preview_rejects_foreign_js_for_now() {
+        let source = r#"
+            import std.cli { Args }
+
+            foreign js module "node:os" {
+                pure node platform() -> value: Bytes = platform
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                () -> platform -> $platform
+                0 -> $exit_code
+            }
+        "#;
+        let error = compile_llvm_ir_source(source).expect_err("llvm should reject foreign js");
+        assert!(error.contains("foreign declarations are currently supported only"));
     }
 
     #[test]

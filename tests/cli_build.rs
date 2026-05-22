@@ -454,6 +454,76 @@ fn build_javascript_with_worker_concurrency_and_run_node_workers() {
 }
 
 #[test]
+fn build_javascript_ts_interop_example_and_run_node() {
+    let output = Command::new(flowarrow())
+        .args([
+            "build",
+            "--target",
+            "javascript",
+            "examples/ts-interop/main.flow",
+        ])
+        .output()
+        .expect("run flowarrow build");
+    assert!(
+        output.status.success(),
+        "flowarrow build failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let generated = fs::read_to_string("examples/ts-interop/build/javascript/main.mjs")
+        .expect("read generated JavaScript");
+    let declarations = fs::read_to_string("examples/ts-interop/build/javascript/main.d.ts")
+        .expect("read generated JavaScript declarations");
+    assert!(generated.contains("import * as __fa_foreign_node_os from \"node:os\";"));
+    assert!(generated.contains("console.log(message);"));
+    assert!(generated.contains("__fa_foreign_node_os.availableParallelism()"));
+    assert!(declarations.contains("export declare function main(args: FaArgs): bigint"));
+
+    if Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipping JavaScript TS interop runtime test: node is not installed");
+        return;
+    }
+
+    let output = Command::new("node")
+        .arg("examples/ts-interop/build/javascript/main.mjs")
+        .output()
+        .expect("run node JavaScript TS interop example");
+    assert!(
+        output.status.success(),
+        "node TS interop example failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("FlowArrow TS interop"));
+    assert!(stdout.contains("platform: "));
+    assert!(stdout.contains("arch: "));
+    assert!(stdout.contains("available parallelism: "));
+    assert!(stdout.contains("home: "));
+
+    let output = Command::new(flowarrow())
+        .args([
+            "build",
+            "--target",
+            "typescript",
+            "examples/ts-interop/main.flow",
+        ])
+        .output()
+        .expect("run flowarrow TypeScript build");
+    assert!(
+        output.status.success(),
+        "flowarrow TypeScript build failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let generated_ts = fs::read_to_string("examples/ts-interop/build/typescript/main.ts")
+        .expect("read generated TypeScript");
+    assert!(generated_ts.contains("import * as __fa_foreign_node_os from \"node:os\";"));
+    assert!(generated_ts.contains("function log(message: string): undefined"));
+}
+
+#[test]
 fn typescript_concurrency_benchmark_example_builds_and_runs() {
     if Command::new("node").arg("--version").output().is_err() {
         eprintln!("skipping TypeScript concurrency benchmark example: node is not installed");

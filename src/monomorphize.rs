@@ -61,6 +61,7 @@ impl Monomorphizer {
                 Decl::TypeAlias(alias) => declarations.push(Decl::TypeAlias(alias.clone())),
                 Decl::Struct(struct_decl) => declarations.push(Decl::Struct(struct_decl.clone())),
                 Decl::Import(import) => declarations.push(Decl::Import(import.clone())),
+                Decl::Foreign(foreign) => declarations.push(Decl::Foreign(foreign.clone())),
             }
         }
         declarations.extend(self.generated.drain(..).map(Decl::Node));

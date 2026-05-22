@@ -57,6 +57,7 @@ import    as        node      program   map       reduce
 extern    scan      repeat    select    match     identity  grid      cell
 stencil2d range     range_between        range_step
 filter    length    fault     ok        struct    field
+foreign   pure      io        module    global
 ```
 
 ### 1.3 Literals
@@ -90,6 +91,7 @@ program        ::= declaration*
 declaration    ::= import_decl
                  | type_alias_decl
                  | struct_decl
+                 | foreign_decl
                  | node_decl
                  | program_decl
 
@@ -110,6 +112,19 @@ import_clause  ::= "as" IDENT
                  | "{" import_item ("," import_item)* ","? "}"
 
 import_item    ::= IDENT ("as" IDENT)?
+
+foreign_decl   ::= "foreign" foreign_target foreign_source "{"
+                   foreign_node+
+                   "}"
+
+foreign_target ::= "js"
+
+foreign_source ::= "module" STRING
+                 | "global" STRING
+
+foreign_node   ::= foreign_effect "node" IDENT "(" port_list? ")" "->" port_or_list "=" IDENT ("." IDENT)*
+
+foreign_effect ::= "pure" | "io"
 
 node_decl      ::= "extern"? "node" IDENT node_param_list? "(" port_list? ")" "->" port_or_list block
 
@@ -132,6 +147,27 @@ surface. Local FlowArrow imports may import type aliases and extern
 nodes; non-extern nodes remain private implementation details. The
 TypeScript, JavaScript, and WebAssembly library backends only expose
 extern nodes as host-callable functions.
+
+`foreign` declarations import host-provided callable nodes into the
+FlowArrow graph. The first implemented target is `foreign js`, which
+supports ESM module imports and global host objects for the TypeScript
+and JavaScript backends:
+
+```flow
+foreign js module "node:os" {
+    pure node platform() -> value: Bytes = platform
+}
+
+foreign js global "console" {
+    io node log(message: Bytes) -> done: Unit = log
+}
+```
+
+Foreign nodes must declare their effect. `pure` foreign nodes may be
+scheduled like ordinary pure nodes; `io` foreign nodes are boundary
+nodes and follow the same effect-ordering rules as `std.io` and
+`std.fs`. `foreign js` declarations are rejected by non-JS backends
+until those backends define their own foreign ABI lowering.
 
 Static node parameters make a `node` a compile-time graph template:
 
@@ -568,7 +604,7 @@ For convenience, the complete syntactic grammar is reproduced here.
 ```ebnf
 program        ::= declaration*
 
-declaration    ::= import_decl | type_alias_decl | node_decl | program_decl
+declaration    ::= import_decl | type_alias_decl | struct_decl | foreign_decl | node_decl | program_decl
 
 import_decl    ::= "import" import_source import_clause
 import_source  ::= module_path | STRING
@@ -580,7 +616,15 @@ import_item    ::= IDENT ("as" IDENT)?
 type_alias_decl ::= "type" IDENT "=" type
 struct_decl    ::= "struct" IDENT "{" port ("," port)* ","? "}"
 
-node_decl      ::= "node"    IDENT node_param_list? "(" port_list? ")" "->" port_or_list block
+foreign_decl   ::= "foreign" foreign_target foreign_source "{"
+                   foreign_node+
+                   "}"
+foreign_target ::= "js"
+foreign_source ::= "module" STRING | "global" STRING
+foreign_node   ::= foreign_effect "node" IDENT "(" port_list? ")" "->" port_or_list "=" IDENT ("." IDENT)*
+foreign_effect ::= "pure" | "io"
+
+node_decl      ::= "extern"? "node" IDENT node_param_list? "(" port_list? ")" "->" port_or_list block
 program_decl   ::= "program" IDENT "(" port_list? ")" "->" port_or_list block
 
 node_param_list ::= "<" node_param ("," node_param)* ","? ">"

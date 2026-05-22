@@ -262,6 +262,16 @@ pub fn emit_javascript_artifacts_with_options(
 pub fn emit_llvm_ir_preview(module: &Module) -> Result<String, String> {
     let expanded = module_resolver::expand_stdlib_sources(module)?;
     let expanded = monomorphize::expand_module(&expanded)?;
+    if expanded
+        .declarations
+        .iter()
+        .any(|decl| matches!(decl, Decl::Foreign(_)))
+    {
+        return Err(
+            "foreign declarations are currently supported only by the TypeScript and JavaScript backends"
+                .to_string(),
+        );
+    }
     llvm_text::emit_module(TypedCodegen::new(&expanded)?)
 }
 
@@ -471,6 +481,7 @@ struct TypedCodegen<'a> {
     stream_helper: usize,
     parallel_helpers: String,
     callables: HashMap<String, &'a Callable>,
+    foreign_js: HashSet<String>,
     signatures: HashMap<String, Signature>,
     stdlib_names: HashMap<String, String>,
     aliases: HashMap<String, Ty>,
@@ -486,6 +497,7 @@ impl<'a> TypedCodegen<'a> {
             stream_helper: 0,
             parallel_helpers: String::new(),
             callables: HashMap::new(),
+            foreign_js: HashSet::new(),
             signatures: HashMap::new(),
             stdlib_names: HashMap::new(),
             aliases: HashMap::new(),
@@ -493,11 +505,23 @@ impl<'a> TypedCodegen<'a> {
         };
         codegen.collect_imports();
         codegen.collect_type_aliases()?;
+        codegen.collect_foreigns()?;
         codegen.collect_callables()?;
         Ok(codegen)
     }
 
     fn emit(mut self) -> Result<String, String> {
+        if self
+            .module
+            .declarations
+            .iter()
+            .any(|decl| matches!(decl, Decl::Foreign(_)))
+        {
+            return Err(
+                "foreign declarations are currently supported only by the TypeScript and JavaScript backends"
+                    .to_string(),
+            );
+        }
         let mut bodies = String::new();
         let mut names = self.callables.keys().cloned().collect::<Vec<_>>();
         names.sort();
@@ -523,7 +547,7 @@ impl<'a> TypedCodegen<'a> {
 
         for decl in &self.module.declarations {
             match decl {
-                Decl::TypeAlias(_) | Decl::Struct(_) => {}
+                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Foreign(_) => {}
                 Decl::Node(callable) => self.emit_callable(&mut bodies, callable, false)?,
                 Decl::Program(callable) => self.emit_callable(&mut bodies, callable, true)?,
                 Decl::Import(_) => {}
@@ -1088,13 +1112,40 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             {
                 return Err(format!("duplicate declaration `{}`", callable.name));
             }
-            self.signatures.insert(
-                callable.name.clone(),
-                Signature {
-                    input: self.port_types(&callable.inputs)?,
-                    output: self.port_types(&callable.outputs)?,
-                },
-            );
+            if self
+                .signatures
+                .insert(
+                    callable.name.clone(),
+                    Signature {
+                        input: self.port_types(&callable.inputs)?,
+                        output: self.port_types(&callable.outputs)?,
+                    },
+                )
+                .is_some()
+            {
+                return Err(format!("duplicate declaration `{}`", callable.name));
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_foreigns(&mut self) -> Result<(), String> {
+        for decl in &self.module.declarations {
+            let Decl::Foreign(foreign) = decl else {
+                continue;
+            };
+            for node in &foreign.nodes {
+                if !self.foreign_js.insert(node.name.clone()) {
+                    return Err(format!("duplicate declaration `{}`", node.name));
+                }
+                self.signatures.insert(
+                    node.name.clone(),
+                    Signature {
+                        input: self.port_types(&node.inputs)?,
+                        output: self.port_types(&node.outputs)?,
+                    },
+                );
+            }
         }
         Ok(())
     }
@@ -5343,7 +5394,11 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 {
                     Some(callable.name.clone())
                 }
-                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) | Decl::Program(_) => None,
+                Decl::TypeAlias(_)
+                | Decl::Struct(_)
+                | Decl::Import(_)
+                | Decl::Foreign(_)
+                | Decl::Program(_) => None,
                 Decl::Node(_) => None,
             })
             .collect::<Vec<_>>();

@@ -28,7 +28,7 @@ pub fn emit_module_with_options(
     emitter.line("flowchart TD");
     for decl in &module.declarations {
         match decl {
-            Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => {}
+            Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) | Decl::Foreign(_) => {}
             Decl::Node(callable) => {
                 let kind = if callable.is_extern {
                     "extern node"

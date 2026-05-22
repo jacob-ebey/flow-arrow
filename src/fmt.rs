@@ -70,7 +70,10 @@ impl CommentLayout {
                         Decl::Node(callable) | Decl::Program(callable) => {
                             vec![ChainComments::default(); callable.chains.len()]
                         }
-                        Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => Vec::new(),
+                        Decl::TypeAlias(_)
+                        | Decl::Struct(_)
+                        | Decl::Import(_)
+                        | Decl::Foreign(_) => Vec::new(),
                     },
                 })
                 .collect(),
@@ -211,6 +214,7 @@ impl Formatter {
             }
             Decl::Struct(struct_decl) => self.format_struct(struct_decl),
             Decl::Import(import) => self.format_import(import),
+            Decl::Foreign(foreign) => self.format_foreign(foreign),
             Decl::Node(callable) => {
                 let kind = if callable.is_extern {
                     "extern node"
@@ -221,6 +225,36 @@ impl Formatter {
             }
             Decl::Program(callable) => self.format_callable(decl_index, "program", callable),
         }
+    }
+
+    fn format_foreign(&mut self, foreign: &ForeignBlock) {
+        let target = match foreign.target {
+            ForeignTarget::Js => "js",
+        };
+        let source = match &foreign.source {
+            ForeignSource::Module(specifier) => format!("module {}", format_string(specifier)),
+            ForeignSource::Global(name) => format!("global {}", format_string(name)),
+        };
+        self.line(format!("foreign {target} {source} {{"));
+        for node in &foreign.nodes {
+            let effect = match node.effect {
+                ForeignEffect::Pure => "pure",
+                ForeignEffect::Io => "io",
+            };
+            let inputs = node
+                .inputs
+                .iter()
+                .map(format_port)
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.line(format!(
+                "{INDENT}{effect} node {}({inputs}) -> {} = {}",
+                node.name,
+                format_port_or_list(&node.outputs),
+                node.symbol
+            ));
+        }
+        self.line("}");
     }
 
     fn format_struct(&mut self, struct_decl: &StructDecl) {
@@ -677,6 +711,7 @@ fn starts_declaration(text: &str) -> bool {
     starts_keyword(text, "import")
         || starts_keyword(text, "type")
         || starts_keyword(text, "struct")
+        || starts_keyword(text, "foreign")
         || starts_keyword(text, "extern")
         || starts_keyword(text, "node")
         || starts_keyword(text, "program")

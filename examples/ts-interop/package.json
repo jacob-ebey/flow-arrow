@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "scripts": {
+    "build": "flowarrow build --target javascript main.flow",
+    "build:ts": "flowarrow build --target typescript main.flow",
+    "start": "node build/javascript/main.mjs"
+  }
+}

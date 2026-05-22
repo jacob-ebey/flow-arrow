@@ -187,6 +187,42 @@ runtime support.
 Only nodes declared with `extern node` are emitted as exported
 host-callable functions; ordinary nodes are generated as internal helpers.
 
+The TypeScript and JavaScript backends also support `foreign js`
+declarations for host interop. `foreign js module "specifier"` emits a
+top-level ESM namespace import, and `foreign js global "name"` emits calls
+against an existing global object. Foreign nodes are generated as internal
+wrapper functions and keep their declared FlowArrow effect in the graph:
+
+```flow
+foreign js module "node:os" {
+    pure node platform() -> value: Bytes = platform
+}
+
+foreign js global "console" {
+    io node log(message: Bytes) -> done: Unit = log
+}
+```
+
+The generated TypeScript has the shape:
+
+```ts
+import * as __fa_foreign_node_os from "node:os";
+
+function platform(): string {
+  const __fa_result = __fa_foreign_node_os.platform();
+  return String(__fa_result);
+}
+
+function log(message: string): undefined {
+  console.log(message);
+  return undefined;
+}
+```
+
+Non-JS backends reject foreign declarations until they define a target-specific
+foreign ABI lowering. The planned native path is a `foreign c` form that emits
+LLVM declarations and links against C ABI symbols.
+
 Worker-backed concurrency is opt-in for JavaScript and TypeScript builds:
 
 ```text

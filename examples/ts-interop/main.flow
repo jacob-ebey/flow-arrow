@@ -1,0 +1,50 @@
+# ts-interop
+#
+# TS/JS foreign imports from an ESM module and a global object.
+import std.bytes { concat_bytes }
+import std.cli { Args }
+import std.int { format_int }
+
+foreign js module "node:os" {
+    pure node platform() -> value: Bytes = platform
+    pure node arch() -> value: Bytes = arch
+    pure node available_parallelism() -> value: Int = availableParallelism
+    pure node homedir() -> value: Bytes = homedir
+}
+
+foreign js global "console" {
+    io node log(message: Bytes) -> done: Unit = log
+}
+
+struct RuntimeInfo {
+    platform: Bytes,
+    arch: Bytes,
+    parallelism: Int,
+    home: Bytes,
+}
+
+program main(args: Args) -> exit_code: Int {
+    () -> platform              -> $platform
+    () -> arch                  -> $arch
+    () -> available_parallelism -> $parallelism
+    () -> homedir               -> $home
+
+    RuntimeInfo { platform: $platform, arch: $arch, parallelism: $parallelism, home: $home } -> $info
+    $info                                                                                    -> render_runtime_info -> $message
+    $message                                                                                 -> log                 -> exit_success -> $exit_code
+}
+
+node render_runtime_info(info: RuntimeInfo) -> message: Bytes {
+    $info -> field platform    -> $platform
+    $info -> field arch        -> $arch
+    $info -> field parallelism -> $parallelism
+    $info -> field home        -> $home
+
+    $parallelism -> format_int -> $parallelism_bytes
+
+    ["FlowArrow TS interop\n", "platform: ", $platform, "\n", "arch: ", $arch, "\n", "available parallelism: ", $parallelism_bytes, "\n", "home: ", $home] -> concat_bytes -> $message
+}
+
+node exit_success(done: Unit) -> exit_code: Int {
+    0 -> $exit_code
+}

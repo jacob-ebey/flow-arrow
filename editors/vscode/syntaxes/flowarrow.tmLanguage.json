@@ -97,6 +97,39 @@
     "declarations": {
       "patterns": [
         {
+          "name": "meta.declaration.foreign.flowarrow",
+          "match": "\\b(foreign)\\s+(js)\\s+(module|global)\\s+(\"(?:\\\\[\"\\\\ntr]|[^\"\\\\])*\")",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.foreign.flowarrow"
+            },
+            "2": {
+              "name": "support.type.foreign-target.flowarrow"
+            },
+            "3": {
+              "name": "keyword.other.foreign-source.flowarrow"
+            },
+            "4": {
+              "name": "string.quoted.double.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.foreign-node.flowarrow",
+          "match": "\\b(pure|io)\\s+(node)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.effect.flowarrow"
+            },
+            "2": {
+              "name": "keyword.declaration.flowarrow"
+            },
+            "3": {
+              "name": "entity.name.function.flowarrow"
+            }
+          }
+        },
+        {
           "name": "meta.declaration.node.flowarrow",
           "match": "\\b(?:(extern)\\s+)?(node|program)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
@@ -510,7 +543,7 @@
     },
     "keywords": {
       "name": "keyword.other.reserved.flowarrow",
-      "match": "\\b(?:import|as|type|struct|extern|node|program|cell|fault|ok|match|field)\\b"
+      "match": "\\b(?:import|as|type|struct|foreign|pure|io|module|global|extern|node|program|cell|fault|ok|match|field)\\b"
     },
     "booleans": {
       "name": "constant.language.boolean.flowarrow",

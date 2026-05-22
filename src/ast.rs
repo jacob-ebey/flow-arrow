@@ -8,6 +8,7 @@ pub enum Decl {
     TypeAlias(TypeAlias),
     Struct(StructDecl),
     Import(Import),
+    Foreign(ForeignBlock),
     Node(Callable),
     Program(Callable),
 }
@@ -46,6 +47,39 @@ pub enum ImportClause {
 pub struct ImportItem {
     pub name: String,
     pub alias: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForeignBlock {
+    pub target: ForeignTarget,
+    pub source: ForeignSource,
+    pub nodes: Vec<ForeignNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForeignTarget {
+    Js,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForeignSource {
+    Module(String),
+    Global(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForeignNode {
+    pub name: String,
+    pub effect: ForeignEffect,
+    pub inputs: Vec<Port>,
+    pub outputs: Vec<Port>,
+    pub symbol: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForeignEffect {
+    Pure,
+    Io,
 }
 
 #[derive(Debug, Clone, PartialEq)]

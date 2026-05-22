@@ -188,6 +188,7 @@ impl<'a> Checker<'a> {
         checker.import_intrinsics()?;
         checker.collect_imports()?;
         checker.collect_type_aliases()?;
+        checker.collect_foreigns()?;
         checker.collect_callables()?;
         checker.infer_effects();
         Ok(checker)
@@ -202,6 +203,7 @@ impl<'a> Checker<'a> {
         for decl in &self.module.declarations {
             match decl {
                 Decl::TypeAlias(_) | Decl::Struct(_) => {}
+                Decl::Foreign(foreign) => self.check_foreign(foreign)?,
                 Decl::Node(callable) => self.check_callable(callable, CallableKind::Node)?,
                 Decl::Program(callable) => self.check_callable(callable, CallableKind::Program)?,
                 Decl::Import(_) => {}
@@ -216,7 +218,9 @@ impl<'a> Checker<'a> {
             let (callable, kind) = match decl {
                 Decl::Node(callable) => (callable, CallableKind::Node),
                 Decl::Program(callable) => (callable, CallableKind::Program),
-                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => continue,
+                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Foreign(_) | Decl::Import(_) => {
+                    continue;
+                }
             };
             summary
                 .callables
@@ -560,7 +564,9 @@ impl<'a> Checker<'a> {
             let (callable, kind) = match decl {
                 Decl::Node(callable) => (callable, CallableKind::Node),
                 Decl::Program(callable) => (callable, CallableKind::Program),
-                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => continue,
+                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Foreign(_) | Decl::Import(_) => {
+                    continue;
+                }
             };
             let info = CallableInfo {
                 signatures: vec![self.callable_signature(callable)?],
@@ -573,6 +579,36 @@ impl<'a> Checker<'a> {
                 runtime_name: callable.name.clone(),
             };
             self.insert_symbol(&callable.name, info)?;
+        }
+        Ok(())
+    }
+
+    fn collect_foreigns(&mut self) -> Result<(), String> {
+        for decl in &self.module.declarations {
+            let Decl::Foreign(foreign) = decl else {
+                continue;
+            };
+            for node in &foreign.nodes {
+                self.insert_symbol(
+                    &node.name,
+                    CallableInfo {
+                        signatures: vec![Signature {
+                            input: self.port_types(&node.inputs)?,
+                            output: self.port_types(&node.outputs)?,
+                        }],
+                        reduce_signatures: Vec::new(),
+                        node_params: Vec::new(),
+                        kind: CallableKind::Node,
+                        effect: match node.effect {
+                            ForeignEffect::Pure => Effect::Pure,
+                            ForeignEffect::Io => Effect::Io,
+                        },
+                        runtime: RuntimeSupport::DirectBuiltin,
+                        is_stdlib: false,
+                        runtime_name: node.name.clone(),
+                    },
+                )?;
+            }
         }
         Ok(())
     }
@@ -801,6 +837,34 @@ impl<'a> Checker<'a> {
                 actual,
                 &expected,
             )?;
+        }
+        Ok(())
+    }
+
+    fn check_foreign(&self, foreign: &ForeignBlock) -> Result<(), String> {
+        for node in &foreign.nodes {
+            let mut inputs = HashMap::new();
+            for port in &node.inputs {
+                let ty = self.parse_declared_type(&port.ty)?;
+                self.validate_declared_type(&ty)?;
+                if inputs.insert(port.name.clone(), ()).is_some() {
+                    return Err(format!(
+                        "foreign node `{}` declares input `{}` more than once",
+                        node.name, port.name
+                    ));
+                }
+            }
+            let mut outputs = HashMap::new();
+            for port in &node.outputs {
+                let ty = self.parse_declared_type(&port.ty)?;
+                self.validate_declared_type(&ty)?;
+                if outputs.insert(port.name.clone(), ()).is_some() {
+                    return Err(format!(
+                        "foreign node `{}` declares output `{}` more than once",
+                        node.name, port.name
+                    ));
+                }
+            }
         }
         Ok(())
     }

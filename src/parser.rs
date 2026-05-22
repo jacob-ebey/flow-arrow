@@ -43,6 +43,10 @@ impl Parser {
                 self.bump();
                 Ok(Decl::Import(self.parse_import()?))
             }
+            Some("foreign") => {
+                self.bump();
+                Ok(Decl::Foreign(self.parse_foreign()?))
+            }
             Some("extern") => {
                 self.bump();
                 if self.peek_ident() != Some("node") {
@@ -132,6 +136,72 @@ impl Parser {
             }
         };
         Ok(Import { source, clause })
+    }
+
+    fn parse_foreign(&mut self) -> Result<ForeignBlock, SourceDiagnostic> {
+        let target = match self.expect_ident()?.as_str() {
+            "js" => ForeignTarget::Js,
+            other => {
+                return Err(self.error_here(format!(
+                    "unsupported foreign target `{other}`; expected `js`"
+                )));
+            }
+        };
+        let source = match self.expect_ident()?.as_str() {
+            "module" => ForeignSource::Module(self.expect_string()?),
+            "global" => ForeignSource::Global(self.expect_string()?),
+            other => {
+                return Err(self.error_here(format!(
+                    "expected foreign source kind `module` or `global`, found `{other}`"
+                )));
+            }
+        };
+        self.expect(Token::LBrace)?;
+        let mut nodes = Vec::new();
+        while !self.eat(Token::RBrace) {
+            nodes.push(self.parse_foreign_node()?);
+        }
+        if nodes.is_empty() {
+            return Err(self.error_here("foreign block cannot be empty"));
+        }
+        Ok(ForeignBlock {
+            target,
+            source,
+            nodes,
+        })
+    }
+
+    fn parse_foreign_node(&mut self) -> Result<ForeignNode, SourceDiagnostic> {
+        let effect = match self.expect_ident()?.as_str() {
+            "pure" => ForeignEffect::Pure,
+            "io" => ForeignEffect::Io,
+            other => {
+                return Err(self.error_here(format!(
+                    "expected foreign node effect `pure` or `io`, found `{other}`"
+                )));
+            }
+        };
+        self.expect_keyword("node")?;
+        let name = self.expect_ident()?;
+        self.expect(Token::LParen)?;
+        let inputs = if self.eat(Token::RParen) {
+            Vec::new()
+        } else {
+            let ports = self.parse_port_list()?;
+            self.expect(Token::RParen)?;
+            ports
+        };
+        self.expect(Token::Arrow)?;
+        let outputs = self.parse_port_or_list()?;
+        self.expect(Token::Equal)?;
+        let symbol = self.parse_qualified_ident()?;
+        Ok(ForeignNode {
+            name,
+            effect,
+            inputs,
+            outputs,
+            symbol,
+        })
     }
 
     fn parse_callable(&mut self, is_extern: bool) -> Result<Callable, SourceDiagnostic> {
@@ -273,6 +343,7 @@ impl Parser {
                     text.push('.');
                 }
                 Token::Comma
+                | Token::Equal
                 | Token::RParen
                 | Token::LBrace
                 | Token::RBrace
@@ -648,6 +719,16 @@ impl Parser {
         }
     }
 
+    fn expect_string(&mut self) -> Result<String, SourceDiagnostic> {
+        match self.peek().clone() {
+            Token::String(value) => {
+                self.bump();
+                Ok(value)
+            }
+            other => Err(self.error_here(format!("expected string, found {other:?}"))),
+        }
+    }
+
     fn expect_variable(&mut self) -> Result<String, SourceDiagnostic> {
         match self.peek().clone() {
             Token::Variable(name) => {
@@ -709,6 +790,6 @@ impl Parser {
 fn is_declaration_keyword(name: &str) -> bool {
     matches!(
         name,
-        "type" | "struct" | "import" | "extern" | "node" | "program"
+        "type" | "struct" | "import" | "foreign" | "extern" | "node" | "program"
     )
 }

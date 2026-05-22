@@ -4,7 +4,8 @@ use super::{
     format_match_target, sequence_item_type,
 };
 use crate::ast::{
-    BindingTarget, Callable, Chain, Decl, Endpoint, MatchArm, MatchGuard, MatchTarget, Stage,
+    BindingTarget, Callable, Chain, Decl, Endpoint, ForeignSource, MatchArm, MatchGuard,
+    MatchTarget, Stage,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -89,7 +90,9 @@ impl<'a> TypeScriptCodegen<'a> {
 
     fn emit_artifacts(mut self) -> Result<TypeScriptEmitOutput, String> {
         let mut out = String::new();
+        self.emit_foreign_js_imports(&mut out);
         out.push_str(TS_PRELUDE);
+        self.emit_foreign_js_wrappers(&mut out)?;
 
         let callables = self
             .codegen
@@ -99,7 +102,7 @@ impl<'a> TypeScriptCodegen<'a> {
             .filter_map(|decl| match decl {
                 Decl::Node(callable) => Some((callable.clone(), false)),
                 Decl::Program(callable) => Some((callable.clone(), true)),
-                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => None,
+                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) | Decl::Foreign(_) => None,
             })
             .collect::<Vec<_>>();
         let has_program_main = callables
@@ -165,6 +168,87 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         ));
     }
 
+    fn emit_foreign_js_imports(&self, out: &mut String) {
+        let mut module_sources = self
+            .codegen
+            .module
+            .declarations
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::Foreign(foreign) => match &foreign.source {
+                    ForeignSource::Module(specifier) => Some(specifier.as_str()),
+                    ForeignSource::Global(_) => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        module_sources.sort();
+        module_sources.dedup();
+        for specifier in module_sources {
+            out.push_str(&format!(
+                "import * as {} from {};\n",
+                foreign_module_alias(specifier),
+                ts_string(specifier)
+            ));
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+    }
+
+    fn emit_foreign_js_wrappers(&self, out: &mut String) -> Result<(), String> {
+        for decl in &self.codegen.module.declarations {
+            let Decl::Foreign(foreign) = decl else {
+                continue;
+            };
+            for node in &foreign.nodes {
+                let signature =
+                    self.codegen.signatures.get(&node.name).ok_or_else(|| {
+                        format!("missing signature for foreign node `{}`", node.name)
+                    })?;
+                let params = node
+                    .inputs
+                    .iter()
+                    .map(|port| {
+                        Ok(format!(
+                            "{}: {}",
+                            ts_ident(&port.name),
+                            ts_type(&self.codegen.parse_declared_type(&port.ty)?)
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?
+                    .join(", ");
+                out.push_str(&format!(
+                    "\nfunction {}({params}): {} {{\n",
+                    ts_ident(&node.name),
+                    ts_type(&signature.output)
+                ));
+                let args = node
+                    .inputs
+                    .iter()
+                    .map(|port| ts_ident(&port.name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let callee = match &foreign.source {
+                    ForeignSource::Module(specifier) => {
+                        format!("{}.{}", foreign_module_alias(specifier), node.symbol)
+                    }
+                    ForeignSource::Global(name) => format!("{name}.{}", node.symbol),
+                };
+                let call = format!("{callee}({args})");
+                if matches!(signature.output, Ty::Unit) {
+                    out.push_str(&format!("  {call};\n  return undefined;\n}}\n"));
+                } else {
+                    out.push_str(&format!(
+                        "  const __fa_result = {call};\n  return {};\n}}\n",
+                        foreign_result_expr("__fa_result", &signature.output)
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn emit_callable(
         &mut self,
         out: &mut String,
@@ -178,6 +262,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             .codegen
             .callables
             .keys()
+            .chain(self.codegen.foreign_js.iter())
             .map(|name| ts_ident(name))
             .collect::<Vec<_>>();
         for ident in callable_idents {
@@ -891,7 +976,14 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         indent: &str,
         preferred: Option<&str>,
     ) -> Result<TsValue, String> {
-        let expr = if self.codegen.signatures.contains_key(name) {
+        let expr = if self.codegen.foreign_js.contains(name) {
+            let arity = match &input.ty {
+                Ty::Unit => 0,
+                Ty::Tuple(items) => items.len(),
+                _ => 1,
+            };
+            format!("{}({})", ts_ident(name), call_args(&input, arity)?)
+        } else if self.codegen.callables.contains_key(name) {
             let arity = self
                 .codegen
                 .callables
@@ -2213,6 +2305,21 @@ fn ts_ident(name: &str) -> String {
         out.push('_');
     }
     out
+}
+
+fn foreign_module_alias(specifier: &str) -> String {
+    format!("__fa_foreign_{}", ts_ident(specifier))
+}
+
+fn foreign_result_expr(raw: &str, ty: &Ty) -> String {
+    match ty {
+        Ty::Unit => "undefined".to_string(),
+        Ty::Int => format!("BigInt({raw})"),
+        Ty::Real => format!("Number({raw})"),
+        Ty::Bool => format!("Boolean({raw})"),
+        Ty::Bytes => format!("String({raw})"),
+        _ => format!("{raw} as {}", ts_type(ty)),
+    }
 }
 
 fn ts_string(value: &str) -> String {

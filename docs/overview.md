@@ -471,6 +471,23 @@ through explicit boundary nodes such as `std.io` and `std.fs`, not through
 graph. A reusable `node` that calls a boundary node is effectful by
 composition.
 
+Host interop follows the same rule. A `foreign` declaration imports a
+host-provided callable into the graph and requires an explicit effect:
+
+```flow
+foreign js module "node:os" {
+    pure node platform() -> value: Bytes = platform
+}
+
+foreign js global "console" {
+    io node log(message: Bytes) -> done: Unit = log
+}
+```
+
+The `platform` node is pure because it is modeled as a stable host query.
+The `log` node is `io`, so calls to it remain graph-visible boundary
+operations.
+
 Effectful nodes may be used with `map` and `fault map`. Pure maps may run in
 parallel; effectful maps run in deterministic input order so filesystem,
 network, database, and other boundary observations are sequenced by the input
