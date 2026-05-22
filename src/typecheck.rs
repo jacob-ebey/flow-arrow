@@ -194,7 +194,6 @@ impl<'a> Checker<'a> {
     }
 
     fn semantic_summary(&self) -> Result<SemanticSummary, String> {
-        self.validate_main()?;
         let mut summary = SemanticSummary::default();
         for decl in &self.module.declarations {
             let (callable, kind) = match decl {

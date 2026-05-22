@@ -589,7 +589,7 @@ impl Range {
     }
 
     fn contains(&self, position: Position) -> bool {
-        compare_positions(self.start, position) <= 0 && compare_positions(position, self.end) <= 0
+        compare_positions(self.start, position) <= 0 && compare_positions(position, self.end) < 0
     }
 }
 
@@ -1139,7 +1139,14 @@ impl Analysis {
             LspToken {
                 kind: TokenKind::Variable(name),
                 range,
-            } => Some((*range, index + 1, vec![(name.clone(), *range)])),
+            } => {
+                let bindings = if name.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![(name.clone(), *range)]
+                };
+                Some((*range, index + 1, bindings))
+            }
             LspToken {
                 kind: TokenKind::Symbol('('),
                 range,
@@ -2384,6 +2391,41 @@ program main(args: Args) -> exit_code: Faultable[Int] {
         let hints = inlay_hints_result(&analysis, None);
         assert!(hints.contains(": Faultable[Int]"));
         assert!(hints.contains(": Faultable[Bytes]"));
+    }
+
+    #[test]
+    fn lsp_summarizes_library_modules_for_destructured_repeat_bindings() {
+        let source = r#"import std.math { add }
+
+extern node fib(depth: Int) -> result: Int {
+    (0, 1) -> repeat<$depth> _fib_step -> ($result, $)
+}
+
+node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
+    $b       -> $next_a
+    ($a, $b) -> add -> $next_b
+}
+"#;
+        let analysis = Analysis::new("file:///tmp/fib.flow".to_string(), source.to_string());
+
+        let result_hover =
+            hover_result(&analysis, position_of(source, "$result")).expect("result hover");
+        assert!(result_hover.contains("$result: Int"));
+
+        let repeat_hover =
+            hover_result(&analysis, position_of(source, "_fib_step ->")).expect("repeat hover");
+        assert!(repeat_hover.contains("repeat _fib_step: (Int,Int) -> (Int,Int)"));
+
+        let completions = analysis.completion_symbols();
+        let result_completion = completions
+            .iter()
+            .find(|completion| completion.label == "$result")
+            .expect("result completion");
+        assert!(result_completion.detail.contains("Int"));
+        assert!(!completions.iter().any(|completion| completion.label == "$"));
+
+        let hints = inlay_hints_result(&analysis, None);
+        assert!(hints.contains(": Int"));
     }
 
     fn position_of(source: &str, needle: &str) -> Position {
