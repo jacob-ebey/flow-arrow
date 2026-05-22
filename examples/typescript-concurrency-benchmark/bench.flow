@@ -1,0 +1,17 @@
+# TypeScript worker concurrency benchmark.
+#
+# This is based on ../concurrency/main.flow, but exported as a library node so
+# the benchmark can import both TypeScript builds and call the same API.
+import std.math { add, max, mul }
+
+extern node score_batch(width: Int) -> (total: Int, peak: Int) {
+    (1, $width, 1) -> range_step              -> $jobs
+    $jobs          -> map score_job           -> $scores
+    $scores        -> reduce add(identity: 0) -> $total
+    $scores        -> reduce max(identity: 0) -> $peak
+}
+
+node score_job(n: Int) -> score: Int {
+    ($n, $n)      -> mul -> $square
+    ($square, $n) -> add -> $score
+}

@@ -195,9 +195,16 @@ flowarrow build --target typescript --workers --crate-type cdylib examples/concu
 ```
 
 When enabled, exported functions are emitted as `async` functions. Pure scalar
-`map` regions that can be encoded for browser workers use module workers created
-from Blob URLs and communicate through `SharedArrayBuffer` views; unsupported
-maps keep the sequential lowering.
+`map` regions use browser module workers created from Blob URLs when Web Worker
+globals are available, or Node.js `worker_threads` when running under Node.
+Both paths communicate through `SharedArrayBuffer` views and use module-scoped
+worker pools keyed by generated mapper source. Worker-enabled modules export
+`__flowarrow_setup_workers()` and `__flowarrow_teardown_workers()` so host code
+can prewarm and cleanly terminate those pools. In worker-enabled output,
+numeric ranges use shared typed-array storage so range-backed scalar maps can
+reuse the range buffer directly and return typed views over worker output
+instead of copying both sides of the worker boundary. Unsupported maps keep the
+sequential lowering.
 
 ### 2.5 WASM-hosted TypeScript compiler
 

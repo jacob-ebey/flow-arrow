@@ -316,7 +316,7 @@ fn build_javascript_program_with_core_stdlib_and_run_node() {
 }
 
 #[test]
-fn build_javascript_with_worker_concurrency_and_run_node_fallback() {
+fn build_javascript_with_worker_concurrency_and_run_node_workers() {
     let output = Command::new(flowarrow())
         .args([
             "build",
@@ -340,14 +340,34 @@ fn build_javascript_with_worker_concurrency_and_run_node_fallback() {
         .expect("read generated JavaScript");
     let declarations = fs::read_to_string("examples/concurrency/build/javascript/main.d.ts")
         .expect("read generated JavaScript declarations");
-    assert!(generated.contains("new Worker(workerUrl, { type: \"module\" })"));
-    assert!(generated.contains("new Blob([script], { type: \"application/javascript\" })"));
+    assert!(generated.contains("new runtime.Worker(runtime.workerUrl, { type: \"module\" })"));
+    assert!(
+        generated
+            .contains("new workerGlobals.Blob([script], { type: \"application/javascript\" })")
+    );
+    assert!(generated.contains("export async function __flowarrow_setup_workers"));
+    assert!(generated.contains("export async function __flowarrow_teardown_workers"));
+    assert!(generated.contains("const faScalarWorkerPools = new Map"));
+    assert!(generated.contains("faUseSharedNumericSequences = true"));
+    assert!(generated.contains("function faScalarInputBuffer"));
+    assert!(generated.contains("node:worker_threads"));
+    assert!(
+        generated.contains("new runtime.Worker(new URL(runtime.workerUrl), { type: \"module\" })")
+    );
+    assert!(!generated.contains("eval: true"));
     assert!(generated.contains("SharedArrayBuffer"));
     assert!(generated.contains("faParallelMapBigInt"));
     assert!(declarations.contains("export declare function main(args: FaArgs): Promise<bigint>"));
+    assert!(
+        declarations.contains("export declare function __flowarrow_setup_workers(): Promise<void>")
+    );
+    assert!(
+        declarations
+            .contains("export declare function __flowarrow_teardown_workers(): Promise<void>")
+    );
 
     if Command::new("node").arg("--version").output().is_err() {
-        eprintln!("skipping JavaScript worker fallback test: node is not installed");
+        eprintln!("skipping JavaScript worker test: node is not installed");
         return;
     }
 
@@ -355,28 +375,143 @@ fn build_javascript_with_worker_concurrency_and_run_node_fallback() {
         const fs = require("node:fs");
         const source = fs.readFileSync("examples/concurrency/build/javascript/main.js", "utf8");
         import("data:text/javascript," + encodeURIComponent(source)).then(async (mod) => {
+          const realProcess = globalThis.process;
+          const realWorkerThreads = realProcess.getBuiltinModule?.("node:worker_threads") ?? require("node:worker_threads");
+          let workerStarts = 0;
+          class CountingWorker extends realWorkerThreads.Worker {
+            constructor(...args) {
+              workerStarts += 1;
+              super(...args);
+            }
+          }
           let stdout = "";
           globalThis.process = {
             argv: [],
+            versions: realProcess.versions,
+            getBuiltinModule: (name) => name === "node:worker_threads"
+              ? { ...realWorkerThreads, Worker: CountingWorker }
+              : realProcess.getBuiltinModule?.(name),
             stdout: { write: (bytes) => { stdout += bytes; } },
           };
+          await mod.__flowarrow_setup_workers();
+          const startsAfterSetup = workerStarts;
           const code = await mod.main({ argv: [] });
+          const startsAfterFirstCall = workerStarts;
+          const secondCode = await mod.main({ argv: [] });
+          const startsAfterSecondCall = workerStarts;
+          await mod.__flowarrow_teardown_workers();
           console.log(String(code));
+          console.log(String(secondCode));
           console.log(stdout);
+          console.log(`starts after setup: ${startsAfterSetup}`);
+          console.log(`starts after first call: ${startsAfterFirstCall}`);
+          console.log(`starts after second call: ${startsAfterSecondCall}`);
+          console.log(`worker starts: ${workerStarts}`);
         });
     "#;
     let output = Command::new("node")
         .args(["--input-type=commonjs", "-e", script])
         .output()
-        .expect("run node JavaScript worker fallback example");
+        .expect("run node JavaScript worker example");
     assert!(
         output.status.success(),
-        "node JavaScript worker fallback example failed:\n{}{}",
+        "node JavaScript worker example failed:\n{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("0\njobs: 16\ntotal score: 1632\npeak score: 272\n"));
+    assert!(stdout.contains("0\n0\njobs: 16"));
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("worker starts: ") && !line.ends_with(": 0")),
+        "expected generated JavaScript to start node worker_threads, got:\n{stdout}"
+    );
+    let starts_after_setup = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("starts after setup: "))
+        .and_then(|value| value.parse::<usize>().ok())
+        .expect("read starts after setup");
+    let starts_after_first_call = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("starts after first call: "))
+        .and_then(|value| value.parse::<usize>().ok())
+        .expect("read starts after first call");
+    let starts_after_second_call = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("starts after second call: "))
+        .and_then(|value| value.parse::<usize>().ok())
+        .expect("read starts after second call");
+    assert!(starts_after_setup > 0);
+    assert_eq!(starts_after_first_call, starts_after_setup);
+    assert_eq!(starts_after_second_call, starts_after_setup);
+}
+
+#[test]
+fn typescript_concurrency_benchmark_example_builds_and_runs() {
+    if Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipping TypeScript concurrency benchmark example: node is not installed");
+        return;
+    }
+    if Command::new("tsc").arg("--version").output().is_err() {
+        eprintln!("skipping TypeScript concurrency benchmark example: tsc is not installed");
+        return;
+    }
+
+    let build = Command::new("node")
+        .arg("examples/typescript-concurrency-benchmark/build.mjs")
+        .env("FLOWARROW_BIN", flowarrow())
+        .output()
+        .expect("build TypeScript concurrency benchmark example");
+    assert!(
+        build.status.success(),
+        "benchmark build failed:\n{}{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let sequential_ts = fs::read_to_string(
+        "examples/typescript-concurrency-benchmark/build/benchmark/sequential/bench.ts",
+    )
+    .expect("read sequential TypeScript benchmark build");
+    let workers_ts = fs::read_to_string(
+        "examples/typescript-concurrency-benchmark/build/benchmark/workers/bench.ts",
+    )
+    .expect("read worker TypeScript benchmark build");
+    assert!(sequential_ts.contains("export function score_batch"));
+    assert!(!sequential_ts.contains("new Worker"));
+    assert!(workers_ts.contains("export async function score_batch"));
+    assert!(workers_ts.contains("export async function __flowarrow_setup_workers"));
+    assert!(workers_ts.contains("export async function __flowarrow_teardown_workers"));
+    assert!(workers_ts.contains("new runtime.Worker(runtime.workerUrl, { type: \"module\" })"));
+    assert!(workers_ts.contains("faUseSharedNumericSequences = true"));
+    assert!(workers_ts.contains("function faScalarInputBuffer"));
+    assert!(workers_ts.contains("node:worker_threads"));
+    assert!(
+        workers_ts.contains("new runtime.Worker(new URL(runtime.workerUrl), { type: \"module\" })")
+    );
+    assert!(!workers_ts.contains("eval: true"));
+    assert!(workers_ts.contains("faScalarWorkerPools"));
+    assert!(workers_ts.contains("SharedArrayBuffer"));
+
+    let run = Command::new("node")
+        .arg("examples/typescript-concurrency-benchmark/run.mjs")
+        .env("WIDTH", "10000")
+        .env("WARMUPS", "1")
+        .env("ITERATIONS", "2")
+        .output()
+        .expect("run TypeScript concurrency benchmark example");
+    assert!(
+        run.status.success(),
+        "benchmark run failed:\n{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(stdout.contains("sequential"));
+    assert!(stdout.contains("workers"));
+    assert!(stdout.contains("result=[333333330000, 99990000]"));
 }
 
 fn temp_flow_path(prefix: &str) -> std::path::PathBuf {

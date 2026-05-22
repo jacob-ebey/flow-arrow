@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "bench": "node build.mjs && node run.mjs"
+  }
+}

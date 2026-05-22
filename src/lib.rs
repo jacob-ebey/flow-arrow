@@ -392,8 +392,20 @@ mod tests {
         )
         .expect("typescript workers");
         assert!(workers.contains("export async function score_batch"));
+        assert!(workers.contains("export async function __flowarrow_setup_workers"));
+        assert!(workers.contains("export async function __flowarrow_teardown_workers"));
+        assert!(workers.contains("const __flowarrow_worker_mappers"));
+        assert!(workers.contains("faUseSharedNumericSequences = true"));
+        assert!(workers.contains("function faScalarInputBuffer"));
         assert!(workers.contains("Promise<Array<bigint>>"));
-        assert!(workers.contains("new Worker(workerUrl, { type: \"module\" })"));
+        assert!(workers.contains("new runtime.Worker(runtime.workerUrl, { type: \"module\" })"));
+        assert!(workers.contains("node:worker_threads"));
+        assert!(
+            workers
+                .contains("new runtime.Worker(new URL(runtime.workerUrl), { type: \"module\" })")
+        );
+        assert!(!workers.contains("eval: true"));
+        assert!(workers.contains("faScalarWorkerPools"));
         assert!(workers.contains("SharedArrayBuffer"));
         assert!(workers.contains("faParallelMapBigInt"));
     }

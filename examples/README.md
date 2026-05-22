@@ -115,6 +115,7 @@ intermediate bindings into edge labels for a denser operation-first view.
 | `higher-order-nodes/`         | Static node parameters lowered to concrete graph calls before codegen. |
 | `wasm-fib/`                   | Pure FlowArrow `fib` node exported to WASM and called from Node.js. |
 | `typescript-fib/`             | Pure FlowArrow `fib` node emitted as TypeScript and called from Node.js. |
+| `typescript-concurrency-benchmark/` | Compares TypeScript sequential and worker-enabled builds for a pure map workload. |
 | `json-parser/`                | Flat JSON array of numbers → JSON summary object, with bracket framing and fault routing. |
 | `grep/`                       | Literal byte search over multiple file, directory, or glob targets. |
 | `grayscale-image/`            | Filepath arguments plus `std.cv` image auto-detect, grayscale conversion, and JPEG encode. |

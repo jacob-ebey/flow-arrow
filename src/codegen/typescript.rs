@@ -36,6 +36,8 @@ struct TypeScriptCodegen<'a> {
     options: TypeScriptEmitOptions,
     temp: usize,
     used_idents: HashSet<String>,
+    worker_mapper_sources: Vec<String>,
+    seen_worker_mapper_sources: HashSet<String>,
 }
 
 impl<'a> TypeScriptCodegen<'a> {
@@ -45,6 +47,8 @@ impl<'a> TypeScriptCodegen<'a> {
             options,
             temp: 0,
             used_idents: HashSet::new(),
+            worker_mapper_sources: Vec::new(),
+            seen_worker_mapper_sources: HashSet::new(),
         }
     }
 
@@ -71,12 +75,16 @@ impl<'a> TypeScriptCodegen<'a> {
             self.emit_callable(&mut out, callable, *is_program)?;
         }
 
+        if self.options.worker_concurrency {
+            self.emit_worker_lifecycle_exports(&mut out);
+        }
+
         if has_program_main {
             if self.options.worker_concurrency {
                 out.push_str(
                     "\nconst __flowarrow_process = (globalThis as any).process;\n\
 const __flowarrow_main_url = __flowarrow_process?.argv?.[1]\n  ? new URL(__flowarrow_process.argv[1], \"file:\").href\n  : \"\";\n\
-if (import.meta.url === __flowarrow_main_url) {\n  (async () => {\n    const __flowarrow_result = await main({ argv: __flowarrow_process.argv.slice(2) });\n    const __flowarrow_exit = faExitCode(__flowarrow_result);\n    __flowarrow_process.exit(Number(__flowarrow_exit));\n  })();\n}\n",
+if (import.meta.url === __flowarrow_main_url) {\n  (async () => {\n    await __flowarrow_setup_workers();\n    let __flowarrow_exit = 1n;\n    try {\n      const __flowarrow_result = await main({ argv: __flowarrow_process.argv.slice(2) });\n      __flowarrow_exit = faExitCode(__flowarrow_result);\n    } finally {\n      await __flowarrow_teardown_workers();\n    }\n    __flowarrow_process.exit(Number(__flowarrow_exit));\n  })();\n}\n",
                 );
             } else {
                 out.push_str(
@@ -88,6 +96,26 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         }
 
         Ok(out)
+    }
+
+    fn emit_worker_lifecycle_exports(&self, out: &mut String) {
+        let mapper_sources = self
+            .worker_mapper_sources
+            .iter()
+            .map(|source| ts_string(source))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "\nconst __flowarrow_worker_mappers = [{mapper_sources}];\n\
+faUseSharedNumericSequences = true;\n\
+export async function __flowarrow_setup_workers(): Promise<void> {{\n\
+  await faSetupScalarWorkerPools(__flowarrow_worker_mappers);\n\
+}}\n\
+\n\
+export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
+  await faTeardownScalarWorkerPools();\n\
+}}\n"
+        ));
     }
 
     fn emit_callable(
@@ -1515,7 +1543,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
     }
 
     fn worker_map_call(
-        &self,
+        &mut self,
         name: &str,
         input_ty: &Ty,
         output_ty: &Ty,
@@ -1532,6 +1560,9 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         let Some(mapper) = self.worker_mapper_source(name, input_ty, output_ty)? else {
             return Ok(None);
         };
+        if self.seen_worker_mapper_sources.insert(mapper.clone()) {
+            self.worker_mapper_sources.push(mapper.clone());
+        }
         Ok(Some((worker_fn, mapper)))
     }
 
@@ -1986,6 +2017,23 @@ const TS_INTERNAL_VALUE_IDENTS: &[&str] = &[
     "faSet",
     "faShiftLeft",
     "faShiftRight",
+    "__flowarrow_setup_workers",
+    "__flowarrow_teardown_workers",
+    "__flowarrow_worker_mappers",
+    "faCreateScalarPooledWorker",
+    "faCreateScalarWorkerPool",
+    "faDefaultScalarWorkerCount",
+    "faDispatchScalarWorkerPool",
+    "faGrowScalarWorkerPool",
+    "faRejectScalarWorker",
+    "faRetireScalarWorkerPool",
+    "faRunScalarWorker",
+    "faScalarInputBuffer",
+    "faScalarWorkerPool",
+    "faScalarWorkerPools",
+    "faSetupScalarWorkerPools",
+    "faTeardownScalarWorkerPools",
+    "faUseSharedNumericSequences",
     "faSplitLines",
     "faStripPrefix",
     "faStripSuffix",
@@ -1996,6 +2044,7 @@ const TS_INTERNAL_VALUE_IDENTS: &[&str] = &[
     "faReadScalarBuffer",
     "faScalarBytes",
     "faScalarMapper",
+    "faScalarWorkerRuntime",
     "faScalarWorkerScript",
     "faWriteScalarBuffer",
 ];
@@ -2127,6 +2176,39 @@ function faCollect<T>(items: Array<FaFaultable<T>>): FaFaultable<T[]> {
 }
 
 type FaScalarMapKind = "bigint" | "number" | "bool";
+type FaScalarWorker = {
+  postMessage(message: unknown): void;
+  terminate(): void | Promise<unknown>;
+  onmessage?: ((event: { data: unknown }) => void) | null;
+  onerror?: ((event: { error?: unknown; message?: string }) => void) | null;
+  on?: (event: string, listener: (...args: Array<any>) => void) => void;
+};
+type FaScalarWorkerRuntime =
+  | {
+      kind: "browser";
+      workerUrl: string;
+      Worker: new (url: string, options: { type: "module" }) => FaScalarWorker;
+      revokeObjectURL: (url: string) => void;
+    }
+  | {
+      kind: "node";
+      workerUrl: string;
+      Worker: new (url: URL, options: { type: "module" }) => FaScalarWorker;
+    };
+type FaScalarPooledWorker = {
+  worker: FaScalarWorker;
+  alive: boolean;
+  resolve?: () => void;
+  reject?: (error: unknown) => void;
+};
+type FaScalarWorkerPool = {
+  runtime: FaScalarWorkerRuntime;
+  workers: FaScalarPooledWorker[];
+  queue: Promise<void>;
+  retired: boolean;
+};
+let faUseSharedNumericSequences = false;
+const faScalarWorkerPools = new Map<string, Promise<FaScalarWorkerPool | null>>();
 
 function faParallelMapBigInt(input: Array<bigint>, mapperSource: string): Promise<Array<bigint>> {
   return faParallelMapScalar(input, mapperSource, "bigint", "bigint") as Promise<Array<bigint>>;
@@ -2147,65 +2229,252 @@ async function faParallelMapScalar<I, O>(
   outputKind: FaScalarMapKind,
 ): Promise<Array<O>> {
   const mapper = faScalarMapper<I, O>(mapperSource);
-  const workerGlobals = globalThis as typeof globalThis & {
-    Worker?: typeof Worker;
-    Blob?: typeof Blob;
-    SharedArrayBuffer?: typeof SharedArrayBuffer;
-  };
-  if (
-    input.length < 2 ||
-    typeof workerGlobals.Worker !== "function" ||
-    typeof workerGlobals.Blob !== "function" ||
-    typeof workerGlobals.SharedArrayBuffer !== "function" ||
-    typeof URL === "undefined" ||
-    typeof URL.createObjectURL !== "function"
-  ) {
+  if (input.length < 2 || typeof SharedArrayBuffer !== "function") {
     return input.map(mapper);
   }
 
-  const hardwareConcurrency = (globalThis as typeof globalThis & { navigator?: Navigator }).navigator?.hardwareConcurrency ?? 4;
-  const workerCount = Math.min(input.length, Math.max(1, Math.min(8, hardwareConcurrency)));
+  const workerCount = faDefaultScalarWorkerCount(input.length);
   if (workerCount <= 1) return input.map(mapper);
 
-  const inputBuffer = new SharedArrayBuffer(input.length * faScalarBytes(inputKind));
+  const inputBuffer = faScalarInputBuffer(input, inputKind);
   const outputBuffer = new SharedArrayBuffer(input.length * faScalarBytes(outputKind));
-  faWriteScalarBuffer(inputBuffer, input, inputKind);
-  const script = faScalarWorkerScript(mapperSource);
-  const blob = new Blob([script], { type: "application/javascript" });
-  const workerUrl = URL.createObjectURL(blob);
-  const workers: Worker[] = [];
+  const pool = await faScalarWorkerPool(mapperSource, workerCount);
+  if (pool === null) return input.map(mapper);
 
   try {
-    const jobs = Array.from({ length: workerCount }, (_, index) => {
-      const start = Math.floor((input.length * index) / workerCount);
-      const end = Math.floor((input.length * (index + 1)) / workerCount);
-      return new Promise<void>((resolve, reject) => {
-        let worker: Worker;
-        try {
-          worker = new Worker(workerUrl, { type: "module" });
-        } catch (e) {
-          console.error(`Cross-origin worker module failed to load: ${e}`);
-          reject(e);
-          return;
-        }
-        workers.push(worker);
-        worker.onmessage = () => resolve();
-        worker.onerror = (event) => reject(event.error ?? new Error(event.message));
-        worker.postMessage({ inputBuffer, outputBuffer, start, end, inputKind, outputKind });
-      });
-    });
-    await Promise.all(jobs);
+    await faDispatchScalarWorkerPool(pool, workerCount, input.length, { inputBuffer, outputBuffer, inputKind, outputKind });
     return faReadScalarBuffer<O>(outputBuffer, input.length, outputKind);
   } catch {
+    await faRetireScalarWorkerPool(mapperSource, pool);
     return input.map(mapper);
-  } finally {
-    for (const worker of workers) worker.terminate();
-    URL.revokeObjectURL(workerUrl);
   }
 }
 
 function faScalarMapper<I, O>(mapperSource: string): (input: I) => O {
   return (0, eval)(`(${mapperSource})`) as (input: I) => O;
+}
+
+function faDefaultScalarWorkerCount(inputLength?: number): number {
+  const hardwareConcurrency = (globalThis as typeof globalThis & { navigator?: { hardwareConcurrency?: number } }).navigator?.hardwareConcurrency ?? 4;
+  const workerCount = Math.max(1, Math.min(8, hardwareConcurrency));
+  return inputLength === undefined ? workerCount : Math.min(inputLength, workerCount);
+}
+
+async function faSetupScalarWorkerPools(mapperSources: string[]): Promise<void> {
+  if (typeof SharedArrayBuffer !== "function") return;
+  const workerCount = faDefaultScalarWorkerCount();
+  await Promise.all(mapperSources.map((mapperSource) => faScalarWorkerPool(mapperSource, workerCount)));
+}
+
+async function faTeardownScalarWorkerPools(): Promise<void> {
+  const entries = Array.from(faScalarWorkerPools.entries());
+  faScalarWorkerPools.clear();
+  await Promise.all(entries.map(async ([mapperSource, poolPromise]) => {
+    const pool = await poolPromise;
+    if (pool !== null) await faRetireScalarWorkerPool(mapperSource, pool);
+  }));
+}
+
+async function faScalarWorkerPool(mapperSource: string, workerCount: number): Promise<FaScalarWorkerPool | null> {
+  let poolPromise = faScalarWorkerPools.get(mapperSource);
+  if (poolPromise === undefined) {
+    poolPromise = faCreateScalarWorkerPool(mapperSource);
+    faScalarWorkerPools.set(mapperSource, poolPromise);
+  }
+
+  const pool = await poolPromise;
+  if (pool === null || pool.retired) return null;
+
+  try {
+    faGrowScalarWorkerPool(pool, workerCount);
+    return pool;
+  } catch {
+    await faRetireScalarWorkerPool(mapperSource, pool);
+    return null;
+  }
+}
+
+async function faCreateScalarWorkerPool(mapperSource: string): Promise<FaScalarWorkerPool | null> {
+  const script = faScalarWorkerScript(mapperSource);
+  const runtime = await faScalarWorkerRuntime(script);
+  if (runtime === null) return null;
+  return { runtime, workers: [], queue: Promise.resolve(), retired: false };
+}
+
+async function faScalarWorkerRuntime(script: string): Promise<FaScalarWorkerRuntime | null> {
+  const workerGlobals = globalThis as typeof globalThis & {
+    Worker?: new (url: string, options: { type: "module" }) => FaScalarWorker;
+    Blob?: new (parts: Array<string>, options: { type: string }) => unknown;
+    URL?: {
+      createObjectURL?: (blob: unknown) => string;
+      revokeObjectURL?: (url: string) => void;
+    };
+  };
+  if (
+    typeof workerGlobals.Worker === "function" &&
+    typeof workerGlobals.Blob === "function" &&
+    typeof workerGlobals.URL?.createObjectURL === "function" &&
+    typeof workerGlobals.URL.revokeObjectURL === "function"
+  ) {
+    const blob = new workerGlobals.Blob([script], { type: "application/javascript" });
+    return {
+      kind: "browser",
+      workerUrl: workerGlobals.URL.createObjectURL(blob),
+      Worker: workerGlobals.Worker,
+      revokeObjectURL: workerGlobals.URL.revokeObjectURL,
+    };
+  }
+
+  const processLike = (globalThis as typeof globalThis & {
+    process?: {
+      versions?: { node?: string };
+      getBuiltinModule?: (name: string) => any;
+    };
+  }).process;
+  if (typeof processLike?.versions?.node !== "string") return null;
+
+  try {
+    const workerThreads = typeof processLike.getBuiltinModule === "function"
+      ? processLike.getBuiltinModule("node:worker_threads")
+      : await ((0, eval)("specifier => import(specifier)") as (specifier: string) => Promise<any>)("node:worker_threads");
+    return typeof workerThreads?.Worker === "function"
+      ? { kind: "node", workerUrl: `data:text/javascript,${encodeURIComponent(script)}`, Worker: workerThreads.Worker }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function faGrowScalarWorkerPool(pool: FaScalarWorkerPool, workerCount: number): void {
+  while (pool.workers.length < workerCount) {
+    pool.workers.push(faCreateScalarPooledWorker(pool.runtime));
+  }
+}
+
+function faDispatchScalarWorkerPool(
+  pool: FaScalarWorkerPool,
+  workerCount: number,
+  inputLength: number,
+  message: {
+    inputBuffer: SharedArrayBuffer;
+    outputBuffer: SharedArrayBuffer;
+    inputKind: FaScalarMapKind;
+    outputKind: FaScalarMapKind;
+  },
+): Promise<void> {
+  const dispatch = async () => {
+    if (pool.retired) throw new Error("Worker pool is retired");
+    const jobs = pool.workers.slice(0, workerCount).map((worker, index) => {
+      const start = Math.floor((inputLength * index) / workerCount);
+      const end = Math.floor((inputLength * (index + 1)) / workerCount);
+      return faRunScalarWorker(worker, { ...message, start, end });
+    });
+    await Promise.all(jobs);
+  };
+  pool.queue = pool.queue.then(dispatch, dispatch);
+  return pool.queue;
+}
+
+function faCreateScalarPooledWorker(runtime: FaScalarWorkerRuntime): FaScalarPooledWorker {
+  let worker: FaScalarWorker;
+  try {
+    worker = runtime.kind === "browser"
+      ? new runtime.Worker(runtime.workerUrl, { type: "module" })
+      : new runtime.Worker(new URL(runtime.workerUrl), { type: "module" });
+  } catch (e) {
+    if (runtime.kind === "browser") console.error(`Cross-origin worker module failed to load: ${e}`);
+    throw e;
+  }
+
+  const pooled: FaScalarPooledWorker = { worker, alive: true };
+  if (runtime.kind === "browser") {
+    worker.onmessage = () => {
+      const resolve = pooled.resolve;
+      pooled.resolve = undefined;
+      pooled.reject = undefined;
+      resolve?.();
+    };
+    worker.onerror = (event) => {
+      pooled.alive = false;
+      faRejectScalarWorker(pooled, event.error ?? new Error(event.message));
+    };
+  } else {
+    worker.on?.("message", () => {
+      const resolve = pooled.resolve;
+      pooled.resolve = undefined;
+      pooled.reject = undefined;
+      resolve?.();
+    });
+    worker.on?.("error", (error: unknown) => {
+      pooled.alive = false;
+      faRejectScalarWorker(pooled, error);
+    });
+    worker.on?.("exit", (code: number) => {
+      pooled.alive = false;
+      if (code !== 0) faRejectScalarWorker(pooled, new Error(`Worker stopped with exit code ${code}`));
+    });
+  }
+  return pooled;
+}
+
+function faRunScalarWorker(
+  pooled: FaScalarPooledWorker,
+  message: {
+    inputBuffer: SharedArrayBuffer;
+    outputBuffer: SharedArrayBuffer;
+    start: number;
+    end: number;
+    inputKind: FaScalarMapKind;
+    outputKind: FaScalarMapKind;
+  },
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (!pooled.alive) {
+      reject(new Error("Worker is no longer available"));
+      return;
+    }
+    if (pooled.resolve !== undefined || pooled.reject !== undefined) {
+      reject(new Error("Worker is already busy"));
+      return;
+    }
+
+    pooled.resolve = resolve;
+    pooled.reject = reject;
+    try {
+      pooled.worker.postMessage(message);
+    } catch (e) {
+      pooled.resolve = undefined;
+      pooled.reject = undefined;
+      reject(e);
+    }
+  });
+}
+
+function faRejectScalarWorker(pooled: FaScalarPooledWorker, error: unknown): void {
+  const reject = pooled.reject;
+  pooled.resolve = undefined;
+  pooled.reject = undefined;
+  reject?.(error);
+}
+
+async function faRetireScalarWorkerPool(mapperSource: string, pool: FaScalarWorkerPool): Promise<void> {
+  faScalarWorkerPools.delete(mapperSource);
+  pool.retired = true;
+  await pool.queue.catch(() => undefined);
+  const terminations: Array<Promise<unknown>> = [];
+  for (const pooled of pool.workers) {
+    pooled.alive = false;
+    try {
+      const done = pooled.worker.terminate();
+      if (done && typeof (done as Promise<unknown>).catch === "function") {
+        terminations.push(done.catch(() => undefined));
+      }
+    } catch {
+      // Ignore cleanup failures after a worker pool has already failed.
+    }
+  }
+  await Promise.all(terminations);
+  if (pool.runtime.kind === "browser") pool.runtime.revokeObjectURL(pool.runtime.workerUrl);
 }
 
 function faScalarBytes(kind: FaScalarMapKind): number {
@@ -2225,17 +2494,57 @@ function faWriteScalarBuffer<T>(buffer: SharedArrayBuffer, input: Array<T>, kind
   }
 }
 
+function faScalarInputBuffer<T>(input: Array<T>, kind: FaScalarMapKind): SharedArrayBuffer {
+  const byteLength = input.length * faScalarBytes(kind);
+  if (
+    kind === "bigint" &&
+    input instanceof BigInt64Array &&
+    input.buffer instanceof SharedArrayBuffer &&
+    input.byteOffset === 0 &&
+    input.byteLength === byteLength
+  ) {
+    return input.buffer;
+  }
+  if (
+    kind === "number" &&
+    input instanceof Float64Array &&
+    input.buffer instanceof SharedArrayBuffer &&
+    input.byteOffset === 0 &&
+    input.byteLength === byteLength
+  ) {
+    return input.buffer;
+  }
+  const buffer = new SharedArrayBuffer(byteLength);
+  faWriteScalarBuffer(buffer, input, kind);
+  return buffer;
+}
+
 function faReadScalarBuffer<T>(buffer: SharedArrayBuffer, length: number, kind: FaScalarMapKind): Array<T> {
-  if (kind === "bigint") return Array.from(new BigInt64Array(buffer, 0, length)) as Array<T>;
-  if (kind === "number") return Array.from(new Float64Array(buffer, 0, length)) as Array<T>;
+  if (kind === "bigint") return new BigInt64Array(buffer, 0, length) as unknown as Array<T>;
+  if (kind === "number") return new Float64Array(buffer, 0, length) as unknown as Array<T>;
   return Array.from(new Uint8Array(buffer, 0, length), (value) => value !== 0) as Array<T>;
 }
 
 function faScalarWorkerScript(mapperSource: string): string {
   return `
+let nodeParentPort = null;
+try {
+  if (typeof process !== "undefined" && process.versions?.node) {
+    nodeParentPort = (await import("node:worker_threads")).parentPort;
+  }
+} catch {
+  nodeParentPort = null;
+}
 const mapper = (${mapperSource});
-self.onmessage = (event) => {
-  const { inputBuffer, outputBuffer, start, end, inputKind, outputKind } = event.data;
+const postDone = () => {
+  if (nodeParentPort) {
+    nodeParentPort.postMessage({ done: true });
+  } else {
+    self.postMessage({ done: true });
+  }
+};
+const handleMessage = (message) => {
+  const { inputBuffer, outputBuffer, start, end, inputKind, outputKind } = message;
   const input = inputKind === "bigint"
     ? new BigInt64Array(inputBuffer)
     : inputKind === "number"
@@ -2251,8 +2560,13 @@ self.onmessage = (event) => {
     const mapped = mapper(value);
     output[index] = outputKind === "bool" ? (mapped ? 1 : 0) : mapped;
   }
-  self.postMessage({ done: true });
+  postDone();
 };
+if (nodeParentPort) {
+  nodeParentPort.on("message", handleMessage);
+} else {
+  self.onmessage = (event) => handleMessage(event.data);
+}
 `;
 }
 
@@ -2333,6 +2647,19 @@ function faSet<T>(input: [f0: T[], f1: bigint, f2: T]): FaFaultable<T[]> {
 
 function faRangeStep(input: [f0: bigint, f1: bigint, f2: bigint]): bigint[] {
   if (input[2] === 0n) throw new Error("range_step: step cannot be zero");
+  if (faUseSharedNumericSequences && typeof SharedArrayBuffer === "function") {
+    const count = input[2] > 0n
+      ? input[0] >= input[1] ? 0 : Number(((input[1] - input[0] - 1n) / input[2]) + 1n)
+      : input[0] <= input[1] ? 0 : Number(((input[0] - input[1] - 1n) / -input[2]) + 1n);
+    const out = new BigInt64Array(new SharedArrayBuffer(count * BigInt64Array.BYTES_PER_ELEMENT));
+    let index = 0;
+    if (input[2] > 0n) {
+      for (let value = input[0]; value < input[1]; value += input[2]) out[index++] = value;
+    } else {
+      for (let value = input[0]; value > input[1]; value += input[2]) out[index++] = value;
+    }
+    return out as unknown as bigint[];
+  }
   const out: bigint[] = [];
   if (input[2] > 0n) {
     for (let value = input[0]; value < input[1]; value += input[2]) out.push(value);
