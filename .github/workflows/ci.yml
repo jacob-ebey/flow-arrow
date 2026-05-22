@@ -39,7 +39,10 @@ jobs:
         run: brew install-bundler-gems
 
       - name: Install system dependencies
-        run: brew install pkg-config jpeg-turbo libpng sqlite
+        run: brew install llvm pkg-config jpeg-turbo libpng sqlite
+
+      - name: Configure LLVM
+        run: echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm)" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
