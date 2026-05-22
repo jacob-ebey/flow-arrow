@@ -95,6 +95,10 @@ enum Type {
     Faultable(Box<Type>),
     Seq(Box<Type>),
     Tuple(Vec<Type>),
+    Struct {
+        name: String,
+        fields: Vec<(String, Type)>,
+    },
     OneOf(Vec<Type>),
     Var(String),
     EmptySeq,
@@ -142,6 +146,7 @@ impl Type {
             Type::Faultable(_) => true,
             Type::Seq(item) | Type::Stream(item) => item.contains_faultable(),
             Type::Tuple(items) => items.iter().any(Type::contains_faultable),
+            Type::Struct { fields, .. } => fields.iter().any(|(_, ty)| ty.contains_faultable()),
             Type::OneOf(items) => items.iter().any(Type::contains_faultable),
             _ => false,
         }
@@ -160,6 +165,13 @@ impl Type {
             Type::Seq(item) => Type::Seq(Box::new(item.strip_faultable())),
             Type::Stream(item) => Type::Stream(Box::new(item.strip_faultable())),
             Type::Tuple(items) => Type::Tuple(items.iter().map(Type::strip_faultable).collect()),
+            Type::Struct { name, fields } => Type::Struct {
+                name: name.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(field, ty)| (field.clone(), ty.strip_faultable()))
+                    .collect(),
+            },
             Type::OneOf(items) => Type::OneOf(items.iter().map(Type::strip_faultable).collect()),
             other => other.clone(),
         }
@@ -189,7 +201,7 @@ impl<'a> Checker<'a> {
     fn check_library(&self) -> Result<(), String> {
         for decl in &self.module.declarations {
             match decl {
-                Decl::TypeAlias(_) => {}
+                Decl::TypeAlias(_) | Decl::Struct(_) => {}
                 Decl::Node(callable) => self.check_callable(callable, CallableKind::Node)?,
                 Decl::Program(callable) => self.check_callable(callable, CallableKind::Program)?,
                 Decl::Import(_) => {}
@@ -204,7 +216,7 @@ impl<'a> Checker<'a> {
             let (callable, kind) = match decl {
                 Decl::Node(callable) => (callable, CallableKind::Node),
                 Decl::Program(callable) => (callable, CallableKind::Program),
-                Decl::TypeAlias(_) | Decl::Import(_) => continue,
+                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => continue,
             };
             summary
                 .callables
@@ -324,21 +336,54 @@ impl<'a> Checker<'a> {
     }
 
     fn collect_type_aliases(&mut self) -> Result<(), String> {
-        let mut raw = HashMap::new();
+        let mut raw_aliases = HashMap::new();
+        let mut raw_structs = HashMap::new();
         for decl in &self.module.declarations {
-            let Decl::TypeAlias(alias) = decl else {
-                continue;
-            };
-            if self.types.contains_key(&alias.name) || raw.contains_key(&alias.name) {
-                return Err(format!("duplicate type declaration `{}`", alias.name));
+            match decl {
+                Decl::TypeAlias(alias) => {
+                    if self.types.contains_key(&alias.name)
+                        || raw_aliases.contains_key(&alias.name)
+                        || raw_structs.contains_key(&alias.name)
+                    {
+                        return Err(format!("duplicate type declaration `{}`", alias.name));
+                    }
+                    raw_aliases.insert(alias.name.clone(), alias.ty.clone());
+                }
+                Decl::Struct(struct_decl) => {
+                    if self.types.contains_key(&struct_decl.name)
+                        || raw_aliases.contains_key(&struct_decl.name)
+                        || raw_structs.contains_key(&struct_decl.name)
+                    {
+                        return Err(format!("duplicate type declaration `{}`", struct_decl.name));
+                    }
+                    raw_structs.insert(struct_decl.name.clone(), struct_decl.fields.clone());
+                }
+                _ => {}
             }
-            raw.insert(alias.name.clone(), alias.ty.clone());
         }
 
         let mut resolved = HashMap::new();
-        for name in raw.keys() {
+        for name in raw_structs.keys() {
             let mut resolving = Vec::new();
-            let ty = self.resolve_type_alias(name, &raw, &mut resolved, &mut resolving)?;
+            let ty = self.resolve_struct_type(
+                name,
+                &raw_aliases,
+                &raw_structs,
+                &mut resolved,
+                &mut resolving,
+            )?;
+            self.validate_declared_type(&ty)?;
+            self.types.insert(name.clone(), ty);
+        }
+        for name in raw_aliases.keys() {
+            let mut resolving = Vec::new();
+            let ty = self.resolve_type_alias(
+                name,
+                &raw_aliases,
+                &raw_structs,
+                &mut resolved,
+                &mut resolving,
+            )?;
             self.validate_declared_type(&ty)?;
             self.types.insert(name.clone(), ty);
         }
@@ -348,7 +393,8 @@ impl<'a> Checker<'a> {
     fn resolve_type_alias(
         &self,
         name: &str,
-        raw: &HashMap<String, String>,
+        raw_aliases: &HashMap<String, String>,
+        raw_structs: &HashMap<String, Vec<Port>>,
         resolved: &mut HashMap<String, Type>,
         resolving: &mut Vec<String>,
     ) -> Result<Type, String> {
@@ -359,13 +405,65 @@ impl<'a> Checker<'a> {
             resolving.push(name.to_string());
             return Err(format!("cyclic type alias `{}`", resolving.join(" -> ")));
         }
-        let text = raw
+        let text = raw_aliases
             .get(name)
             .ok_or_else(|| format!("unknown type alias `{name}`"))?;
         resolving.push(name.to_string());
         let parsed = parse_type(text)?;
-        let ty = self.resolve_type_alias_type(parsed, raw, resolved, resolving)?;
+        let ty =
+            self.resolve_type_alias_type(parsed, raw_aliases, raw_structs, resolved, resolving)?;
         resolving.pop();
+        resolved.insert(name.to_string(), ty.clone());
+        Ok(ty)
+    }
+
+    fn resolve_struct_type(
+        &self,
+        name: &str,
+        raw_aliases: &HashMap<String, String>,
+        raw_structs: &HashMap<String, Vec<Port>>,
+        resolved: &mut HashMap<String, Type>,
+        resolving: &mut Vec<String>,
+    ) -> Result<Type, String> {
+        if let Some(ty) = resolved.get(name) {
+            return Ok(ty.clone());
+        }
+        if resolving.iter().any(|item| item == name) {
+            resolving.push(name.to_string());
+            return Err(format!(
+                "cyclic type declaration `{}`",
+                resolving.join(" -> ")
+            ));
+        }
+        let fields = raw_structs
+            .get(name)
+            .ok_or_else(|| format!("unknown struct `{name}`"))?;
+        resolving.push(name.to_string());
+        let mut resolved_fields = Vec::with_capacity(fields.len());
+        for field in fields {
+            if resolved_fields
+                .iter()
+                .any(|(existing, _): &(String, Type)| existing == &field.name)
+            {
+                return Err(format!(
+                    "struct `{name}` declares field `{}` more than once",
+                    field.name
+                ));
+            }
+            let ty = self.resolve_type_alias_type(
+                parse_type(&field.ty)?,
+                raw_aliases,
+                raw_structs,
+                resolved,
+                resolving,
+            )?;
+            resolved_fields.push((field.name.clone(), ty));
+        }
+        resolving.pop();
+        let ty = Type::Struct {
+            name: name.to_string(),
+            fields: resolved_fields,
+        };
         resolved.insert(name.to_string(), ty.clone());
         Ok(ty)
     }
@@ -373,7 +471,8 @@ impl<'a> Checker<'a> {
     fn resolve_type_alias_type(
         &self,
         ty: Type,
-        raw: &HashMap<String, String>,
+        raw_aliases: &HashMap<String, String>,
+        raw_structs: &HashMap<String, Vec<Port>>,
         resolved: &mut HashMap<String, Type>,
         resolving: &mut Vec<String>,
     ) -> Result<Type, String> {
@@ -381,34 +480,76 @@ impl<'a> Checker<'a> {
             Type::Var(name) => {
                 if let Some(known) = self.types.get(&name) {
                     Ok(known.clone())
-                } else if raw.contains_key(&name) {
-                    self.resolve_type_alias(&name, raw, resolved, resolving)
+                } else if raw_aliases.contains_key(&name) {
+                    self.resolve_type_alias(&name, raw_aliases, raw_structs, resolved, resolving)
+                } else if raw_structs.contains_key(&name) {
+                    self.resolve_struct_type(&name, raw_aliases, raw_structs, resolved, resolving)
                 } else {
                     Err(format!("unknown type `{name}`"))
                 }
             }
-            Type::Faultable(item) => Ok(Type::Faultable(Box::new(
-                self.resolve_type_alias_type(*item, raw, resolved, resolving)?,
-            ))),
-            Type::Seq(item) => Ok(Type::Seq(Box::new(
-                self.resolve_type_alias_type(*item, raw, resolved, resolving)?,
-            ))),
-            Type::Stream(item) => Ok(Type::Stream(Box::new(
-                self.resolve_type_alias_type(*item, raw, resolved, resolving)?,
-            ))),
+            Type::Faultable(item) => Ok(Type::Faultable(Box::new(self.resolve_type_alias_type(
+                *item,
+                raw_aliases,
+                raw_structs,
+                resolved,
+                resolving,
+            )?))),
+            Type::Seq(item) => Ok(Type::Seq(Box::new(self.resolve_type_alias_type(
+                *item,
+                raw_aliases,
+                raw_structs,
+                resolved,
+                resolving,
+            )?))),
+            Type::Stream(item) => Ok(Type::Stream(Box::new(self.resolve_type_alias_type(
+                *item,
+                raw_aliases,
+                raw_structs,
+                resolved,
+                resolving,
+            )?))),
             Type::OneOf(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
-                    out.push(self.resolve_type_alias_type(item, raw, resolved, resolving)?);
+                    out.push(self.resolve_type_alias_type(
+                        item,
+                        raw_aliases,
+                        raw_structs,
+                        resolved,
+                        resolving,
+                    )?);
                 }
                 Ok(Type::OneOf(out))
             }
             Type::Tuple(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
-                    out.push(self.resolve_type_alias_type(item, raw, resolved, resolving)?);
+                    out.push(self.resolve_type_alias_type(
+                        item,
+                        raw_aliases,
+                        raw_structs,
+                        resolved,
+                        resolving,
+                    )?);
                 }
                 Ok(Type::Tuple(out))
+            }
+            Type::Struct { name, fields } => {
+                let mut out = Vec::with_capacity(fields.len());
+                for (field, ty) in fields {
+                    out.push((
+                        field,
+                        self.resolve_type_alias_type(
+                            ty,
+                            raw_aliases,
+                            raw_structs,
+                            resolved,
+                            resolving,
+                        )?,
+                    ));
+                }
+                Ok(Type::Struct { name, fields: out })
             }
             other => Ok(other),
         }
@@ -419,7 +560,7 @@ impl<'a> Checker<'a> {
             let (callable, kind) = match decl {
                 Decl::Node(callable) => (callable, CallableKind::Node),
                 Decl::Program(callable) => (callable, CallableKind::Program),
-                Decl::TypeAlias(_) | Decl::Import(_) => continue,
+                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => continue,
             };
             let info = CallableInfo {
                 signatures: vec![self.callable_signature(callable)?],
@@ -479,7 +620,7 @@ impl<'a> Checker<'a> {
                     MatchTarget::Node(node) => self.symbol_effect(node) == Effect::Io,
                     MatchTarget::Value(_) => false,
                 }),
-                Stage::Bind(_) => false,
+                Stage::Bind(_) | Stage::Field(_) => false,
                 Stage::Endpoint(_) => false,
             })
         })
@@ -573,6 +714,16 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Type::Tuple(resolved))
             }
+            Type::Struct { name, fields } => {
+                let mut resolved = Vec::with_capacity(fields.len());
+                for (field, ty) in fields {
+                    resolved.push((field, self.resolve_declared_type(ty)?));
+                }
+                Ok(Type::Struct {
+                    name,
+                    fields: resolved,
+                })
+            }
             other => Ok(other),
         }
     }
@@ -595,6 +746,13 @@ impl<'a> Checker<'a> {
             Type::Tuple(items) => {
                 for item in items {
                     self.validate_declared_type(item)?;
+                }
+                Ok(())
+            }
+            Type::Struct { name, fields } => {
+                let _ = name;
+                for (_, ty) in fields {
+                    self.validate_declared_type(ty)?;
                 }
                 Ok(())
             }
@@ -777,6 +935,10 @@ impl<'a> Checker<'a> {
                     format!("filter {name}"),
                     self.apply_filter(callable, name, &value_type)?,
                 ),
+                Stage::Field(name) => (
+                    format!("field {name}"),
+                    self.apply_field(name, &value_type)?,
+                ),
                 Stage::Repeat { count, node } => {
                     let count_type = self.endpoint_type(count, env)?;
                     self.expect_type("repeat count", &count_type, &Type::Int)?;
@@ -869,6 +1031,9 @@ impl<'a> Checker<'a> {
                 Stage::Filter(name) => {
                     value_type = self.apply_filter(callable, name, &value_type)?;
                 }
+                Stage::Field(name) => {
+                    value_type = self.apply_field(name, &value_type)?;
+                }
                 Stage::Repeat { count, node } => {
                     let count_type = self.endpoint_type(count, env)?;
                     self.expect_type("repeat count", &count_type, &Type::Int)?;
@@ -930,8 +1095,65 @@ impl<'a> Checker<'a> {
                     None => Ok(Type::EmptySeq),
                 }
             }
+            Endpoint::Struct { name, fields } => self.struct_literal_type(name, fields, env),
             Endpoint::Eval { source, stages } => self.inline_eval_type(source, stages, env),
         }
+    }
+
+    fn struct_literal_type(
+        &self,
+        name: &str,
+        fields: &[(String, Endpoint)],
+        env: &HashMap<String, Type>,
+    ) -> Result<Type, String> {
+        let Some(Type::Struct {
+            name: struct_name,
+            fields: expected_fields,
+        }) = self.types.get(name)
+        else {
+            return Err(format!("unknown struct `{name}`"));
+        };
+        if fields.len() != expected_fields.len() {
+            return Err(format!(
+                "struct `{name}` literal expected {} fields, found {}",
+                expected_fields.len(),
+                fields.len()
+            ));
+        }
+        let mut seen = HashMap::new();
+        for (field, endpoint) in fields {
+            let expected = expected_fields
+                .iter()
+                .find(|(expected, _)| expected == field)
+                .map(|(_, ty)| ty)
+                .ok_or_else(|| format!("struct `{name}` has no field `{field}`"))?;
+            if seen.insert(field, ()).is_some() {
+                return Err(format!("struct `{name}` literal repeats field `{field}`"));
+            }
+            let actual = self.endpoint_type(endpoint, env)?;
+            self.expect_assignable_type(
+                &format!("struct `{name}` field `{field}`"),
+                &actual,
+                expected,
+            )?;
+        }
+        Ok(Type::Struct {
+            name: struct_name.clone(),
+            fields: expected_fields.clone(),
+        })
+    }
+
+    fn apply_field(&self, field: &str, input: &Type) -> Result<Type, String> {
+        let Type::Struct { name, fields } = input else {
+            return Err(format!(
+                "field `{field}` expected struct input, found `{input}`"
+            ));
+        };
+        fields
+            .iter()
+            .find(|(candidate, _)| candidate == field)
+            .map(|(_, ty)| ty.clone())
+            .ok_or_else(|| format!("struct `{name}` has no field `{field}`"))
     }
 
     fn inline_eval_type(
@@ -981,6 +1203,9 @@ impl<'a> Checker<'a> {
                 }
                 Stage::Filter(name) => {
                     value_type = self.apply_filter(&inline_callable, name, &value_type)?;
+                }
+                Stage::Field(name) => {
+                    value_type = self.apply_field(name, &value_type)?;
                 }
                 Stage::Repeat { count, node } => {
                     let count_type = self.endpoint_type(count, env)?;
@@ -1650,6 +1875,14 @@ fn format_endpoint_for_error(endpoint: &Endpoint) -> String {
         Endpoint::Unit => "()".to_string(),
         Endpoint::Tuple(items) => format_endpoint_list_for_error(items, "(", ")"),
         Endpoint::Seq(items) => format_endpoint_list_for_error(items, "[", "]"),
+        Endpoint::Struct { name, fields } => format!(
+            "{name} {{ {} }}",
+            fields
+                .iter()
+                .map(|(field, value)| format!("{field}: {}", format_endpoint_for_error(value)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Endpoint::Eval { source, stages } => {
             let mut parts = Vec::with_capacity(stages.len() + 1);
             parts.push(format_endpoint_for_error(source));
@@ -1666,6 +1899,7 @@ fn format_stage_for_error(stage: &Stage) -> String {
         Stage::Map(name) => format!("map {name}"),
         Stage::FaultMap { node, .. } => format!("fault map {node}"),
         Stage::Filter(name) => format!("filter {name}"),
+        Stage::Field(name) => format!("field {name}"),
         Stage::Repeat { node, .. } => format!("repeat {node}"),
         Stage::Reduce { op, .. } => format!("reduce {op}"),
         Stage::Scan { op, .. } => format!("scan {op}"),
@@ -1862,6 +2096,7 @@ fn contains_empty_seq(input: &Type) -> bool {
         Type::EmptySeq => true,
         Type::Faultable(item) | Type::Seq(item) | Type::Stream(item) => contains_empty_seq(item),
         Type::Tuple(items) | Type::OneOf(items) => items.iter().any(contains_empty_seq),
+        Type::Struct { fields, .. } => fields.iter().any(|(_, ty)| contains_empty_seq(ty)),
         _ => false,
     }
 }
@@ -1932,6 +2167,28 @@ fn match_types(
             }
             Ok(())
         }
+        (
+            Type::Struct {
+                name: expected_name,
+                fields: expected,
+            },
+            Type::Struct {
+                name: actual_name,
+                fields: actual,
+            },
+        ) if expected_name == actual_name && expected.len() == actual.len() => {
+            for ((expected_field, expected_ty), (actual_field, actual_ty)) in
+                expected.iter().zip(actual)
+            {
+                if expected_field != actual_field {
+                    return Err(format!(
+                        "expected struct field `{expected_field}`, found `{actual_field}`"
+                    ));
+                }
+                match_types(expected_ty, actual_ty, vars)?;
+            }
+            Ok(())
+        }
         _ => Err(format!("expected `{expected}`, found `{actual}`")),
     }
 }
@@ -1955,6 +2212,16 @@ fn substitute(ty: &Type, vars: &HashMap<String, Type>) -> Option<Type> {
                 out.push(substitute(item, vars)?);
             }
             Some(Type::Tuple(out))
+        }
+        Type::Struct { name, fields } => {
+            let mut out = Vec::with_capacity(fields.len());
+            for (field, ty) in fields {
+                out.push((field.clone(), substitute(ty, vars)?));
+            }
+            Some(Type::Struct {
+                name: name.clone(),
+                fields: out,
+            })
         }
         Type::EmptySeq => Some(Type::EmptySeq),
         other => Some(other.clone()),
@@ -2129,6 +2396,7 @@ impl fmt::Display for Type {
                 }
                 write!(f, ")")
             }
+            Type::Struct { name, .. } => write!(f, "{name}"),
             Type::Var(name) => write!(f, "{name}"),
             Type::EmptySeq => write!(f, "[]"),
         }

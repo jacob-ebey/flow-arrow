@@ -35,6 +35,10 @@ impl Parser {
                 self.bump();
                 Ok(Decl::TypeAlias(self.parse_type_alias()?))
             }
+            Some("struct") => {
+                self.bump();
+                Ok(Decl::Struct(self.parse_struct_decl()?))
+            }
             Some("import") => {
                 self.bump();
                 Ok(Decl::Import(self.parse_import()?))
@@ -64,6 +68,27 @@ impl Parser {
         self.expect(Token::Equal)?;
         let ty = self.parse_type_name()?;
         Ok(TypeAlias { name, ty })
+    }
+
+    fn parse_struct_decl(&mut self) -> Result<StructDecl, SourceDiagnostic> {
+        let name = self.expect_ident()?;
+        self.expect(Token::LBrace)?;
+        let mut fields = Vec::new();
+        if self.eat(Token::RBrace) {
+            return Err(self.error_here("struct declaration cannot be empty"));
+        }
+        loop {
+            fields.push(self.parse_port()?);
+            if self.eat(Token::Comma) {
+                if self.eat(Token::RBrace) {
+                    break;
+                }
+            } else {
+                self.expect(Token::RBrace)?;
+                break;
+            }
+        }
+        Ok(StructDecl { name, fields })
     }
 
     fn parse_import(&mut self) -> Result<Import, SourceDiagnostic> {
@@ -247,7 +272,12 @@ impl Parser {
                     self.bump();
                     text.push('.');
                 }
-                Token::Comma | Token::RParen | Token::LBrace | Token::Greater | Token::Eof
+                Token::Comma
+                | Token::RParen
+                | Token::LBrace
+                | Token::RBrace
+                | Token::Greater
+                | Token::Eof
                     if !text.is_empty() && depth == 0 =>
                 {
                     break;
@@ -313,6 +343,10 @@ impl Parser {
             Some("filter") => {
                 self.bump();
                 Ok(Stage::Filter(self.parse_node_ref_text()?))
+            }
+            Some("field") => {
+                self.bump();
+                Ok(Stage::Field(self.expect_ident()?))
             }
             Some("repeat") => {
                 self.bump();
@@ -490,10 +524,38 @@ impl Parser {
             Token::LParen => self.parse_tuple_or_unit(),
             Token::LBracket => self.parse_seq(),
             Token::Ident(name) => {
-                Err(self.error_here(format!("expected variable `$` prefix for value `{name}`")))
+                self.bump();
+                if self.peek() == &Token::LBrace {
+                    self.parse_struct_literal(name)
+                } else {
+                    Err(self.error_here(format!("expected variable `$` prefix for value `{name}`")))
+                }
             }
             other => Err(self.error_here(format!("expected endpoint, found {other:?}"))),
         }
+    }
+
+    fn parse_struct_literal(&mut self, name: String) -> Result<Endpoint, SourceDiagnostic> {
+        self.expect(Token::LBrace)?;
+        let mut fields = Vec::new();
+        if self.eat(Token::RBrace) {
+            return Err(self.error_here("struct literal cannot be empty"));
+        }
+        loop {
+            let field = self.expect_ident()?;
+            self.expect(Token::Colon)?;
+            let value = self.parse_inline_endpoint()?;
+            fields.push((field, value));
+            if self.eat(Token::Comma) {
+                if self.eat(Token::RBrace) {
+                    break;
+                }
+            } else {
+                self.expect(Token::RBrace)?;
+                break;
+            }
+        }
+        Ok(Endpoint::Struct { name, fields })
     }
 
     fn parse_tuple_or_unit(&mut self) -> Result<Endpoint, SourceDiagnostic> {
@@ -645,5 +707,8 @@ impl Parser {
 }
 
 fn is_declaration_keyword(name: &str) -> bool {
-    matches!(name, "type" | "import" | "extern" | "node" | "program")
+    matches!(
+        name,
+        "type" | "struct" | "import" | "extern" | "node" | "program"
+    )
 }

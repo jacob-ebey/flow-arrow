@@ -25,6 +25,9 @@
       "include": "#combinators"
     },
     {
+      "include": "#struct-literals"
+    },
+    {
       "include": "#node-references"
     },
     {
@@ -124,6 +127,18 @@
           }
         },
         {
+          "name": "meta.declaration.struct.flowarrow",
+          "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.struct.flowarrow"
+            },
+            "2": {
+              "name": "entity.name.type.struct.flowarrow"
+            }
+          }
+        },
+        {
           "name": "meta.cell.flowarrow",
           "match": "\\b(cell)\\s*(?=\\()",
           "captures": {
@@ -196,6 +211,18 @@
             },
             "2": {
               "name": "entity.name.function.flowarrow"
+            }
+          }
+        },
+        {
+          "name": "meta.combinator.field.flowarrow",
+          "match": "\\b(field)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "support.function.builtin.flowarrow"
+            },
+            "2": {
+              "name": "variable.other.member.flowarrow"
             }
           }
         },
@@ -372,7 +399,7 @@
         },
         {
           "name": "support.function.builtin.flowarrow",
-          "match": "\\b(?:select|match|range|range_between|range_step|length)\\b"
+          "match": "\\b(?:select|match|range|range_between|range_step|length|field)\\b"
         },
         {
           "name": "keyword.other.identity.flowarrow",
@@ -404,11 +431,69 @@
         }
       ]
     },
+    "struct-literals": {
+      "patterns": [
+        {
+          "name": "meta.struct-literal.flowarrow",
+          "begin": "(^\\s*|(?<=->)\\s*|(?<=[(\\[,])\\s*)([A-Z][A-Za-z0-9_]*)\\s*(\\{)",
+          "beginCaptures": {
+            "2": {
+              "name": "entity.name.type.struct.flowarrow"
+            },
+            "3": {
+              "name": "punctuation.definition.block.flowarrow"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.block.flowarrow"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#variables"
+            },
+            {
+              "include": "#booleans"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#combinators"
+            },
+            {
+              "include": "#struct-literals"
+            },
+            {
+              "name": "variable.other.member.flowarrow",
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*:)"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "include": "#operators"
+            },
+            {
+              "include": "#punctuation"
+            }
+          ]
+        }
+      ]
+    },
     "node-references": {
       "patterns": [
         {
           "name": "meta.stage.node.flowarrow",
-          "match": "(-)(>)\\s*(?!(?:map|reduce|scan|repeat|fault|filter|select|match|stencil2d|grid|range|range_between|range_step|length)\\b)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+          "match": "(-)(>)\\s*(?!(?:map|reduce|scan|repeat|fault|filter|field|select|match|stencil2d|grid|range|range_between|range_step|length)\\b)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
           "captures": {
             "1": {
               "name": "keyword.control.flowarrow"
@@ -425,7 +510,7 @@
     },
     "keywords": {
       "name": "keyword.other.reserved.flowarrow",
-      "match": "\\b(?:import|as|type|extern|node|program|cell|fault|ok|match)\\b"
+      "match": "\\b(?:import|as|type|struct|extern|node|program|cell|fault|ok|match|field)\\b"
     },
     "booleans": {
       "name": "constant.language.boolean.flowarrow",

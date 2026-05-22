@@ -99,6 +99,36 @@ For `Faultable[(A, B)]`, destructuring binds `Faultable[A]` and
 
 ---
 
+# 4.1 Structs
+
+Structs define named product types for data that should cross API or
+backend boundaries as an object shape instead of an anonymous tuple:
+
+```flow
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+node sum_point(point: Point) -> total: Int {
+    $point -> field x -> $x
+    $point -> field y -> $y
+    ($x, $y) -> add -> $total
+}
+```
+
+Struct literals use the declared field names:
+
+```flow
+Point { x: 20, y: 22 } -> sum_point -> $total
+```
+
+The TypeScript and JavaScript backends lower structs to object shapes.
+The native backend lowers them to named C structs with the same field
+order.
+
+---
+
 # 5. Named ports
 
 For multi-input operations, ports may be explicit:

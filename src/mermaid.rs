@@ -28,7 +28,7 @@ pub fn emit_module_with_options(
     emitter.line("flowchart TD");
     for decl in &module.declarations {
         match decl {
-            Decl::TypeAlias(_) | Decl::Import(_) => {}
+            Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => {}
             Decl::Node(callable) => {
                 let kind = if callable.is_extern {
                     "extern node"
@@ -149,6 +149,11 @@ impl MermaidEmitter {
                 Stage::Filter(name) => {
                     let operation =
                         self.collection_node(&format!("filter {name}"), "filter", "    ");
+                    self.edges(&current, &operation, None, "    ");
+                    current = vec![operation];
+                }
+                Stage::Field(name) => {
+                    let operation = self.operation_node(&format!("field {name}"), "field", "    ");
                     self.edges(&current, &operation, None, "    ");
                     current = vec![operation];
                 }
@@ -320,6 +325,16 @@ impl MermaidEmitter {
                 self.edges(&dependencies, &source, Some("item"), "    ");
                 Ok(vec![source])
             }
+            Endpoint::Struct { fields, .. } => {
+                let source = self.literal_node(
+                    &format!("input\n{}", endpoint_label(endpoint)),
+                    "input",
+                    "    ",
+                );
+                let dependencies = self.emit_struct_field_items(fields, env)?;
+                self.edges(&dependencies, &source, Some("field"), "    ");
+                Ok(vec![source])
+            }
             Endpoint::Eval { .. } => {
                 let source = self.literal_node(
                     &format!("input\n{}", endpoint_label(endpoint)),
@@ -357,6 +372,7 @@ impl MermaidEmitter {
                 }
                 Ok(sources)
             }
+            Endpoint::Struct { fields, .. } => self.emit_struct_field_items(fields, env),
             Endpoint::Eval { source, .. } => self.emit_endpoint(source, env),
             _ => Ok(Vec::new()),
         }
@@ -369,6 +385,18 @@ impl MermaidEmitter {
     ) -> Result<Vec<NodeRef>, String> {
         let mut sources = Vec::new();
         for item in items {
+            sources.extend(self.emit_endpoint(item, env)?);
+        }
+        Ok(sources)
+    }
+
+    fn emit_struct_field_items(
+        &mut self,
+        fields: &[(String, Endpoint)],
+        env: &HashMap<String, Vec<NodeRef>>,
+    ) -> Result<Vec<NodeRef>, String> {
+        let mut sources = Vec::new();
+        for (_, item) in fields {
             sources.extend(self.emit_endpoint(item, env)?);
         }
         Ok(sources)
@@ -614,6 +642,14 @@ fn endpoint_label(endpoint: &Endpoint) -> String {
         Endpoint::Unit => "()".to_string(),
         Endpoint::Tuple(items) => endpoint_list_label(items, "(", ")"),
         Endpoint::Seq(items) => endpoint_list_label(items, "[", "]"),
+        Endpoint::Struct { name, fields } => format!(
+            "{name} {{ {} }}",
+            fields
+                .iter()
+                .map(|(field, value)| format!("{field}: {}", endpoint_label(value)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Endpoint::Eval { source, stages } => {
             let mut parts = Vec::with_capacity(stages.len() + 1);
             parts.push(endpoint_label(source));
@@ -630,6 +666,7 @@ fn stage_label(stage: &Stage) -> String {
         Stage::Map(name) => format!("map {name}"),
         Stage::FaultMap { node, .. } => format!("fault map {node}"),
         Stage::Filter(name) => format!("filter {name}"),
+        Stage::Field(name) => format!("field {name}"),
         Stage::Repeat { node, .. } => format!("repeat {node}"),
         Stage::Reduce { op, .. } => format!("reduce {op}"),
         Stage::Scan { op, .. } => format!("scan {op}"),

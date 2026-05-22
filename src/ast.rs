@@ -6,6 +6,7 @@ pub struct Module {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decl {
     TypeAlias(TypeAlias),
+    Struct(StructDecl),
     Import(Import),
     Node(Callable),
     Program(Callable),
@@ -15,6 +16,12 @@ pub enum Decl {
 pub struct TypeAlias {
     pub name: String,
     pub ty: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDecl {
+    pub name: String,
+    pub fields: Vec<Port>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,6 +88,10 @@ pub enum Endpoint {
     Unit,
     Tuple(Vec<Endpoint>),
     Seq(Vec<Endpoint>),
+    Struct {
+        name: String,
+        fields: Vec<(String, Endpoint)>,
+    },
     Eval {
         source: Box<Endpoint>,
         stages: Vec<Stage>,
@@ -98,6 +109,7 @@ pub enum Stage {
         fault: String,
     },
     Filter(String),
+    Field(String),
     Repeat {
         count: Endpoint,
         node: String,

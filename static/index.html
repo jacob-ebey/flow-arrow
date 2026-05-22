@@ -622,14 +622,22 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
       const concurrencyExample = `# Exposes explicit data-parallel work for the browser demo.
 import std.math { add, max, mul }
 
-extern node score_batch(width: Int) -> (total_score: Int, peak_score: Int, total_weight: Int, peak_weight: Int) {
-    (1, $width, 1) -> range_step              -> $jobs
-    $jobs          -> map score_job           -> $scores
-    $jobs          -> map weight_job          -> $weights
-    $scores        -> reduce add(identity: 0) -> $total_score
-    $scores        -> reduce max(identity: 0) -> $peak_score
-    $weights       -> reduce add(identity: 0) -> $total_weight
-    $weights       -> reduce max(identity: 0) -> $peak_weight
+struct JobSummary {
+    total_score: Int,
+    peak_score: Int,
+    total_weight: Int,
+    peak_weight: Int,
+}
+
+extern node score_batch(width: Int) -> summary: JobSummary {
+    (1, $width, 1)                                                                                                      -> range_step              -> $jobs
+    $jobs                                                                                                               -> map score_job           -> $scores
+    $jobs                                                                                                               -> map weight_job          -> $weights
+    $scores                                                                                                             -> reduce add(identity: 0) -> $total_score
+    $scores                                                                                                             -> reduce max(identity: 0) -> $peak_score
+    $weights                                                                                                            -> reduce add(identity: 0) -> $total_weight
+    $weights                                                                                                            -> reduce max(identity: 0) -> $peak_weight
+    JobSummary { total_score: $total_score, peak_score: $peak_score, total_weight: $total_weight, peak_weight: $peak_weight } -> $summary
 }
 
 node score_job(n: Int) -> score: Int {

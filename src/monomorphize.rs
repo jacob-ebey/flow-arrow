@@ -59,6 +59,7 @@ impl Monomorphizer {
                     declarations.push(Decl::Program(callable));
                 }
                 Decl::TypeAlias(alias) => declarations.push(Decl::TypeAlias(alias.clone())),
+                Decl::Struct(struct_decl) => declarations.push(Decl::Struct(struct_decl.clone())),
                 Decl::Import(import) => declarations.push(Decl::Import(import.clone())),
             }
         }
@@ -142,7 +143,7 @@ impl Monomorphizer {
     ) -> Result<(), String> {
         match stage {
             Stage::Endpoint(endpoint) => self.rewrite_endpoint(endpoint, bindings),
-            Stage::Bind(_) => Ok(()),
+            Stage::Bind(_) | Stage::Field(_) => Ok(()),
             Stage::Map(name)
             | Stage::Filter(name)
             | Stage::Reduce { op: name, .. }
@@ -189,6 +190,12 @@ impl Monomorphizer {
             }
             Endpoint::Tuple(items) | Endpoint::Seq(items) => {
                 for item in items {
+                    self.rewrite_endpoint(item, bindings)?;
+                }
+                Ok(())
+            }
+            Endpoint::Struct { fields, .. } => {
+                for (_, item) in fields {
                     self.rewrite_endpoint(item, bindings)?;
                 }
                 Ok(())

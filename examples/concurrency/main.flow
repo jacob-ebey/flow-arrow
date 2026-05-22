@@ -15,16 +15,24 @@ import std.int { format_int }
 import std.io { write_stdout }
 import std.math { add, max, mul }
 
+struct JobSummary {
+    total_score: Int,
+    peak_score: Int,
+    total_weight: Int,
+    peak_weight: Int,
+}
+
 program main(args: Args) -> exit_code: Int {
-    (1, 17, 1)                                               -> range_step              -> $jobs
-    $jobs                                                    -> map score_job           -> $scores
-    $jobs                                                    -> map weight_job          -> $weights
-    $scores                                                  -> reduce add(identity: 0) -> $total_score
-    $scores                                                  -> reduce max(identity: 0) -> $peak_score
-    $weights                                                 -> reduce add(identity: 0) -> $total_weight
-    $weights                                                 -> reduce max(identity: 0) -> $peak_weight
-    ($total_score, $peak_score, $total_weight, $peak_weight) -> render_summary          -> $output
-    $output                                                  -> write_stdout            -> $exit_code
+    (1, 17, 1)                                                                                                                -> range_step              -> $jobs
+    $jobs                                                                                                                     -> map score_job           -> $scores
+    $jobs                                                                                                                     -> map weight_job          -> $weights
+    $scores                                                                                                                   -> reduce add(identity: 0) -> $total_score
+    $scores                                                                                                                   -> reduce max(identity: 0) -> $peak_score
+    $weights                                                                                                                  -> reduce add(identity: 0) -> $total_weight
+    $weights                                                                                                                  -> reduce max(identity: 0) -> $peak_weight
+    JobSummary { total_score: $total_score, peak_score: $peak_score, total_weight: $total_weight, peak_weight: $peak_weight } -> $summary
+    $summary                                                                                                                  -> render_summary          -> $output
+    $output                                                                                                                   -> write_stdout            -> $exit_code
 }
 
 node score_job(n: Int) -> score: Int {
@@ -37,7 +45,12 @@ node weight_job(n: Int) -> weight: Int {
     ($doubled, 1) -> add -> $weight
 }
 
-node render_summary(total_score: Int, peak_score: Int, total_weight: Int, peak_weight: Int) -> output: Bytes {
+node render_summary(summary: JobSummary) -> output: Bytes {
+    $summary -> field total_score  -> $total_score
+    $summary -> field peak_score   -> $peak_score
+    $summary -> field total_weight -> $total_weight
+    $summary -> field peak_weight  -> $peak_weight
+
     $total_score  -> format_int -> $total_score_bytes
     $peak_score   -> format_int -> $peak_score_bytes
     $total_weight -> format_int -> $total_weight_bytes

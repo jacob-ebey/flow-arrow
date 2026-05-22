@@ -70,7 +70,7 @@ impl CommentLayout {
                         Decl::Node(callable) | Decl::Program(callable) => {
                             vec![ChainComments::default(); callable.chains.len()]
                         }
-                        Decl::TypeAlias(_) | Decl::Import(_) => Vec::new(),
+                        Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => Vec::new(),
                     },
                 })
                 .collect(),
@@ -209,6 +209,7 @@ impl Formatter {
                     format_type_name(&alias.ty)
                 ));
             }
+            Decl::Struct(struct_decl) => self.format_struct(struct_decl),
             Decl::Import(import) => self.format_import(import),
             Decl::Node(callable) => {
                 let kind = if callable.is_extern {
@@ -220,6 +221,14 @@ impl Formatter {
             }
             Decl::Program(callable) => self.format_callable(decl_index, "program", callable),
         }
+    }
+
+    fn format_struct(&mut self, struct_decl: &StructDecl) {
+        self.line(format!("struct {} {{", struct_decl.name));
+        for field in &struct_decl.fields {
+            self.line(format!("{INDENT}{},", format_port(field)));
+        }
+        self.line("}");
     }
 
     fn format_import(&mut self, import: &Import) {
@@ -370,7 +379,9 @@ fn format_import_item(item: &ImportItem) -> String {
 fn needs_blank_between(left: &Decl, right: &Decl) -> bool {
     !matches!(
         (left, right),
-        (Decl::Import(_), Decl::Import(_)) | (Decl::TypeAlias(_), Decl::TypeAlias(_))
+        (Decl::Import(_), Decl::Import(_))
+            | (Decl::TypeAlias(_), Decl::TypeAlias(_))
+            | (Decl::Struct(_), Decl::Struct(_))
     )
 }
 
@@ -479,6 +490,7 @@ fn format_stage(stage: &Stage) -> String {
             format!("fault map {node} {{ ok -> ${ok}, fault -> ${fault} }}")
         }
         Stage::Filter(name) => format!("filter {name}"),
+        Stage::Field(name) => format!("field {name}"),
         Stage::Repeat { count, node } => format!("repeat<{}> {node}", format_endpoint(count)),
         Stage::Reduce { op, identity } => {
             format!("reduce {op}(identity: {})", format_endpoint(identity))
@@ -555,6 +567,14 @@ fn format_endpoint(endpoint: &Endpoint) -> String {
             items
                 .iter()
                 .map(format_endpoint)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Endpoint::Struct { name, fields } => format!(
+            "{name} {{ {} }}",
+            fields
+                .iter()
+                .map(|(field, value)| format!("{field}: {}", format_endpoint(value)))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -656,6 +676,7 @@ fn update_depths(
 fn starts_declaration(text: &str) -> bool {
     starts_keyword(text, "import")
         || starts_keyword(text, "type")
+        || starts_keyword(text, "struct")
         || starts_keyword(text, "extern")
         || starts_keyword(text, "node")
         || starts_keyword(text, "program")

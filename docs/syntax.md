@@ -56,7 +56,7 @@ and may not be used as identifiers:
 import    as        node      program   map       reduce
 extern    scan      repeat    select    match     identity  grid      cell
 stencil2d range     range_between        range_step
-filter    length    fault     ok
+filter    length    fault     ok        struct    field
 ```
 
 ### 1.3 Literals
@@ -89,12 +89,17 @@ program        ::= declaration*
 
 declaration    ::= import_decl
                  | type_alias_decl
+                 | struct_decl
                  | node_decl
                  | program_decl
 
 import_decl    ::= "import" import_source import_clause
 
 type_alias_decl ::= "type" IDENT "=" type
+
+struct_decl    ::= "struct" IDENT "{"
+                   port ("," port)* ","?
+                   "}"
 
 import_source  ::= module_path
                  | STRING
@@ -117,6 +122,10 @@ namespace but never creates dataflow graph nodes or edges.
 `type_alias_decl` is also compile-time-only and may only appear at module
 top level. Type aliases name existing types; they do not create runtime
 values or nominally distinct types.
+
+`struct_decl` defines a named product type with fields. Struct names are
+nominal: a value of `Point` is not interchangeable with another struct
+that happens to have the same fields.
 
 `extern node` marks a node as part of the module's public callable
 surface. Local FlowArrow imports may import type aliases and extern
@@ -272,12 +281,17 @@ endpoint       ::= variable_ref
                  | tuple
                  | fanout
                  | seq_literal
+                 | struct_literal
                  | literal
 
 variable_ref   ::= "$" IDENT
 node_ref       ::= IDENT ("." IDENT)* static_node_args?
 static_node_args ::= "<" static_node_arg ("," static_node_arg)* ","? ">"
 static_node_arg ::= IDENT ("." IDENT)*
+struct_literal ::= IDENT "{"
+                   IDENT ":" inline_endpoint
+                   ("," IDENT ":" inline_endpoint)* ","?
+                   "}"
 ```
 
 - `variable_ref` — a value name. Variables are always written with `$`.
@@ -369,6 +383,7 @@ combinator     ::= map_comb
                  | grid_comb
                  | range_comb
                  | filter_comb
+                 | field_comb
                  | length_comb
 
 map_comb       ::= "map" IDENT
@@ -414,6 +429,8 @@ range_comb     ::= "range"
 
 filter_comb    ::= "filter" IDENT
 
+field_comb     ::= "field" IDENT
+
 length_comb    ::= "length"
 ```
 
@@ -444,6 +461,7 @@ Notes:
   short-circuit after the first `true` guard. Only the selected arm target is
   evaluated. All arm targets must return the same type. A `_` fallback arm is
   required and must be last.
+- `field name` projects the named field from a struct value.
 - `grid<...>` introduces shape-indexed parallelism. Each `grid_dim`
   may be an integer literal, a compile-time identifier (shape
   variable), or a runtime `Int` value. Topology is fixed; only the
@@ -560,6 +578,7 @@ import_clause  ::= "as" IDENT
 import_item    ::= IDENT ("as" IDENT)?
 
 type_alias_decl ::= "type" IDENT "=" type
+struct_decl    ::= "struct" IDENT "{" port ("," port)* ","? "}"
 
 node_decl      ::= "node"    IDENT node_param_list? "(" port_list? ")" "->" port_or_list block
 program_decl   ::= "program" IDENT "(" port_list? ")" "->" port_or_list block
@@ -586,7 +605,7 @@ tuple_binding  ::= "(" binding_target "," binding_target
 
 endpoint       ::= inline_endpoint
 inline_endpoint ::= endpoint_atom ("->" stage)*
-endpoint_atom  ::= variable_ref | tuple | fanout | seq_literal | literal
+endpoint_atom  ::= variable_ref | tuple | fanout | seq_literal | struct_literal | literal
 variable_ref   ::= "$" IDENT
 node_ref       ::= IDENT ("." IDENT)* static_node_args?
 static_node_args ::= "<" static_node_arg ("," static_node_arg)* ","? ">"
@@ -595,11 +614,13 @@ tuple          ::= "(" inline_endpoint "," inline_endpoint ("," inline_endpoint)
 fanout         ::= "{" fanout_arm ("," fanout_arm)* "}"
 fanout_arm     ::= stage ("->" stage)*
 seq_literal    ::= "[" "]" | "[" inline_endpoint ("," inline_endpoint)* "]"
+struct_literal ::= IDENT "{" IDENT ":" inline_endpoint
+                   ("," IDENT ":" inline_endpoint)* ","? "}"
 
 combinator     ::= map_comb | fault_map_comb | reduce_comb | scan_comb
                  | repeat_comb | select_comb | match_comb
                  | stencil_comb | grid_comb
-                 | range_comb | filter_comb | length_comb
+                 | range_comb | filter_comb | field_comb | length_comb
 
 map_comb       ::= "map" IDENT
 fault_map_comb ::= "fault" "map" IDENT "{"
@@ -624,6 +645,7 @@ grid_body      ::= "{" cell_decl "}"
 cell_decl      ::= "cell" "(" IDENT ("," IDENT)* ")" block
 range_comb     ::= "range" | "range_between" | "range_step"
 filter_comb    ::= "filter" IDENT
+field_comb     ::= "field" IDENT
 length_comb    ::= "length"
 ```
 

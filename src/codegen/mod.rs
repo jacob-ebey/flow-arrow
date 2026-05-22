@@ -396,6 +396,10 @@ enum Ty {
     Faultable(Box<Ty>),
     Seq(Box<Ty>),
     Tuple(Vec<Ty>),
+    Struct {
+        name: String,
+        fields: Vec<(String, Ty)>,
+    },
     OneOf(Vec<Ty>),
     Var(String),
     EmptySeq,
@@ -519,7 +523,7 @@ impl<'a> TypedCodegen<'a> {
 
         for decl in &self.module.declarations {
             match decl {
-                Decl::TypeAlias(_) => {}
+                Decl::TypeAlias(_) | Decl::Struct(_) => {}
                 Decl::Node(callable) => self.emit_callable(&mut bodies, callable, false)?,
                 Decl::Program(callable) => self.emit_callable(&mut bodies, callable, true)?,
                 Decl::Import(_) => {}
@@ -671,7 +675,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                         MatchGuard::Call { node, .. } if self.is_cv_runtime_name(node)
                     )
             }),
-            Stage::Bind(_) => false,
+            Stage::Bind(_) | Stage::Field(_) => false,
             Stage::Endpoint(_) => false,
         }
     }
@@ -707,7 +711,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                         MatchGuard::Call { node, .. } if self.is_http_runtime_name(node)
                     )
             }),
-            Stage::Bind(_) => false,
+            Stage::Bind(_) | Stage::Field(_) => false,
             Stage::Endpoint(_) => false,
         }
     }
@@ -762,7 +766,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                         MatchGuard::Call { node, .. } if self.is_sqlite_runtime_name(node)
                     )
             }),
-            Stage::Bind(_) => false,
+            Stage::Bind(_) | Stage::Field(_) => false,
             Stage::Endpoint(_) => false,
         }
     }
@@ -877,19 +881,40 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     }
 
     fn collect_type_aliases(&mut self) -> Result<(), String> {
-        let raw = self
-            .module
-            .declarations
-            .iter()
-            .filter_map(|decl| match decl {
-                Decl::TypeAlias(alias) => Some((alias.name.clone(), alias.ty.clone())),
-                _ => None,
-            })
-            .collect::<HashMap<_, _>>();
+        let mut raw_aliases = HashMap::new();
+        let mut raw_structs = HashMap::new();
+        for decl in &self.module.declarations {
+            match decl {
+                Decl::TypeAlias(alias) => {
+                    raw_aliases.insert(alias.name.clone(), alias.ty.clone());
+                }
+                Decl::Struct(struct_decl) => {
+                    raw_structs.insert(struct_decl.name.clone(), struct_decl.fields.clone());
+                }
+                _ => {}
+            }
+        }
         let mut resolved = HashMap::new();
-        for name in raw.keys() {
+        for name in raw_structs.keys() {
             let mut resolving = Vec::new();
-            let ty = self.resolve_alias(name, &raw, &mut resolved, &mut resolving)?;
+            let ty = self.resolve_struct_type(
+                name,
+                &raw_aliases,
+                &raw_structs,
+                &mut resolved,
+                &mut resolving,
+            )?;
+            self.aliases.insert(name.clone(), ty);
+        }
+        for name in raw_aliases.keys() {
+            let mut resolving = Vec::new();
+            let ty = self.resolve_alias(
+                name,
+                &raw_aliases,
+                &raw_structs,
+                &mut resolved,
+                &mut resolving,
+            )?;
             self.aliases.insert(name.clone(), ty);
         }
         Ok(())
@@ -898,7 +923,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     fn resolve_alias(
         &self,
         name: &str,
-        raw: &HashMap<String, String>,
+        raw_aliases: &HashMap<String, String>,
+        raw_structs: &HashMap<String, Vec<Port>>,
         resolved: &mut HashMap<String, Ty>,
         resolving: &mut Vec<String>,
     ) -> Result<Ty, String> {
@@ -909,12 +935,62 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             resolving.push(name.to_string());
             return Err(format!("cyclic type alias `{}`", resolving.join(" -> ")));
         }
-        let text = raw
+        let text = raw_aliases
             .get(name)
             .ok_or_else(|| format!("unknown type alias `{name}`"))?;
         resolving.push(name.to_string());
-        let ty = self.resolve_alias_type(parse_type(text)?, raw, resolved, resolving)?;
+        let ty = self.resolve_alias_type(
+            parse_type(text)?,
+            raw_aliases,
+            raw_structs,
+            resolved,
+            resolving,
+        )?;
         resolving.pop();
+        resolved.insert(name.to_string(), ty.clone());
+        Ok(ty)
+    }
+
+    fn resolve_struct_type(
+        &self,
+        name: &str,
+        raw_aliases: &HashMap<String, String>,
+        raw_structs: &HashMap<String, Vec<Port>>,
+        resolved: &mut HashMap<String, Ty>,
+        resolving: &mut Vec<String>,
+    ) -> Result<Ty, String> {
+        if let Some(ty) = resolved.get(name) {
+            return Ok(ty.clone());
+        }
+        if resolving.iter().any(|item| item == name) {
+            resolving.push(name.to_string());
+            return Err(format!(
+                "cyclic type declaration `{}`",
+                resolving.join(" -> ")
+            ));
+        }
+        let fields = raw_structs
+            .get(name)
+            .ok_or_else(|| format!("unknown struct `{name}`"))?;
+        resolving.push(name.to_string());
+        let mut out = Vec::with_capacity(fields.len());
+        for field in fields {
+            out.push((
+                field.name.clone(),
+                self.resolve_alias_type(
+                    parse_type(&field.ty)?,
+                    raw_aliases,
+                    raw_structs,
+                    resolved,
+                    resolving,
+                )?,
+            ));
+        }
+        resolving.pop();
+        let ty = Ty::Struct {
+            name: name.to_string(),
+            fields: out,
+        };
         resolved.insert(name.to_string(), ty.clone());
         Ok(ty)
     }
@@ -922,7 +998,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     fn resolve_alias_type(
         &self,
         ty: Ty,
-        raw: &HashMap<String, String>,
+        raw_aliases: &HashMap<String, String>,
+        raw_structs: &HashMap<String, Vec<Port>>,
         resolved: &mut HashMap<String, Ty>,
         resolving: &mut Vec<String>,
     ) -> Result<Ty, String> {
@@ -930,34 +1007,70 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             Ty::Var(name) => {
                 if let Some(known) = builtin_type_alias(&name) {
                     Ok(known)
-                } else if raw.contains_key(&name) {
-                    self.resolve_alias(&name, raw, resolved, resolving)
+                } else if raw_aliases.contains_key(&name) {
+                    self.resolve_alias(&name, raw_aliases, raw_structs, resolved, resolving)
+                } else if raw_structs.contains_key(&name) {
+                    self.resolve_struct_type(&name, raw_aliases, raw_structs, resolved, resolving)
                 } else {
                     Err(format!("unknown type `{name}`"))
                 }
             }
-            Ty::Faultable(item) => Ok(Ty::Faultable(Box::new(
-                self.resolve_alias_type(*item, raw, resolved, resolving)?,
-            ))),
-            Ty::Seq(item) => Ok(Ty::Seq(Box::new(
-                self.resolve_alias_type(*item, raw, resolved, resolving)?,
-            ))),
-            Ty::Stream(item) => Ok(Ty::Stream(Box::new(
-                self.resolve_alias_type(*item, raw, resolved, resolving)?,
-            ))),
+            Ty::Faultable(item) => Ok(Ty::Faultable(Box::new(self.resolve_alias_type(
+                *item,
+                raw_aliases,
+                raw_structs,
+                resolved,
+                resolving,
+            )?))),
+            Ty::Seq(item) => Ok(Ty::Seq(Box::new(self.resolve_alias_type(
+                *item,
+                raw_aliases,
+                raw_structs,
+                resolved,
+                resolving,
+            )?))),
+            Ty::Stream(item) => Ok(Ty::Stream(Box::new(self.resolve_alias_type(
+                *item,
+                raw_aliases,
+                raw_structs,
+                resolved,
+                resolving,
+            )?))),
             Ty::OneOf(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
-                    out.push(self.resolve_alias_type(item, raw, resolved, resolving)?);
+                    out.push(self.resolve_alias_type(
+                        item,
+                        raw_aliases,
+                        raw_structs,
+                        resolved,
+                        resolving,
+                    )?);
                 }
                 Ok(Ty::OneOf(out))
             }
             Ty::Tuple(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
-                    out.push(self.resolve_alias_type(item, raw, resolved, resolving)?);
+                    out.push(self.resolve_alias_type(
+                        item,
+                        raw_aliases,
+                        raw_structs,
+                        resolved,
+                        resolving,
+                    )?);
                 }
                 Ok(Ty::Tuple(out))
+            }
+            Ty::Struct { name, fields } => {
+                let mut out = Vec::with_capacity(fields.len());
+                for (field, ty) in fields {
+                    out.push((
+                        field,
+                        self.resolve_alias_type(ty, raw_aliases, raw_structs, resolved, resolving)?,
+                    ));
+                }
+                Ok(Ty::Struct { name, fields: out })
             }
             other => Ok(other),
         }
@@ -1031,6 +1144,13 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 }
                 Ok(Ty::Tuple(out))
             }
+            Ty::Struct { name, fields } => {
+                let mut out = Vec::with_capacity(fields.len());
+                for (field, ty) in fields {
+                    out.push((field, self.resolve_declared_type(ty)?));
+                }
+                Ok(Ty::Struct { name, fields: out })
+            }
             other => Ok(other),
         }
     }
@@ -1059,6 +1179,13 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     out.push(self.resolve_signature_type(item)?);
                 }
                 Ok(Ty::Tuple(out))
+            }
+            Ty::Struct { name, fields } => {
+                let mut out = Vec::with_capacity(fields.len());
+                for (field, ty) in fields {
+                    out.push((field, self.resolve_signature_type(ty)?));
+                }
+                Ok(Ty::Struct { name, fields: out })
             }
             other => Ok(other),
         }
@@ -1447,6 +1574,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 Stage::Filter(name) => {
                     value = self.emit_filter(out, name, value.clone())?;
                 }
+                Stage::Field(name) => {
+                    value = self.emit_field(name, value.clone())?;
+                }
                 Stage::Repeat { count, node } => {
                     let count_value = self.emit_endpoint(out, count, env)?;
                     value = self.emit_repeat(out, node, value.clone(), count_value)?;
@@ -1697,6 +1827,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     ty: seq_ty,
                 })
             }
+            Endpoint::Struct { name, fields } => self.emit_struct_literal(out, name, fields, env),
             Endpoint::Eval { source, stages } => {
                 let mut value = if endpoint_contains_empty_seq(source) {
                     if let Some(Stage::Endpoint(Endpoint::Name(name))) = stages.first() {
@@ -1739,6 +1870,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                         Stage::Filter(name) => {
                             value = self.emit_filter(out, name, value)?;
                         }
+                        Stage::Field(name) => {
+                            value = self.emit_field(name, value)?;
+                        }
                         Stage::Repeat { count, node } => {
                             let count_value = self.emit_endpoint(out, count, env)?;
                             value = self.emit_repeat(out, node, value, count_value)?;
@@ -1759,6 +1893,56 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 Ok(value)
             }
         }
+    }
+
+    fn emit_struct_literal(
+        &mut self,
+        out: &mut String,
+        name: &str,
+        fields: &[(String, Endpoint)],
+        env: &HashMap<String, Value>,
+    ) -> Result<Value, String> {
+        let ty = self
+            .aliases
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("unknown struct `{name}`"))?;
+        let Ty::Struct {
+            fields: expected_fields,
+            ..
+        } = &ty
+        else {
+            return Err(format!("`{name}` is not a struct"));
+        };
+        let c_ty = self.types.c_type(&ty);
+        let tmp = self.next_temp();
+        out.push_str(&format!("  {c_ty} {tmp};\n"));
+        for (field, field_ty) in expected_fields {
+            let (_, endpoint) = fields
+                .iter()
+                .find(|(candidate, _)| candidate == field)
+                .ok_or_else(|| format!("struct `{name}` literal missing field `{field}`"))?;
+            let value = self.emit_endpoint_expected(out, endpoint, env, Some(field_ty))?;
+            self.emit_assign_value(out, &format!("{tmp}.{}", c_ident(field)), field_ty, &value)?;
+        }
+        Ok(Value { code: tmp, ty })
+    }
+
+    fn emit_field(&self, field: &str, value: Value) -> Result<Value, String> {
+        let Ty::Struct { name, fields } = value.ty.clone() else {
+            return Err(format!(
+                "field `{field}` expected struct input, found `{}`",
+                value.ty
+            ));
+        };
+        let (_, ty) = fields
+            .iter()
+            .find(|(candidate, _)| candidate == field)
+            .ok_or_else(|| format!("struct `{name}` has no field `{field}`"))?;
+        Ok(Value {
+            code: format!("{}.{}", value.code, c_ident(field)),
+            ty: ty.clone(),
+        })
     }
 
     fn emit_assign_value(
@@ -1960,8 +2144,53 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     None => Ok(Ty::EmptySeq),
                 }
             }
+            Endpoint::Struct { name, fields } => self.struct_literal_value_type(name, fields, env),
             Endpoint::Eval { source, stages } => self.inline_eval_value_type(source, stages, env),
         }
+    }
+
+    fn struct_literal_value_type(
+        &self,
+        name: &str,
+        fields: &[(String, Endpoint)],
+        env: &HashMap<String, Value>,
+    ) -> Result<Ty, String> {
+        let Some(Ty::Struct {
+            fields: expected_fields,
+            ..
+        }) = self.aliases.get(name)
+        else {
+            return Err(format!("unknown struct `{name}`"));
+        };
+        for (field, expected_ty) in expected_fields {
+            let (_, endpoint) = fields
+                .iter()
+                .find(|(candidate, _)| candidate == field)
+                .ok_or_else(|| format!("struct `{name}` literal missing field `{field}`"))?;
+            let actual = self.endpoint_value_type(endpoint, env)?;
+            if !assignable_output_ty(expected_ty, &actual) {
+                return Err(format!(
+                    "struct `{name}` field `{field}` expected `{expected_ty}`, found `{actual}`"
+                ));
+            }
+        }
+        self.aliases
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("unknown struct `{name}`"))
+    }
+
+    fn field_value_type(&self, field: &str, value_ty: &Ty) -> Result<Ty, String> {
+        let Ty::Struct { name, fields } = value_ty else {
+            return Err(format!(
+                "field `{field}` expected struct input, found `{value_ty}`"
+            ));
+        };
+        fields
+            .iter()
+            .find(|(candidate, _)| candidate == field)
+            .map(|(_, ty)| ty.clone())
+            .ok_or_else(|| format!("struct `{name}` has no field `{field}`"))
     }
 
     fn inline_eval_value_type(
@@ -2014,6 +2243,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                             "`filter {name}` predicate expected `Bool`, found `{predicate_ty}`"
                         ));
                     }
+                }
+                Stage::Field(name) => {
+                    value_ty = self.field_value_type(name, &value_ty)?;
                 }
                 Stage::Repeat { node, .. } => {
                     value_ty = self.call_output_type(node, &value_ty)?;
@@ -4736,7 +4968,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     fn is_parallel_safe_stage(&self, stage: &Stage, visiting: &mut HashSet<String>) -> bool {
         match stage {
             Stage::Endpoint(endpoint) => self.is_parallel_safe_endpoint(endpoint, visiting),
-            Stage::Bind(_) => true,
+            Stage::Bind(_) | Stage::Field(_) => true,
             Stage::Map(name) | Stage::Filter(name) => self.is_parallel_safe_name(name, visiting),
             Stage::FaultMap { node, .. } => self.is_parallel_safe_name(node, visiting),
             Stage::Repeat { count, node } => {
@@ -4778,6 +5010,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             Endpoint::Tuple(items) | Endpoint::Seq(items) => items
                 .iter()
                 .all(|item| self.is_parallel_safe_endpoint(item, visiting)),
+            Endpoint::Struct { fields, .. } => fields
+                .iter()
+                .all(|(_, item)| self.is_parallel_safe_endpoint(item, visiting)),
             Endpoint::Eval { source, stages } => {
                 self.is_parallel_safe_endpoint(source, visiting)
                     && stages.iter().all(|stage| match stage {
@@ -4787,7 +5022,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                         Stage::Endpoint(endpoint) => {
                             self.is_parallel_safe_endpoint(endpoint, visiting)
                         }
-                        Stage::Bind(_) => true,
+                        Stage::Bind(_) | Stage::Field(_) => true,
                         Stage::Map(name)
                         | Stage::Filter(name)
                         | Stage::Repeat { node: name, .. }
@@ -5108,7 +5343,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 {
                     Some(callable.name.clone())
                 }
-                Decl::TypeAlias(_) | Decl::Import(_) | Decl::Program(_) => None,
+                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) | Decl::Program(_) => None,
                 Decl::Node(_) => None,
             })
             .collect::<Vec<_>>();
@@ -5410,6 +5645,9 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 Stage::Filter(name) => {
                     value = self.emit_filter(name, value)?;
                 }
+                Stage::Field(name) => {
+                    value = self.extract_struct_field(value, name)?;
+                }
                 Stage::Reduce { op, identity } => {
                     let identity = self.emit_endpoint(identity, env)?;
                     value = self.emit_reduce(op, value, identity)?;
@@ -5531,8 +5769,51 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             Endpoint::String(_) | Endpoint::Seq(_) => {
                 self.emit_literal_endpoint_expected(endpoint, env, expected)
             }
+            Endpoint::Struct { name, fields } => {
+                self.emit_struct_endpoint(name, fields, env, expected)
+            }
             Endpoint::Eval { source, stages } => self.emit_inline_eval(source, stages, env),
         }
+    }
+
+    fn emit_struct_endpoint(
+        &mut self,
+        name: &str,
+        fields: &[(String, Endpoint)],
+        env: &HashMap<String, LlvmValue<'ctx>>,
+        expected: Option<&Ty>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let ty = expected
+            .cloned()
+            .or_else(|| self.codegen.aliases.get(name).cloned())
+            .ok_or_else(|| format!("unknown struct `{name}`"))?;
+        let Ty::Struct {
+            fields: expected_fields,
+            ..
+        } = &ty
+        else {
+            return Err(format!("struct literal expected struct type, found `{ty}`"));
+        };
+        let mut out = self.types.basic_type(&ty)?.into_struct_type().const_zero();
+        for (index, (field, field_ty)) in expected_fields.iter().enumerate() {
+            let (_, endpoint) = fields
+                .iter()
+                .find(|(candidate, _)| candidate == field)
+                .ok_or_else(|| format!("struct `{name}` literal missing field `{field}`"))?;
+            let value = self.emit_endpoint_expected(endpoint, env, Some(field_ty))?;
+            let value = self.coerce_value_to_ty(value, field_ty)?;
+            out = self
+                .builder
+                .build_insert_value(out, value.value, index as u32, "struct")
+                .map_err(|error| {
+                    format!("LLVM backend failed to assemble struct literal: {error}")
+                })?
+                .into_struct_value();
+        }
+        Ok(LlvmValue {
+            value: out.into(),
+            ty,
+        })
     }
 
     fn emit_inline_eval(
@@ -5571,6 +5852,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     return Err("inline evaluations cannot use `fault map`".to_string());
                 }
                 Stage::Filter(name) => value = self.emit_filter(name, value)?,
+                Stage::Field(name) => value = self.extract_struct_field(value, name)?,
                 Stage::Reduce { op, identity } => {
                     let identity = self.emit_endpoint(identity, env)?;
                     value = self.emit_reduce(op, value, identity)?;
@@ -5711,6 +5993,12 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     .map(|ty| Ty::Seq(Box::new(ty)))
                     .unwrap_or(Ty::EmptySeq))
             }
+            Endpoint::Struct { name, .. } => self
+                .codegen
+                .aliases
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("unknown struct `{name}`")),
             Endpoint::Eval { source, stages } => self.inline_eval_type(source, stages, env),
         }
     }
@@ -5760,6 +6048,22 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                             "`filter {name}` predicate expected `Bool`, found `{predicate_ty}`"
                         ));
                     }
+                }
+                Stage::Field(name) => {
+                    let Ty::Struct {
+                        name: ty_name,
+                        fields,
+                    } = &value_ty
+                    else {
+                        return Err(format!(
+                            "field `{name}` expected struct input, found `{value_ty}`"
+                        ));
+                    };
+                    value_ty = fields
+                        .iter()
+                        .find(|(field, _)| field == name)
+                        .map(|(_, ty)| ty.clone())
+                        .ok_or_else(|| format!("struct `{ty_name}` has no field `{name}`"))?;
                 }
                 Stage::Reduce { op, identity } => {
                     let Ty::Seq(item_ty) = &value_ty else {
@@ -8643,6 +8947,34 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             .map_err(|error| format!("LLVM backend failed to extract tuple field: {error}"))
     }
 
+    fn extract_struct_field(
+        &mut self,
+        input: LlvmValue<'ctx>,
+        field: &str,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let Ty::Struct { name, fields } = input.ty.clone() else {
+            return Err(format!(
+                "field `{field}` expected struct input, found `{}`",
+                input.ty
+            ));
+        };
+        let Some((index, (_, ty))) = fields
+            .iter()
+            .enumerate()
+            .find(|(_, (candidate, _))| candidate == field)
+        else {
+            return Err(format!("struct `{name}` has no field `{field}`"));
+        };
+        let value = self
+            .builder
+            .build_extract_value(input.value.into_struct_value(), index as u32, "field")
+            .map_err(|error| format!("LLVM backend failed to extract struct field: {error}"))?;
+        Ok(LlvmValue {
+            value,
+            ty: ty.clone(),
+        })
+    }
+
     fn to_real(
         &mut self,
         value: BasicValueEnum<'ctx>,
@@ -9012,6 +9344,13 @@ impl<'ctx> LlvmTypeRegistry<'ctx> {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.struct_type(ty, &fields)?.into())
             }
+            Ty::Struct { fields, .. } => {
+                let fields = fields
+                    .iter()
+                    .map(|(_, item)| self.basic_type(item))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.struct_type(ty, &fields)?.into())
+            }
             Ty::Faultable(inner) => {
                 let fault = self.basic_type(&Ty::Fault)?;
                 let inner = self.basic_type(inner)?;
@@ -9213,6 +9552,16 @@ impl TypeRegistry {
                 }
                 name
             }
+            Ty::Struct { fields, .. } => {
+                for (_, item) in fields {
+                    self.c_type(item);
+                }
+                let name = type_name(ty);
+                if !is_predefined_type_name(&name) {
+                    self.types.insert(name.clone(), ty.clone());
+                }
+                name
+            }
             Ty::Faultable(inner) => {
                 self.c_type(inner);
                 let name = type_name(ty);
@@ -9274,6 +9623,14 @@ impl TypeRegistry {
                     for (index, item) in items.iter().enumerate() {
                         let item_ty = self.c_type(item);
                         out.push_str(&format!("{item_ty} f{index}; "));
+                    }
+                    out.push_str(&format!("}} {name};\n"));
+                }
+                Ty::Struct { fields, .. } => {
+                    out.push_str("typedef struct { ");
+                    for (field, item) in fields {
+                        let item_ty = self.c_type(&item);
+                        out.push_str(&format!("{item_ty} {}; ", c_ident(&field)));
                     }
                     out.push_str(&format!("}} {name};\n"));
                 }
@@ -9744,6 +10101,28 @@ fn match_input_types(
             }
             Ok(())
         }
+        (
+            Ty::Struct {
+                name: expected_name,
+                fields: expected,
+            },
+            Ty::Struct {
+                name: actual_name,
+                fields: actual,
+            },
+        ) if expected_name == actual_name && expected.len() == actual.len() => {
+            for ((expected_field, expected_ty), (actual_field, actual_ty)) in
+                expected.iter().zip(actual)
+            {
+                if expected_field != actual_field {
+                    return Err(format!(
+                        "expected struct field `{expected_field}`, found `{actual_field}`"
+                    ));
+                }
+                match_input_types(expected_ty, actual_ty, vars)?;
+            }
+            Ok(())
+        }
         _ => Err(format!("expected `{expected}`, found `{actual}`")),
     }
 }
@@ -9769,6 +10148,21 @@ fn assignable_output_ty(expected: &Ty, actual: &Ty) -> bool {
             .iter()
             .zip(actual.iter())
             .all(|(expected, actual)| assignable_output_ty(expected, actual)),
+        (
+            Ty::Struct {
+                name: expected_name,
+                fields: expected,
+            },
+            Ty::Struct {
+                name: actual_name,
+                fields: actual,
+            },
+        ) if expected_name == actual_name && expected.len() == actual.len() => expected
+            .iter()
+            .zip(actual.iter())
+            .all(|((expected_field, expected), (actual_field, actual))| {
+                expected_field == actual_field && assignable_output_ty(expected, actual)
+            }),
         _ => false,
     }
 }
@@ -9801,6 +10195,7 @@ fn format_endpoint_for_error_codegen(endpoint: &Endpoint) -> String {
         Endpoint::Unit => "()".to_string(),
         Endpoint::Tuple(_) => "(...)".to_string(),
         Endpoint::Seq(_) => "[...]".to_string(),
+        Endpoint::Struct { name, .. } => format!("{name} {{ ... }}"),
         Endpoint::Eval { .. } => "(inline eval)".to_string(),
     }
 }
@@ -9828,6 +10223,16 @@ fn substitute_ty(ty: &Ty, vars: &HashMap<String, Ty>) -> Option<Ty> {
             }
             Some(Ty::Tuple(out))
         }
+        Ty::Struct { name, fields } => {
+            let mut out = Vec::with_capacity(fields.len());
+            for (field, ty) in fields {
+                out.push((field.clone(), substitute_ty(ty, vars)?));
+            }
+            Some(Ty::Struct {
+                name: name.clone(),
+                fields: out,
+            })
+        }
         other => Some(other.clone()),
     }
 }
@@ -9837,6 +10242,7 @@ fn contains_type_var(input: &Ty) -> bool {
         Ty::Var(_) => true,
         Ty::Faultable(item) | Ty::Seq(item) | Ty::Stream(item) => contains_type_var(item),
         Ty::Tuple(items) | Ty::OneOf(items) => items.iter().any(contains_type_var),
+        Ty::Struct { fields, .. } => fields.iter().any(|(_, ty)| contains_type_var(ty)),
         _ => false,
     }
 }
@@ -9846,6 +10252,7 @@ fn contains_empty_seq(input: &Ty) -> bool {
         Ty::EmptySeq => true,
         Ty::Faultable(item) | Ty::Seq(item) | Ty::Stream(item) => contains_empty_seq(item),
         Ty::Tuple(items) | Ty::OneOf(items) => items.iter().any(contains_empty_seq),
+        Ty::Struct { fields, .. } => fields.iter().any(|(_, ty)| contains_empty_seq(ty)),
         _ => false,
     }
 }
@@ -9866,6 +10273,22 @@ fn input_context_ty(expected: &Ty, actual: &Ty) -> Ty {
                 .map(|(expected, actual)| input_context_ty(expected, actual))
                 .collect(),
         ),
+        (
+            Ty::Struct {
+                name,
+                fields: expected,
+            },
+            Ty::Struct { fields: actual, .. },
+        ) if expected.len() == actual.len() => Ty::Struct {
+            name: name.clone(),
+            fields: expected
+                .iter()
+                .zip(actual.iter())
+                .map(|((field, expected), (_, actual))| {
+                    (field.clone(), input_context_ty(expected, actual))
+                })
+                .collect(),
+        },
         _ => actual.clone(),
     }
 }
@@ -9908,6 +10331,7 @@ fn contains_faultable_ty(input: &Ty) -> bool {
         Ty::Faultable(_) => true,
         Ty::Seq(item) | Ty::Stream(item) => contains_faultable_ty(item),
         Ty::Tuple(items) => items.iter().any(contains_faultable_ty),
+        Ty::Struct { fields, .. } => fields.iter().any(|(_, ty)| contains_faultable_ty(ty)),
         Ty::OneOf(items) => items.iter().any(contains_faultable_ty),
         _ => false,
     }
@@ -10151,6 +10575,7 @@ fn fuse_single_use_chains(callable: &Callable) -> Vec<Chain> {
                     }
                     Stage::Endpoint(_)
                     | Stage::Bind(_)
+                    | Stage::Field(_)
                     | Stage::Map(_)
                     | Stage::Filter(_)
                     | Stage::FaultMap { .. } => {}
@@ -10207,6 +10632,11 @@ fn count_endpoint_vars(endpoint: &Endpoint, uses: &mut HashMap<String, usize>) {
                 count_endpoint_vars(item, uses);
             }
         }
+        Endpoint::Struct { fields, .. } => {
+            for (_, item) in fields {
+                count_endpoint_vars(item, uses);
+            }
+        }
         Endpoint::Eval { source, stages } => {
             count_endpoint_vars(source, uses);
             for stage in stages {
@@ -10230,7 +10660,7 @@ fn count_endpoint_vars(endpoint: &Endpoint, uses: &mut HashMap<String, usize>) {
                             }
                         }
                     }
-                    Stage::Bind(_) => {}
+                    Stage::Bind(_) | Stage::Field(_) => {}
                     _ => {}
                 }
             }
@@ -10248,6 +10678,9 @@ fn endpoint_contains_empty_seq(endpoint: &Endpoint) -> bool {
     match endpoint {
         Endpoint::Seq(items) => items.is_empty() || items.iter().any(endpoint_contains_empty_seq),
         Endpoint::Tuple(items) => items.iter().any(endpoint_contains_empty_seq),
+        Endpoint::Struct { fields, .. } => fields
+            .iter()
+            .any(|(_, endpoint)| endpoint_contains_empty_seq(endpoint)),
         Endpoint::Eval { source, stages } => {
             endpoint_contains_empty_seq(source)
                 || stages.iter().any(|stage| match stage {
@@ -10512,6 +10945,7 @@ fn type_suffix(ty: &Ty) -> String {
             "Tuple_{}",
             items.iter().map(type_suffix).collect::<Vec<_>>().join("_")
         ),
+        Ty::Struct { name, .. } => format!("Struct_{name}"),
         Ty::OneOf(items) => format!(
             "OneOf_{}",
             items.iter().map(type_suffix).collect::<Vec<_>>().join("_")
@@ -10525,6 +10959,13 @@ fn type_depth(ty: &Ty) -> usize {
     match ty {
         Ty::Seq(item) | Ty::Stream(item) | Ty::Faultable(item) => 1 + type_depth(item),
         Ty::Tuple(items) | Ty::OneOf(items) => 1 + items.iter().map(type_depth).max().unwrap_or(0),
+        Ty::Struct { fields, .. } => {
+            1 + fields
+                .iter()
+                .map(|(_, ty)| type_depth(ty))
+                .max()
+                .unwrap_or(0)
+        }
         Ty::EmptySeq => 0,
         _ => 0,
     }
@@ -10599,6 +11040,7 @@ impl std::fmt::Display for Ty {
                     .collect::<Vec<_>>()
                     .join(",")
             ),
+            Ty::Struct { name, .. } => write!(f, "{name}"),
             Ty::OneOf(items) => write!(
                 f,
                 "{}",
@@ -10782,5 +11224,69 @@ mod tests {
         assert!(!main.contains("flow_node___flow_std_matrix_matvec"));
         assert!(!main.contains("flow_node___flow_std_matrix_row_sums"));
         assert!(main.contains("for (size_t"));
+    }
+
+    #[test]
+    fn structs_emit_named_c_shapes_and_field_projection() {
+        let module = checked_module(
+            r#"
+                import std.cli { Args }
+                import std.math { add }
+
+                struct Point {
+                    x: Int,
+                    y: Int,
+                }
+
+                node sum_point(point: Point) -> total: Int {
+                    $point -> field x -> $x
+                    $point -> field y -> $y
+                    ($x, $y) -> add -> $total
+                }
+
+                program main(args: Args) -> exit_code: Int {
+                    Point { x: 20, y: 22 } -> sum_point -> $exit_code
+                }
+            "#,
+        );
+
+        let runtime_c = emit_runtime_c(&module).expect("runtime c");
+
+        assert!(runtime_c.contains("typedef struct { int64_t v_x; int64_t v_y; } FaStruct_Point;"));
+        assert!(runtime_c.contains("v_point.v_x"));
+        assert!(runtime_c.contains("v_point.v_y"));
+    }
+
+    #[test]
+    fn structs_emit_typescript_object_shapes() {
+        let module = checked_module(
+            r#"
+                import std.cli { Args }
+                import std.math { add }
+
+                struct Point {
+                    x: Int,
+                    y: Int,
+                }
+
+                node sum_point(point: Point) -> total: Int {
+                    $point -> field x -> $x
+                    $point -> field y -> $y
+                    ($x, $y) -> add -> $total
+                }
+
+                program main(args: Args) -> exit_code: Int {
+                    Point { x: 20, y: 22 } -> sum_point -> $exit_code
+                }
+            "#,
+        );
+
+        let ts = typescript::emit_module(TypedCodegen::new(&module).expect("typed codegen"))
+            .expect("typescript");
+
+        assert!(ts.contains("point: { x: bigint; y: bigint }"));
+        assert!(ts.contains("point.x"));
+        assert!(ts.contains("point.y"));
+        assert!(ts.contains("{ x: 20n, y: 22n }"));
     }
 }

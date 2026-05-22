@@ -9,11 +9,11 @@ language server features for FlowArrow source files.
 - Formats FlowArrow files through `flowarrow fmt --stdin`.
 - Starts `flowarrow lsp` for completions, diagnostics, hovers,
   go-to-definition, and document symbols.
-- Highlights FlowArrow declarations, type aliases, imports, combinators,
+- Highlights FlowArrow declarations, type aliases, struct declarations, imports, combinators,
   comments, strings, literals, types, punctuation, and the `->` flow arrow.
 - Gives `$`-prefixed variables a dedicated scope so they can be colored
   differently from node references and declaration names.
-- Gives built-in combinators such as `repeat`, `map`, `select`, `match`, and
+- Gives built-in combinators such as `repeat`, `map`, `field`, `select`, `match`, and
   `range_step` a dedicated builtin scope so they can be colored separately
   from variables and ordinary node references.
 - Marks forbidden keywords and assignment-like operators from `docs/syntax.md`

@@ -99,7 +99,7 @@ impl<'a> TypeScriptCodegen<'a> {
             .filter_map(|decl| match decl {
                 Decl::Node(callable) => Some((callable.clone(), false)),
                 Decl::Program(callable) => Some((callable.clone(), true)),
-                Decl::TypeAlias(_) | Decl::Import(_) => None,
+                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => None,
             })
             .collect::<Vec<_>>();
         let has_program_main = callables
@@ -344,6 +344,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                     let preferred =
                         final_bind_target_for_stage(chain, index).and_then(binding_target_name);
                     value = self.emit_filter(out, name, value, indent, preferred)?;
+                }
+                Stage::Field(name) => {
+                    value = self.emit_field(name, value)?;
                 }
                 Stage::Repeat { count, node } => {
                     let count = self.emit_endpoint(out, count, env, indent)?;
@@ -604,6 +607,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 );
                 Ok(ts_value(code, ty))
             }
+            Endpoint::Struct { name, fields } => {
+                self.emit_struct_endpoint(out, name, fields, env, indent)
+            }
             Endpoint::Eval { source, stages } => {
                 let mut value = self.emit_endpoint(out, source, env, indent)?;
                 for stage in stages {
@@ -612,6 +618,39 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 Ok(value)
             }
         }
+    }
+
+    fn emit_struct_endpoint(
+        &mut self,
+        out: &mut String,
+        name: &str,
+        fields: &[(String, Endpoint)],
+        env: &HashMap<String, TsValue>,
+        indent: &str,
+    ) -> Result<TsValue, String> {
+        let ty = self
+            .codegen
+            .aliases
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("unknown struct `{name}`"))?;
+        let Ty::Struct {
+            fields: expected_fields,
+            ..
+        } = &ty
+        else {
+            return Err(format!("`{name}` is not a struct"));
+        };
+        let mut parts = Vec::with_capacity(expected_fields.len());
+        for (field, field_ty) in expected_fields {
+            let (_, endpoint) = fields
+                .iter()
+                .find(|(candidate, _)| candidate == field)
+                .ok_or_else(|| format!("struct `{name}` literal missing field `{field}`"))?;
+            let value = self.emit_endpoint_expected(out, endpoint, env, Some(field_ty), indent)?;
+            parts.push(format!("{}: {}", ts_object_key(field), value.code));
+        }
+        Ok(ts_value(format!("{{ {} }}", parts.join(", ")), ty))
     }
 
     fn emit_inline_stage(
@@ -633,6 +672,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             Stage::Map(name) => self.emit_map(out, name, value, indent, None),
             Stage::FaultMap { .. } => Err("inline evaluations cannot use `fault map`".to_string()),
             Stage::Filter(name) => self.emit_filter(out, name, value, indent, None),
+            Stage::Field(name) => self.emit_field(name, value),
             Stage::Repeat { count, node } => {
                 let count = self.emit_endpoint(out, count, env, indent)?;
                 self.emit_repeat(out, node, value, count, indent, None)
@@ -1191,6 +1231,23 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         Ok(ts_value(tmp, input.ty))
     }
 
+    fn emit_field(&self, field: &str, input: TsValue) -> Result<TsValue, String> {
+        let Ty::Struct { name, fields } = input.ty.clone() else {
+            return Err(format!(
+                "field `{field}` expected struct input, found `{}`",
+                input.ty
+            ));
+        };
+        let (_, ty) = fields
+            .iter()
+            .find(|(candidate, _)| candidate == field)
+            .ok_or_else(|| format!("struct `{name}` has no field `{field}`"))?;
+        Ok(ts_value(
+            format!("{}.{}", input.code, ts_property(field)),
+            ty.clone(),
+        ))
+    }
+
     fn emit_reduce(
         &mut self,
         out: &mut String,
@@ -1646,6 +1703,12 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                     .map(|ty| Ty::Seq(Box::new(ty)))
                     .unwrap_or(Ty::EmptySeq))
             }
+            Endpoint::Struct { name, .. } => self
+                .codegen
+                .aliases
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("unknown struct `{name}`")),
             Endpoint::Eval { source, stages } => {
                 let mut value_ty = self.endpoint_type(source, env)?;
                 for stage in stages {
@@ -1660,6 +1723,24 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                             _ => return Err(format!("`map {name}` expected Seq input")),
                         },
                         Stage::Filter(_) => value_ty,
+                        Stage::Field(name) => {
+                            let Ty::Struct {
+                                name: ty_name,
+                                fields,
+                            } = &value_ty
+                            else {
+                                return Err(format!(
+                                    "field `{name}` expected struct input, found `{value_ty}`"
+                                ));
+                            };
+                            fields
+                                .iter()
+                                .find(|(field, _)| field == name)
+                                .map(|(_, ty)| ty.clone())
+                                .ok_or_else(|| {
+                                    format!("struct `{ty_name}` has no field `{name}`")
+                                })?
+                        }
                         Stage::Repeat { node, .. } => {
                             self.codegen.call_output_type(node, &value_ty)?
                         }
@@ -1861,6 +1942,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             | Endpoint::String(_)
             | Endpoint::Unit
             | Endpoint::Seq(_)
+            | Endpoint::Struct { .. }
             | Endpoint::Eval { .. } => Ok(None),
         }
     }
@@ -2103,6 +2185,14 @@ fn ts_type(ty: &Ty) -> String {
                 )
             }
         }
+        Ty::Struct { fields, .. } => format!(
+            "{{ {} }}",
+            fields
+                .iter()
+                .map(|(field, ty)| format!("{}: {}", ts_object_key(field), ts_type(ty)))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
         Ty::Var(_) | Ty::EmptySeq => "unknown".to_string(),
     }
 }
@@ -2127,6 +2217,28 @@ fn ts_ident(name: &str) -> String {
 
 fn ts_string(value: &str) -> String {
     format!("{value:?}")
+}
+
+fn ts_object_key(name: &str) -> String {
+    if is_valid_ts_identifier(name) && !TS_RESERVED.contains(&name) {
+        name.to_string()
+    } else {
+        ts_string(name)
+    }
+}
+
+fn ts_property(name: &str) -> String {
+    if is_valid_ts_identifier(name) && !TS_RESERVED.contains(&name) {
+        name.to_string()
+    } else {
+        format!("[{}]", ts_string(name))
+    }
+}
+
+fn is_valid_ts_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn expression_is_simple(expr: &str) -> bool {

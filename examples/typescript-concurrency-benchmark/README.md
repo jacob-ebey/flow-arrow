@@ -7,7 +7,8 @@ Builds the same FlowArrow library twice with the TypeScript backend:
 
 The benchmark compiles both generated `.ts` files to `.mjs` JavaScript, imports them,
 and calls the exported
-`score_batch(width: Int) -> (total_score: Int, peak_score: Int, total_weight: Int, peak_weight: Int)`.
+`score_batch(width: Int) -> summary: JobSummary`. The struct return value keeps
+the four aggregate fields named in the generated TypeScript object shape.
 
 ```sh
 npm run bench

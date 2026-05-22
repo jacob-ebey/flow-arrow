@@ -7,8 +7,15 @@ const iterations = Number(process.env.ITERATIONS ?? "8");
 const sequential = await import("./build/benchmark/sequential-js/bench.mjs");
 const workers = await import("./build/benchmark/workers-js/bench.mjs");
 
-function formatTuple(value) {
-  return `[${value.map((item) => item.toString()).join(", ")}]`;
+function formatSummary(value) {
+  return [
+    value.total_score,
+    value.peak_score,
+    value.total_weight,
+    value.peak_weight,
+  ]
+    .map((item) => item.toString())
+    .join(", ");
 }
 
 async function measure(label, fn) {
@@ -41,15 +48,15 @@ try {
   await workers.__flowarrow_teardown_workers();
 }
 
-if (formatTuple(sequentialResult.result) !== formatTuple(workersResult.result)) {
+if (formatSummary(sequentialResult.result) !== formatSummary(workersResult.result)) {
   throw new Error(
-    `result mismatch: sequential=${formatTuple(sequentialResult.result)} workers=${formatTuple(workersResult.result)}`,
+    `result mismatch: sequential=${formatSummary(sequentialResult.result)} workers=${formatSummary(workersResult.result)}`,
   );
 }
 
 for (const result of [sequentialResult, workersResult]) {
   console.log(
-    `${result.label.padEnd(10)} min=${result.min.toFixed(2)}ms median=${result.median.toFixed(2)}ms mean=${result.mean.toFixed(2)}ms result=${formatTuple(result.result)}`,
+    `${result.label.padEnd(10)} min=${result.min.toFixed(2)}ms median=${result.median.toFixed(2)}ms mean=${result.mean.toFixed(2)}ms result=[${formatSummary(result.result)}]`,
   );
 }
 

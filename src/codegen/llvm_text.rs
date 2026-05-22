@@ -158,6 +158,12 @@ impl<'a> LlvmText<'a> {
                     Stage::Filter(name) => {
                         value = self.emit_filter(out, name, value)?;
                     }
+                    Stage::Field(_) => {
+                        return Err(
+                            "LLVM text backend does not support struct field projection yet"
+                                .to_string(),
+                        );
+                    }
                     Stage::Repeat { count, node } => {
                         let count = self.emit_endpoint(out, count, &env, Some(&Ty::Int))?;
                         value = self.emit_repeat(out, node, value, count)?;
@@ -322,6 +328,9 @@ impl<'a> LlvmText<'a> {
                     ty,
                 })
             }
+            Endpoint::Struct { .. } => {
+                Err("LLVM text backend does not support struct literals yet".to_string())
+            }
             Endpoint::Eval { source, stages } => {
                 let mut value = self.emit_endpoint(out, source, env, expected)?;
                 for stage in stages {
@@ -331,6 +340,12 @@ impl<'a> LlvmText<'a> {
                         }
                         Stage::Map(name) => value = self.emit_map(out, name, value)?,
                         Stage::Filter(name) => value = self.emit_filter(out, name, value)?,
+                        Stage::Field(_) => {
+                            return Err(
+                                "LLVM text backend does not support struct field projection yet"
+                                    .to_string(),
+                            );
+                        }
                         Stage::Reduce { op, identity } => {
                             let identity = self.emit_endpoint(out, identity, env, None)?;
                             value = self.emit_reduce(out, op, value, identity)?;
@@ -774,6 +789,12 @@ impl<'a> LlvmText<'a> {
             Endpoint::Seq(items) => Ok(infer_seq_item_ty(items, env)
                 .map(|ty| Ty::Seq(Box::new(ty)))
                 .unwrap_or(Ty::EmptySeq)),
+            Endpoint::Struct { name, .. } => self
+                .codegen
+                .aliases
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("unknown struct `{name}`")),
             Endpoint::Eval { source, stages } => {
                 let mut ty = self.endpoint_type(source, env)?;
                 for stage in stages {
@@ -788,6 +809,24 @@ impl<'a> LlvmText<'a> {
                             ty = Ty::Seq(Box::new(self.codegen.call_output_type(name, item_ty)?));
                         }
                         Stage::Filter(_) => {}
+                        Stage::Field(name) => {
+                            let Ty::Struct {
+                                name: ty_name,
+                                fields,
+                            } = &ty
+                            else {
+                                return Err(format!(
+                                    "field `{name}` expected struct input, found `{ty}`"
+                                ));
+                            };
+                            ty = fields
+                                .iter()
+                                .find(|(field, _)| field == name)
+                                .map(|(_, ty)| ty.clone())
+                                .ok_or_else(|| {
+                                    format!("struct `{ty_name}` has no field `{name}`")
+                                })?;
+                        }
                         Stage::Reduce { op, .. } => {
                             let Ty::Seq(item_ty) = &ty else {
                                 return Err(format!("`reduce {op}` expected Seq input"));
@@ -858,7 +897,10 @@ fn infer_seq_item_ty(items: &[Endpoint], env: &HashMap<String, TextValue>) -> Op
             Endpoint::String(_) => Ty::Bytes,
             Endpoint::Unit => Ty::Unit,
             Endpoint::Tuple(items) => Ty::Tuple(infer_tuple_items(items, env)?),
-            Endpoint::Seq(_) | Endpoint::Eval { .. } | Endpoint::Name(_) => return None,
+            Endpoint::Seq(_)
+            | Endpoint::Struct { .. }
+            | Endpoint::Eval { .. }
+            | Endpoint::Name(_) => return None,
         };
         item_ty = Some(if let Some(current) = item_ty {
             sequence_item_type(&current, &ty).ok()?
@@ -880,7 +922,10 @@ fn infer_tuple_items(items: &[Endpoint], env: &HashMap<String, TextValue>) -> Op
             Endpoint::String(_) => Some(Ty::Bytes),
             Endpoint::Unit => Some(Ty::Unit),
             Endpoint::Tuple(items) => infer_tuple_items(items, env).map(Ty::Tuple),
-            Endpoint::Seq(_) | Endpoint::Eval { .. } | Endpoint::Name(_) => None,
+            Endpoint::Seq(_)
+            | Endpoint::Struct { .. }
+            | Endpoint::Eval { .. }
+            | Endpoint::Name(_) => None,
         })
         .collect()
 }
@@ -928,6 +973,14 @@ fn llvm_ty(ty: &Ty) -> String {
         Ty::Tuple(items) => format!(
             "{{ {} }}",
             items.iter().map(llvm_ty).collect::<Vec<_>>().join(", ")
+        ),
+        Ty::Struct { fields, .. } => format!(
+            "{{ {} }}",
+            fields
+                .iter()
+                .map(|(_, ty)| llvm_ty(ty))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         Ty::OneOf(items) => format!(
             "{{ i64, {} }}",

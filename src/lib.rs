@@ -221,7 +221,7 @@ mod tests {
                 ast::Decl::Node(callable) | ast::Decl::Program(callable) => {
                     Some(callable.name.as_str())
                 }
-                ast::Decl::TypeAlias(_) | ast::Decl::Import(_) => None,
+                ast::Decl::TypeAlias(_) | ast::Decl::Struct(_) | ast::Decl::Import(_) => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(

@@ -68,6 +68,11 @@ impl Resolver {
                     &references,
                     alias.name.clone(),
                 ))),
+                Decl::Struct(struct_decl) => declarations.push(Decl::Struct(rewrite_struct_decl(
+                    struct_decl.clone(),
+                    &references,
+                    struct_decl.name.clone(),
+                ))),
                 Decl::Node(callable) => declarations.push(Decl::Node(rewrite_callable(
                     callable.clone(),
                     &references,
@@ -127,7 +132,7 @@ impl Resolver {
         let mut exports = HashMap::new();
         let local_names = declaration_names(&parsed);
         let extern_nodes = extern_node_names(&parsed);
-        let type_names = type_alias_names(&parsed);
+        let type_names = type_names(&parsed);
 
         for name in &local_names {
             let internal = internal_name(module, name);
@@ -180,6 +185,14 @@ impl Resolver {
                     let name = internal_name(module, &alias.name);
                     module_declarations.push(Decl::TypeAlias(rewrite_type_alias(
                         alias,
+                        &references,
+                        name,
+                    )));
+                }
+                Decl::Struct(struct_decl) => {
+                    let name = internal_name(module, &struct_decl.name);
+                    module_declarations.push(Decl::Struct(rewrite_struct_decl(
+                        struct_decl,
                         &references,
                         name,
                     )));
@@ -309,6 +322,14 @@ impl Resolver {
                         name,
                     )));
                 }
+                Decl::Struct(struct_decl) => {
+                    let name = internal_name(&module_id, &struct_decl.name);
+                    module_declarations.push(Decl::Struct(rewrite_struct_decl(
+                        struct_decl,
+                        &references,
+                        name,
+                    )));
+                }
                 Decl::Node(callable) => {
                     let name = internal_name(&module_id, &callable.name);
                     module_declarations.push(Decl::Node(rewrite_callable(
@@ -428,12 +449,32 @@ fn rewrite_type_alias(
     alias
 }
 
+fn rewrite_struct_decl(
+    mut struct_decl: StructDecl,
+    references: &HashMap<String, String>,
+    name: String,
+) -> StructDecl {
+    struct_decl.name = name;
+    for field in &mut struct_decl.fields {
+        field.ty = rewrite_type_text(&field.ty, references);
+    }
+    struct_decl
+}
+
 fn rewrite_endpoint(endpoint: &mut Endpoint, references: &HashMap<String, String>) {
     match endpoint {
         Endpoint::Name(name) => rewrite_name(name, references),
         Endpoint::Tuple(items) | Endpoint::Seq(items) => {
             for item in items {
                 rewrite_endpoint(item, references);
+            }
+        }
+        Endpoint::Struct { name, fields } => {
+            if let Some(rewritten) = references.get(name) {
+                *name = rewritten.clone();
+            }
+            for (_, value) in fields {
+                rewrite_endpoint(value, references);
             }
         }
         Endpoint::Eval { source, stages } => {
@@ -459,6 +500,7 @@ fn rewrite_stage(stage: &mut Stage, references: &HashMap<String, String>) {
     match stage {
         Stage::Endpoint(endpoint) => rewrite_endpoint(endpoint, references),
         Stage::Bind(_) => {}
+        Stage::Field(_) => {}
         Stage::Map(name)
         | Stage::Filter(name)
         | Stage::Scan { op: name, .. }
@@ -531,7 +573,7 @@ fn callable_names(module: &Module) -> HashSet<String> {
         .iter()
         .filter_map(|decl| match decl {
             Decl::Node(callable) | Decl::Program(callable) => Some(callable.name.clone()),
-            Decl::TypeAlias(_) | Decl::Import(_) => None,
+            Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => None,
         })
         .collect()
 }
@@ -542,18 +584,20 @@ fn declaration_names(module: &Module) -> HashSet<String> {
         .iter()
         .filter_map(|decl| match decl {
             Decl::TypeAlias(alias) => Some(alias.name.clone()),
+            Decl::Struct(struct_decl) => Some(struct_decl.name.clone()),
             Decl::Node(callable) | Decl::Program(callable) => Some(callable.name.clone()),
             Decl::Import(_) => None,
         })
         .collect()
 }
 
-fn type_alias_names(module: &Module) -> HashSet<String> {
+fn type_names(module: &Module) -> HashSet<String> {
     module
         .declarations
         .iter()
         .filter_map(|decl| match decl {
             Decl::TypeAlias(alias) => Some(alias.name.clone()),
+            Decl::Struct(struct_decl) => Some(struct_decl.name.clone()),
             Decl::Node(_) | Decl::Program(_) | Decl::Import(_) => None,
         })
         .collect()
@@ -565,13 +609,17 @@ fn extern_node_names(module: &Module) -> HashSet<String> {
         .iter()
         .filter_map(|decl| match decl {
             Decl::Node(callable) if callable.is_extern => Some(callable.name.clone()),
-            Decl::TypeAlias(_) | Decl::Node(_) | Decl::Program(_) | Decl::Import(_) => None,
+            Decl::TypeAlias(_)
+            | Decl::Struct(_)
+            | Decl::Node(_)
+            | Decl::Program(_)
+            | Decl::Import(_) => None,
         })
         .collect()
 }
 
 fn importable_names(module: &Module) -> HashSet<String> {
-    type_alias_names(module)
+    type_names(module)
         .into_iter()
         .chain(extern_node_names(module))
         .collect()

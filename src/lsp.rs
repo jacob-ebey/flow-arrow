@@ -751,7 +751,7 @@ impl Analysis {
                 continue;
             };
             match keyword.as_str() {
-                "type" => pos = self.collect_type(pos),
+                "type" | "struct" => pos = self.collect_type(pos),
                 "import" => pos = self.collect_import(pos),
                 "extern" if self.ident_at(pos + 1) == Some("node") => {
                     pos = self.collect_callable(pos + 1, "node")
@@ -766,7 +766,10 @@ impl Analysis {
         let Some((name, range, next)) = self.next_ident(pos + 1) else {
             return pos + 1;
         };
-        let detail = self.detail_until(next, &["type", "import", "extern", "node", "program"]);
+        let detail = self.detail_until(
+            next,
+            &["type", "struct", "import", "extern", "node", "program"],
+        );
         self.symbols.push(Symbol {
             name,
             kind: SymbolKind::Type,
@@ -1413,8 +1416,8 @@ impl Analysis {
     fn completion_symbols(&self) -> Vec<Completion> {
         let mut completions = Vec::new();
         for keyword in [
-            "import", "type", "extern", "node", "program", "map", "filter", "repeat", "reduce",
-            "scan", "match", "fault", "ok", "identity", "true", "false",
+            "import", "type", "struct", "extern", "node", "program", "map", "filter", "field",
+            "repeat", "reduce", "scan", "match", "fault", "ok", "identity", "true", "false",
         ] {
             completions.push(Completion {
                 label: keyword.to_string(),

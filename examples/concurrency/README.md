@@ -24,9 +24,10 @@ depend on scheduler behavior instead of the FlowArrow graph.
    reductions, and the `weights` sequence feeds weight reductions. Once those
    sequences exist, the reductions are independent graph branches.
 
-3. **Deterministic join.** `render_summary` joins the four aggregate results
-   into stable stdout. Running with one worker or many workers produces the
-   same bytes.
+3. **Named aggregate shape.** The four aggregate results are collected into a
+   `JobSummary` struct before rendering. `render_summary` uses `field`
+   projections to read the named values, which shows how concurrent branches
+   can rejoin into an object-shaped value without losing deterministic output.
 
 ## Things to inspect
 
@@ -73,13 +74,15 @@ flowchart TD
     main_value__24weights -- "$weights" --> main_reduce_reduce_20max_aidentity_3a_200_2
     main_value__24peak_weight(["$peak_weight"])
     main_reduce_reduce_20max_aidentity_3a_200_2 -- "binds" --> main_value__24peak_weight
-    main_input_input_a_28_24total_score_2c_20_24peak_score_2c_20_24total_weight_2c_20_24peak_weight_(["input<br/>($total_score, $peak_score, $total_weight, $peak_weight)"])
-    main_value__24total_score -- "item" --> main_input_input_a_28_24total_score_2c_20_24peak_score_2c_20_24total_weight_2c_20_24peak_weight_
-    main_value__24peak_score -- "item" --> main_input_input_a_28_24total_score_2c_20_24peak_score_2c_20_24total_weight_2c_20_24peak_weight_
-    main_value__24total_weight -- "item" --> main_input_input_a_28_24total_score_2c_20_24peak_score_2c_20_24total_weight_2c_20_24peak_weight_
-    main_value__24peak_weight -- "item" --> main_input_input_a_28_24total_score_2c_20_24peak_score_2c_20_24total_weight_2c_20_24peak_weight_
+    main_input_input_aJobSummary_20_7b_20total_score_3a_20_24total_score_2c_20peak_score_3a_20_24pea(["input<br/>JobSummary { total_score: $total_score, peak_score: $peak_score, total_weight: $total_weight, peak_weight: $peak_weight }"])
+    main_value__24total_score -- "field" --> main_input_input_aJobSummary_20_7b_20total_score_3a_20_24total_score_2c_20peak_score_3a_20_24pea
+    main_value__24peak_score -- "field" --> main_input_input_aJobSummary_20_7b_20total_score_3a_20_24total_score_2c_20peak_score_3a_20_24pea
+    main_value__24total_weight -- "field" --> main_input_input_aJobSummary_20_7b_20total_score_3a_20_24total_score_2c_20peak_score_3a_20_24pea
+    main_value__24peak_weight -- "field" --> main_input_input_aJobSummary_20_7b_20total_score_3a_20_24total_score_2c_20peak_score_3a_20_24pea
+    main_value__24summary(["$summary"])
+    main_input_input_aJobSummary_20_7b_20total_score_3a_20_24total_score_2c_20peak_score_3a_20_24pea -- "binds" --> main_value__24summary
     main_call_render_summary["render_summary"]
-    main_input_input_a_28_24total_score_2c_20_24peak_score_2c_20_24total_weight_2c_20_24peak_weight_ -- "value" --> main_call_render_summary
+    main_value__24summary -- "$summary" --> main_call_render_summary
     main_value__24output(["$output"])
     main_call_render_summary -- "binds" --> main_value__24output
     main_call_write_stdout[["write_stdout"]]
@@ -120,24 +123,37 @@ flowchart TD
     weight_job_call_add -- "binds" --> weight_job_value__24weight
   end
   subgraph callable_render_summary["node render_summary"]
-    render_summary_value__24total_score_3a_20Int(["$total_score: Int"])
-    render_summary_value__24peak_score_3a_20Int(["$peak_score: Int"])
-    render_summary_value__24total_weight_3a_20Int(["$total_weight: Int"])
-    render_summary_value__24peak_weight_3a_20Int(["$peak_weight: Int"])
+    render_summary_value__24summary_3a_20JobSummary(["$summary: JobSummary"])
+    render_summary_field_field_20total_score["field total_score"]
+    render_summary_value__24summary_3a_20JobSummary -- "$summary" --> render_summary_field_field_20total_score
+    render_summary_value__24total_score(["$total_score"])
+    render_summary_field_field_20total_score -- "binds" --> render_summary_value__24total_score
+    render_summary_field_field_20peak_score["field peak_score"]
+    render_summary_value__24summary_3a_20JobSummary -- "$summary" --> render_summary_field_field_20peak_score
+    render_summary_value__24peak_score(["$peak_score"])
+    render_summary_field_field_20peak_score -- "binds" --> render_summary_value__24peak_score
+    render_summary_field_field_20total_weight["field total_weight"]
+    render_summary_value__24summary_3a_20JobSummary -- "$summary" --> render_summary_field_field_20total_weight
+    render_summary_value__24total_weight(["$total_weight"])
+    render_summary_field_field_20total_weight -- "binds" --> render_summary_value__24total_weight
+    render_summary_field_field_20peak_weight["field peak_weight"]
+    render_summary_value__24summary_3a_20JobSummary -- "$summary" --> render_summary_field_field_20peak_weight
+    render_summary_value__24peak_weight(["$peak_weight"])
+    render_summary_field_field_20peak_weight -- "binds" --> render_summary_value__24peak_weight
     render_summary_call_format_int["format_int"]
-    render_summary_value__24total_score_3a_20Int -- "$total_score" --> render_summary_call_format_int
+    render_summary_value__24total_score -- "$total_score" --> render_summary_call_format_int
     render_summary_value__24total_score_bytes(["$total_score_bytes"])
     render_summary_call_format_int -- "binds" --> render_summary_value__24total_score_bytes
     render_summary_call_format_int_2["format_int"]
-    render_summary_value__24peak_score_3a_20Int -- "$peak_score" --> render_summary_call_format_int_2
+    render_summary_value__24peak_score -- "$peak_score" --> render_summary_call_format_int_2
     render_summary_value__24peak_score_bytes(["$peak_score_bytes"])
     render_summary_call_format_int_2 -- "binds" --> render_summary_value__24peak_score_bytes
     render_summary_call_format_int_3["format_int"]
-    render_summary_value__24total_weight_3a_20Int -- "$total_weight" --> render_summary_call_format_int_3
+    render_summary_value__24total_weight -- "$total_weight" --> render_summary_call_format_int_3
     render_summary_value__24total_weight_bytes(["$total_weight_bytes"])
     render_summary_call_format_int_3 -- "binds" --> render_summary_value__24total_weight_bytes
     render_summary_call_format_int_4["format_int"]
-    render_summary_value__24peak_weight_3a_20Int -- "$peak_weight" --> render_summary_call_format_int_4
+    render_summary_value__24peak_weight -- "$peak_weight" --> render_summary_call_format_int_4
     render_summary_value__24peak_weight_bytes(["$peak_weight_bytes"])
     render_summary_call_format_int_4 -- "binds" --> render_summary_value__24peak_weight_bytes
     render_summary_input_input_a_5b_22jobs_3a_2016_5cn_22_2c_20_22total_20score_3a_20_22_2c_20_24tot(["input<br/>[&quot;jobs: 16\n&quot;, &quot;total score: &quot;, $total_score_bytes, &quot;\n&quot;, &quot;peak score: &quot;, $peak_score_bytes, &quot;\n&quot;, &quot;total weight: &quot;, $total_weight_bytes, &quot;\n&quot;, &quot;peak weight: &quot;, $peak_weight_bytes, &quot;\n&quot;]"])
@@ -181,7 +197,8 @@ flowchart TD
   class main_value__24total_weight value
   class main_reduce_reduce_20max_aidentity_3a_200_2 collection
   class main_value__24peak_weight value
-  class main_input_input_a_28_24total_score_2c_20_24peak_score_2c_20_24total_weight_2c_20_24peak_weight_ literal
+  class main_input_input_aJobSummary_20_7b_20total_score_3a_20_24total_score_2c_20peak_score_3a_20_24pea literal
+  class main_value__24summary value
   class main_call_render_summary op
   class main_value__24output value
   class main_call_write_stdout boundary
@@ -200,10 +217,15 @@ flowchart TD
   class weight_job_input_input_a_28_24doubled_2c_201_29 literal
   class weight_job_call_add op
   class weight_job_value__24weight value
-  class render_summary_value__24total_score_3a_20Int value
-  class render_summary_value__24peak_score_3a_20Int value
-  class render_summary_value__24total_weight_3a_20Int value
-  class render_summary_value__24peak_weight_3a_20Int value
+  class render_summary_value__24summary_3a_20JobSummary value
+  class render_summary_field_field_20total_score op
+  class render_summary_value__24total_score value
+  class render_summary_field_field_20peak_score op
+  class render_summary_value__24peak_score value
+  class render_summary_field_field_20total_weight op
+  class render_summary_value__24total_weight value
+  class render_summary_field_field_20peak_weight op
+  class render_summary_value__24peak_weight value
   class render_summary_call_format_int op
   class render_summary_value__24total_score_bytes value
   class render_summary_call_format_int_2 op
