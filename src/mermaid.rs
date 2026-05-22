@@ -29,7 +29,14 @@ pub fn emit_module_with_options(
     for decl in &module.declarations {
         match decl {
             Decl::TypeAlias(_) | Decl::Import(_) => {}
-            Decl::Node(callable) => emitter.emit_callable(callable, "node")?,
+            Decl::Node(callable) => {
+                let kind = if callable.is_extern {
+                    "extern node"
+                } else {
+                    "node"
+                };
+                emitter.emit_callable(callable, kind)?;
+            }
             Decl::Program(callable) => emitter.emit_callable(callable, "program")?,
         }
     }

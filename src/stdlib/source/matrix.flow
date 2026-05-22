@@ -33,27 +33,27 @@ import std.vector {
     normalize as vector_normalize,
 }
 
-node rows(matrix: Seq[Seq[Real]]) -> count: Int {
+extern node rows(matrix: Seq[Seq[Real]]) -> count: Int {
     $matrix -> length -> $count
 }
 
-node cols(matrix: Seq[Seq[Real]]) -> count: Int {
+extern node cols(matrix: Seq[Seq[Real]]) -> count: Int {
     $matrix -> inner_length -> $count
 }
 
-node flatten(matrix: Seq[Seq[Real]]) -> values: Seq[Real] {
+extern node flatten(matrix: Seq[Seq[Real]]) -> values: Seq[Real] {
     $matrix -> seq_flatten -> $values
 }
 
-node transpose(matrix: Seq[Seq[Real]]) -> out: Seq[Seq[Real]] {
+extern node transpose(matrix: Seq[Seq[Real]]) -> out: Seq[Seq[Real]] {
     $matrix -> seq_transpose -> $out
 }
 
-node neg(matrix: Seq[Seq[Real]]) -> out: Seq[Seq[Real]] {
+extern node neg(matrix: Seq[Seq[Real]]) -> out: Seq[Seq[Real]] {
     $matrix -> map vector_neg -> $out
 }
 
-node abs(matrix: Seq[Seq[Real]]) -> out: Seq[Seq[Real]] {
+extern node abs(matrix: Seq[Seq[Real]]) -> out: Seq[Seq[Real]] {
     $matrix -> map vector_abs -> $out
 }
 
@@ -77,23 +77,23 @@ node _equal_rows(pair: (Seq[Real], Seq[Real])) -> out: Bool {
     $pair -> vector_equals -> $out
 }
 
-node add(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
+extern node add(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
     $inputs -> zip -> map _add_rows -> $out
 }
 
-node sub(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
+extern node sub(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
     $inputs -> zip -> map _sub_rows -> $out
 }
 
-node mul(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
+extern node mul(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
     $inputs -> zip -> map _mul_rows -> $out
 }
 
-node div(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
+extern node div(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
     $inputs -> zip -> map _div_rows -> $out
 }
 
-node equals(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Bool {
+extern node equals(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Bool {
     $inputs -> zip -> map _equal_rows -> all -> $out
 }
 
@@ -125,79 +125,79 @@ node _scalar_div_row(pair: (Real, Seq[Real])) -> out: Seq[Real] {
     $pair -> vector_scalar_div -> $out
 }
 
-node add_scalar(inputs: (Seq[Seq[Real]], Real)) -> out: Seq[Seq[Real]] {
+extern node add_scalar(inputs: (Seq[Seq[Real]], Real)) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_right -> map _add_scalar_row -> $out
 }
 
-node sub_scalar(inputs: (Seq[Seq[Real]], Real)) -> out: Seq[Seq[Real]] {
+extern node sub_scalar(inputs: (Seq[Seq[Real]], Real)) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_right -> map _sub_scalar_row -> $out
 }
 
-node scalar_sub(inputs: (Real, Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
+extern node scalar_sub(inputs: (Real, Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_left -> map _scalar_sub_row -> $out
 }
 
-node mul_scalar(inputs: (Seq[Seq[Real]], Real)) -> out: Seq[Seq[Real]] {
+extern node mul_scalar(inputs: (Seq[Seq[Real]], Real)) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_right -> map _mul_scalar_row -> $out
 }
 
-node scalar_mul(inputs: (Real, Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
+extern node scalar_mul(inputs: (Real, Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_left -> map _scalar_mul_row -> $out
 }
 
-node div_scalar(inputs: (Seq[Seq[Real]], Real)) -> out: Seq[Seq[Real]] {
+extern node div_scalar(inputs: (Seq[Seq[Real]], Real)) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_right -> map _div_scalar_row -> $out
 }
 
-node scalar_div(inputs: (Real, Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
+extern node scalar_div(inputs: (Real, Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_left -> map _scalar_div_row -> $out
 }
 
-node add_row(inputs: (Seq[Seq[Real]], Seq[Real])) -> out: Seq[Seq[Real]] {
+extern node add_row(inputs: (Seq[Seq[Real]], Seq[Real])) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_right -> map _add_rows -> $out
 }
 
-node sub_row(inputs: (Seq[Seq[Real]], Seq[Real])) -> out: Seq[Seq[Real]] {
+extern node sub_row(inputs: (Seq[Seq[Real]], Seq[Real])) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_right -> map _sub_rows -> $out
 }
 
-node mul_row(inputs: (Seq[Seq[Real]], Seq[Real])) -> out: Seq[Seq[Real]] {
+extern node mul_row(inputs: (Seq[Seq[Real]], Seq[Real])) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_right -> map _mul_rows -> $out
 }
 
-node div_row(inputs: (Seq[Seq[Real]], Seq[Real])) -> out: Seq[Seq[Real]] {
+extern node div_row(inputs: (Seq[Seq[Real]], Seq[Real])) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_right -> map _div_rows -> $out
 }
 
-node sum(matrix: Seq[Seq[Real]]) -> total: Real {
+extern node sum(matrix: Seq[Seq[Real]]) -> total: Real {
     $matrix -> map vector_sum -> vector_sum -> $total
 }
 
-node mean(matrix: Seq[Seq[Real]]) -> average: Real {
+extern node mean(matrix: Seq[Seq[Real]]) -> average: Real {
     $matrix -> flatten -> vector_mean -> $average
 }
 
-node row_sums(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
+extern node row_sums(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
     $matrix -> map vector_sum -> $out
 }
 
-node column_sums(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
+extern node column_sums(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
     $matrix -> transpose -> map vector_sum -> $out
 }
 
-node row_means(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
+extern node row_means(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
     $matrix -> map vector_mean -> $out
 }
 
-node column_means(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
+extern node column_means(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
     $matrix -> transpose -> map vector_mean -> $out
 }
 
-node row_norms(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
+extern node row_norms(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
     $matrix -> map vector_norm -> $out
 }
 
-node column_norms(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
+extern node column_norms(matrix: Seq[Seq[Real]]) -> out: Seq[Real] {
     $matrix -> transpose -> map vector_norm -> $out
 }
 
@@ -209,31 +209,31 @@ node _row_l1_norm(row: Seq[Real]) -> total: Real {
     $row -> vector_l1_norm -> $total
 }
 
-node squared_norm(matrix: Seq[Seq[Real]]) -> total: Real {
+extern node squared_norm(matrix: Seq[Seq[Real]]) -> total: Real {
     $matrix -> map _row_squared_norm -> vector_sum -> $total
 }
 
-node l1_norm(matrix: Seq[Seq[Real]]) -> total: Real {
+extern node l1_norm(matrix: Seq[Seq[Real]]) -> total: Real {
     $matrix -> map _row_l1_norm -> vector_sum -> $total
 }
 
-node norm(matrix: Seq[Seq[Real]]) -> total: Real {
+extern node norm(matrix: Seq[Seq[Real]]) -> total: Real {
     $matrix -> flatten -> vector_norm -> $total
 }
 
-node frobenius_norm(matrix: Seq[Seq[Real]]) -> total: Real {
+extern node frobenius_norm(matrix: Seq[Seq[Real]]) -> total: Real {
     $matrix -> norm -> $total
 }
 
-node normalize_rows(matrix: Seq[Seq[Real]]) -> out: Seq[Seq[Real]] {
+extern node normalize_rows(matrix: Seq[Seq[Real]]) -> out: Seq[Seq[Real]] {
     $matrix -> map vector_normalize -> $out
 }
 
-node squared_distance(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> total: Real {
+extern node squared_distance(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> total: Real {
     $inputs -> sub -> squared_norm -> $total
 }
 
-node distance(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> total: Real {
+extern node distance(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> total: Real {
     $inputs -> sub -> norm -> $total
 }
 
@@ -241,11 +241,11 @@ node _dot_row(pair: (Seq[Real], Seq[Real])) -> out: Real {
     $pair -> vector_dot -> $out
 }
 
-node matvec(inputs: (Seq[Seq[Real]], Seq[Real])) -> out: Seq[Real] {
+extern node matvec(inputs: (Seq[Seq[Real]], Seq[Real])) -> out: Seq[Real] {
     $inputs -> broadcast_right -> map _dot_row -> $out
 }
 
-node vecmat(inputs: (Seq[Real], Seq[Seq[Real]])) -> out: Seq[Real] {
+extern node vecmat(inputs: (Seq[Real], Seq[Seq[Real]])) -> out: Seq[Real] {
     $inputs             -> first           -> $vector
     $inputs             -> second          -> transpose    -> $columns
     ($columns, $vector) -> broadcast_right -> map _dot_row -> $out
@@ -257,7 +257,7 @@ node _row_matmul(pair: (Seq[Real], Seq[Seq[Real]])) -> out: Seq[Real] {
     ($columns, $row) -> broadcast_right -> map _dot_row -> $out
 }
 
-node matmul(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
+extern node matmul(inputs: (Seq[Seq[Real]], Seq[Seq[Real]])) -> out: Seq[Seq[Real]] {
     $inputs           -> first           -> $left
     $inputs           -> second          -> transpose       -> $columns
     ($left, $columns) -> broadcast_right -> map _row_matmul -> $out
@@ -267,11 +267,11 @@ node _outer_row(pair: (Real, Seq[Real])) -> out: Seq[Real] {
     $pair -> vector_scalar_mul -> $out
 }
 
-node outer(inputs: (Seq[Real], Seq[Real])) -> out: Seq[Seq[Real]] {
+extern node outer(inputs: (Seq[Real], Seq[Real])) -> out: Seq[Seq[Real]] {
     $inputs -> broadcast_right -> map _outer_row -> $out
 }
 
-node gram(matrix: Seq[Seq[Real]]) -> out: Seq[Seq[Real]] {
+extern node gram(matrix: Seq[Seq[Real]]) -> out: Seq[Seq[Real]] {
     $matrix                -> transpose -> $transposed
     ($matrix, $transposed) -> matmul    -> $out
 }

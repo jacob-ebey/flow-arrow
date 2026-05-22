@@ -54,7 +54,7 @@ and may not be used as identifiers:
 
 ```text
 import    as        node      program   map       reduce
-scan      repeat    select    match     identity  grid      cell
+extern    scan      repeat    select    match     identity  grid      cell
 stencil2d range     range_between        range_step
 filter    length    fault     ok
 ```
@@ -106,7 +106,7 @@ import_clause  ::= "as" IDENT
 
 import_item    ::= IDENT ("as" IDENT)?
 
-node_decl      ::= "node" IDENT "(" port_list? ")" "->" port_or_list block
+node_decl      ::= "extern"? "node" IDENT "(" port_list? ")" "->" port_or_list block
 
 program_decl   ::= "program" IDENT "(" port_list? ")" "->" port_or_list block
 ```
@@ -117,6 +117,12 @@ namespace but never creates dataflow graph nodes or edges.
 `type_alias_decl` is also compile-time-only and may only appear at module
 top level. Type aliases name existing types; they do not create runtime
 values or nominally distinct types.
+
+`extern node` marks a node as part of the module's public callable
+surface. Local FlowArrow imports may import type aliases and extern
+nodes; non-extern nodes remain private implementation details. The
+TypeScript and WebAssembly library backends only expose extern nodes as
+host-callable functions.
 
 Two import sources exist:
 
@@ -145,10 +151,11 @@ Import resolution must be deterministic and acyclic. Cyclic imports are
 ill-formed, even if the cycle would only involve declarations that are
 not used.
 
-All top-level `node` declarations are exportable from their source
-module. A `program` declaration may be imported only as a named entry
-point for tooling; it cannot be used as an ordinary pure node inside
-another `node` or `program` body.
+Only `extern node` declarations are exportable from their source module.
+Plain `node` declarations are private to the file that declares them and
+to imported modules after expansion. A `program` declaration is an entry
+point, not a reusable pure node, and cannot be imported into another
+graph.
 
 A `program_decl` has identical syntax to a `node_decl`; the difference
 is semantic: the canonical command-line entry point is

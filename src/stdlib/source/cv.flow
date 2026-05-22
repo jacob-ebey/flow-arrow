@@ -31,27 +31,27 @@ type Size = (Int, Int)
 type Pixel = (Real, (Real, Real))
 type Image = (Size, Seq[Seq[Pixel]])
 
-node dimensions(image: Image) -> shape: Size {
+extern node dimensions(image: Image) -> shape: Size {
     $image -> first -> $shape
 }
 
-node width(image: Image) -> value: Int {
+extern node width(image: Image) -> value: Int {
     $image -> dimensions -> first -> $value
 }
 
-node height(image: Image) -> value: Int {
+extern node height(image: Image) -> value: Int {
     $image -> dimensions -> second -> $value
 }
 
-node pixels(image: Image) -> values: Seq[Pixel] {
+extern node pixels(image: Image) -> values: Seq[Pixel] {
     $image -> second -> seq_flatten -> $values
 }
 
-node pixel_rows(image: Image) -> values: Seq[Seq[Pixel]] {
+extern node pixel_rows(image: Image) -> values: Seq[Seq[Pixel]] {
     $image -> second -> $values
 }
 
-node map_pixels(inputs: (Image, Seq[Seq[Pixel]])) -> image: Image {
+extern node map_pixels(inputs: (Image, Seq[Seq[Pixel]])) -> image: Image {
     $inputs           -> first  -> dimensions -> $shape
     $inputs           -> second -> $values
     ($shape, $values) -> $image
@@ -88,13 +88,13 @@ node _srgb_pixel_to_gray_pixel(pixel: Pixel) -> out: Pixel {
     $pixel -> _srgb_pixel_to_luma -> _gray_value_to_srgb_pixel -> $out
 }
 
-node normalize(bytes: Bytes) -> image: Image {
+extern node normalize(bytes: Bytes) -> image: Image {
     $bytes                   -> byte_length    -> $width
     $bytes                   -> bytes_to_codes -> map _gray_code_to_srgb_pixel -> $values
     (($width, 1), [$values]) -> $image
 }
 
-node grayscale(image: Image) -> out: Image {
+extern node grayscale(image: Image) -> out: Image {
     $image            -> pixel_rows -> map _grayscale_row -> $values
     ($image, $values) -> map_pixels -> $out
 }
@@ -114,7 +114,7 @@ node _invert_pixel(pixel: Pixel) -> out: Pixel {
     ($out_red, ($out_green, $out_blue)) -> $out
 }
 
-node invert(image: Image) -> out: Image {
+extern node invert(image: Image) -> out: Image {
     $image            -> pixel_rows -> map _invert_row -> $values
     ($image, $values) -> map_pixels -> $out
 }
@@ -131,7 +131,7 @@ node _threshold_pixel(inputs: (Pixel, Real)) -> out: Pixel {
     $channel            -> _gray_value_to_srgb_pixel -> $out
 }
 
-node threshold(inputs: (Image, Real)) -> out: Image {
+extern node threshold(inputs: (Image, Real)) -> out: Image {
     $inputs           -> first           -> $image
     $inputs           -> second          -> $cutoff
     $image            -> pixel_rows      -> $rows
@@ -162,7 +162,7 @@ node _brighten_pixel(inputs: (Pixel, Real)) -> out: Pixel {
     ($out_red, ($out_green, $out_blue)) -> $out
 }
 
-node brighten(inputs: (Image, Real)) -> out: Image {
+extern node brighten(inputs: (Image, Real)) -> out: Image {
     $inputs           -> first           -> $image
     $inputs           -> second          -> $amount
     $image            -> pixel_rows      -> $rows
@@ -176,7 +176,7 @@ node _brighten_row(inputs: (Seq[Pixel], Real)) -> out: Seq[Pixel] {
     ($row, $amount) -> broadcast_right -> map _brighten_pixel -> $out
 }
 
-node darken(inputs: (Image, Real)) -> out: Image {
+extern node darken(inputs: (Image, Real)) -> out: Image {
     $inputs           -> first    -> $image
     $inputs           -> second   -> _scalar_neg -> $amount
     ($image, $amount) -> brighten -> $out
@@ -203,7 +203,7 @@ node _contrast_pixel(inputs: (Pixel, Real)) -> out: Pixel {
     ($out_red, ($out_green, $out_blue)) -> $out
 }
 
-node contrast(inputs: (Image, Real)) -> out: Image {
+extern node contrast(inputs: (Image, Real)) -> out: Image {
     $inputs           -> first           -> $image
     $inputs           -> second          -> $factor
     $image            -> pixel_rows      -> $rows
@@ -261,33 +261,33 @@ node _luma_matrix_row(row: Seq[Pixel]) -> out: Seq[Real] {
     $row -> map _luma_value -> $out
 }
 
-node red_matrix(image: Image) -> out: Seq[Seq[Real]] {
+extern node red_matrix(image: Image) -> out: Seq[Seq[Real]] {
     $image -> pixel_rows -> map _red_matrix_row -> $out
 }
 
-node green_matrix(image: Image) -> out: Seq[Seq[Real]] {
+extern node green_matrix(image: Image) -> out: Seq[Seq[Real]] {
     $image -> pixel_rows -> map _green_matrix_row -> $out
 }
 
-node blue_matrix(image: Image) -> out: Seq[Seq[Real]] {
+extern node blue_matrix(image: Image) -> out: Seq[Seq[Real]] {
     $image -> pixel_rows -> map _blue_matrix_row -> $out
 }
 
-node luma_matrix(image: Image) -> out: Seq[Seq[Real]] {
+extern node luma_matrix(image: Image) -> out: Seq[Seq[Real]] {
     $image -> pixel_rows -> map _luma_matrix_row -> $out
 }
 
-node red_channel(image: Image) -> out: Image {
+extern node red_channel(image: Image) -> out: Image {
     $image            -> pixel_rows -> map _red_channel_row -> $values
     ($image, $values) -> map_pixels -> $out
 }
 
-node green_channel(image: Image) -> out: Image {
+extern node green_channel(image: Image) -> out: Image {
     $image            -> pixel_rows -> map _green_channel_row -> $values
     ($image, $values) -> map_pixels -> $out
 }
 
-node blue_channel(image: Image) -> out: Image {
+extern node blue_channel(image: Image) -> out: Image {
     $image            -> pixel_rows -> map _blue_channel_row -> $values
     ($image, $values) -> map_pixels -> $out
 }
@@ -331,7 +331,7 @@ node _sepia_pixel(pixel: Pixel) -> out: Pixel {
     ($out_red, ($out_green, $out_blue))                -> $out
 }
 
-node sepia(image: Image) -> out: Image {
+extern node sepia(image: Image) -> out: Image {
     $image            -> pixel_rows -> map _sepia_row -> $values
     ($image, $values) -> map_pixels -> $out
 }
@@ -401,7 +401,7 @@ node _left_image(inputs: (Image, Image)) -> image: Image {
     $inputs -> first -> $image
 }
 
-node add(inputs: (Image, Image)) -> out: Image {
+extern node add(inputs: (Image, Image)) -> out: Image {
     $inputs                       -> first       -> pixel_rows        -> $left_pixels
     $inputs                       -> second      -> pixel_rows        -> $right_pixels
     $inputs                       -> _left_image -> $image
@@ -409,7 +409,7 @@ node add(inputs: (Image, Image)) -> out: Image {
     ($image, $values)             -> map_pixels  -> $out
 }
 
-node sub(inputs: (Image, Image)) -> out: Image {
+extern node sub(inputs: (Image, Image)) -> out: Image {
     $inputs                       -> first       -> pixel_rows        -> $left_pixels
     $inputs                       -> second      -> pixel_rows        -> $right_pixels
     $inputs                       -> _left_image -> $image
@@ -417,7 +417,7 @@ node sub(inputs: (Image, Image)) -> out: Image {
     ($image, $values)             -> map_pixels  -> $out
 }
 
-node absdiff(inputs: (Image, Image)) -> out: Image {
+extern node absdiff(inputs: (Image, Image)) -> out: Image {
     $inputs                       -> first       -> pixel_rows            -> $left_pixels
     $inputs                       -> second      -> pixel_rows            -> $right_pixels
     $inputs                       -> _left_image -> $image
@@ -425,107 +425,107 @@ node absdiff(inputs: (Image, Image)) -> out: Image {
     ($image, $values)             -> map_pixels  -> $out
 }
 
-node decode(bytes: Bytes) -> image: Faultable[Image] {
+extern node decode(bytes: Bytes) -> image: Faultable[Image] {
     $bytes -> _decode_native -> $image
 }
 
-node decode_bmp(bytes: Bytes) -> image: Faultable[Image] {
+extern node decode_bmp(bytes: Bytes) -> image: Faultable[Image] {
     $bytes -> _decode_bmp_native -> $image
 }
 
-node decode_jpeg(bytes: Bytes) -> image: Faultable[Image] {
+extern node decode_jpeg(bytes: Bytes) -> image: Faultable[Image] {
     $bytes -> _decode_jpeg_native -> $image
 }
 
-node decode_png(bytes: Bytes) -> image: Faultable[Image] {
+extern node decode_png(bytes: Bytes) -> image: Faultable[Image] {
     $bytes -> _decode_png_native -> $image
 }
 
-node decode_pnm(bytes: Bytes) -> image: Faultable[Image] {
+extern node decode_pnm(bytes: Bytes) -> image: Faultable[Image] {
     $bytes -> _decode_pnm_native -> $image
 }
 
-node decode_pgm(bytes: Bytes) -> image: Faultable[Image] {
+extern node decode_pgm(bytes: Bytes) -> image: Faultable[Image] {
     $bytes -> decode_pnm -> $image
 }
 
-node decode_ppm(bytes: Bytes) -> image: Faultable[Image] {
+extern node decode_ppm(bytes: Bytes) -> image: Faultable[Image] {
     $bytes -> decode_pnm -> $image
 }
 
-node encode_bmp(image: Image) -> encoded: Faultable[Bytes] {
+extern node encode_bmp(image: Image) -> encoded: Faultable[Bytes] {
     $image -> _encode_bmp_native -> $encoded
 }
 
-node encode_jpeg(image: Image) -> encoded: Faultable[Bytes] {
+extern node encode_jpeg(image: Image) -> encoded: Faultable[Bytes] {
     $image -> _encode_jpeg_native -> $encoded
 }
 
-node encode_pgm(image: Image) -> encoded: Faultable[Bytes] {
+extern node encode_pgm(image: Image) -> encoded: Faultable[Bytes] {
     $image -> _encode_pgm_native -> $encoded
 }
 
-node encode_png(image: Image) -> encoded: Faultable[Bytes] {
+extern node encode_png(image: Image) -> encoded: Faultable[Bytes] {
     $image -> _encode_png_native -> $encoded
 }
 
-node encode_ppm(image: Image) -> encoded: Faultable[Bytes] {
+extern node encode_ppm(image: Image) -> encoded: Faultable[Bytes] {
     $image -> _encode_ppm_native -> $encoded
 }
 
-node load(path: Bytes) -> image: Faultable[Image] {
+extern node load(path: Bytes) -> image: Faultable[Image] {
     $path -> read_file -> decode -> $image
 }
 
-node load_bmp(path: Bytes) -> image: Faultable[Image] {
+extern node load_bmp(path: Bytes) -> image: Faultable[Image] {
     $path -> read_file -> decode_bmp -> $image
 }
 
-node load_jpeg(path: Bytes) -> image: Faultable[Image] {
+extern node load_jpeg(path: Bytes) -> image: Faultable[Image] {
     $path -> read_file -> decode_jpeg -> $image
 }
 
-node load_png(path: Bytes) -> image: Faultable[Image] {
+extern node load_png(path: Bytes) -> image: Faultable[Image] {
     $path -> read_file -> decode_png -> $image
 }
 
-node load_pnm(path: Bytes) -> image: Faultable[Image] {
+extern node load_pnm(path: Bytes) -> image: Faultable[Image] {
     $path -> read_file -> decode_pnm -> $image
 }
 
-node load_pgm(path: Bytes) -> image: Faultable[Image] {
+extern node load_pgm(path: Bytes) -> image: Faultable[Image] {
     $path -> read_file -> decode_pgm -> $image
 }
 
-node load_ppm(path: Bytes) -> image: Faultable[Image] {
+extern node load_ppm(path: Bytes) -> image: Faultable[Image] {
     $path -> read_file -> decode_ppm -> $image
 }
 
-node save_bmp(inputs: (Bytes, Image)) -> status: Faultable[Int] {
+extern node save_bmp(inputs: (Bytes, Image)) -> status: Faultable[Int] {
     $inputs           -> first      -> $path
     $inputs           -> second     -> encode_bmp -> $encoded
     ($path, $encoded) -> write_file -> $status
 }
 
-node save_jpeg(inputs: (Bytes, Image)) -> status: Faultable[Int] {
+extern node save_jpeg(inputs: (Bytes, Image)) -> status: Faultable[Int] {
     $inputs           -> first      -> $path
     $inputs           -> second     -> encode_jpeg -> $encoded
     ($path, $encoded) -> write_file -> $status
 }
 
-node save_pgm(inputs: (Bytes, Image)) -> status: Faultable[Int] {
+extern node save_pgm(inputs: (Bytes, Image)) -> status: Faultable[Int] {
     $inputs           -> first      -> $path
     $inputs           -> second     -> encode_pgm -> $encoded
     ($path, $encoded) -> write_file -> $status
 }
 
-node save_png(inputs: (Bytes, Image)) -> status: Faultable[Int] {
+extern node save_png(inputs: (Bytes, Image)) -> status: Faultable[Int] {
     $inputs           -> first      -> $path
     $inputs           -> second     -> encode_png -> $encoded
     ($path, $encoded) -> write_file -> $status
 }
 
-node save_ppm(inputs: (Bytes, Image)) -> status: Faultable[Int] {
+extern node save_ppm(inputs: (Bytes, Image)) -> status: Faultable[Int] {
     $inputs           -> first      -> $path
     $inputs           -> second     -> encode_ppm -> $encoded
     ($path, $encoded) -> write_file -> $status

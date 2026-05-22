@@ -44,6 +44,7 @@ pub struct ImportItem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Callable {
     pub name: String,
+    pub is_extern: bool,
     pub inputs: Vec<Port>,
     pub outputs: Vec<Port>,
     pub chains: Vec<Chain>,

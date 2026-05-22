@@ -391,7 +391,9 @@ fn build_wasm(
         options.optimization.llvm_level(),
     )?;
     if emitted.exports.is_empty() {
-        return Err("WASM cdylib build requires at least one top-level node export".to_string());
+        return Err(
+            "WASM cdylib build requires at least one top-level `extern node` export".to_string(),
+        );
     }
     let export_hash = emitted.exports.join(",");
     let plan = BuildPlan::new(

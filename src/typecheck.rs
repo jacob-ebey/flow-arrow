@@ -893,6 +893,7 @@ impl<'a> Checker<'a> {
     ) -> Result<Type, String> {
         let inline_callable = Callable {
             name: "<inline>".to_string(),
+            is_extern: false,
             inputs: Vec::new(),
             outputs: Vec::new(),
             chains: Vec::new(),

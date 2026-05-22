@@ -38,13 +38,21 @@ impl Parser {
                 self.bump();
                 Ok(Decl::Import(self.parse_import()?))
             }
+            Some("extern") => {
+                self.bump();
+                if self.peek_ident() != Some("node") {
+                    return Err(self.error_here("expected `node` after `extern`"));
+                }
+                self.bump();
+                Ok(Decl::Node(self.parse_callable(true)?))
+            }
             Some("node") => {
                 self.bump();
-                Ok(Decl::Node(self.parse_callable()?))
+                Ok(Decl::Node(self.parse_callable(false)?))
             }
             Some("program") => {
                 self.bump();
-                Ok(Decl::Program(self.parse_callable()?))
+                Ok(Decl::Program(self.parse_callable(false)?))
             }
             _ => Err(self.error_here(format!("expected declaration, found {:?}", self.peek()))),
         }
@@ -100,7 +108,7 @@ impl Parser {
         Ok(Import { source, clause })
     }
 
-    fn parse_callable(&mut self) -> Result<Callable, SourceDiagnostic> {
+    fn parse_callable(&mut self, is_extern: bool) -> Result<Callable, SourceDiagnostic> {
         let name = self.expect_ident()?;
         self.expect(Token::LParen)?;
         let inputs = if self.eat(Token::RParen) {
@@ -115,6 +123,7 @@ impl Parser {
         let chains = self.parse_block()?;
         Ok(Callable {
             name,
+            is_extern,
             inputs,
             outputs,
             chains,
@@ -573,5 +582,5 @@ impl Parser {
 }
 
 fn is_declaration_keyword(name: &str) -> bool {
-    matches!(name, "type" | "import" | "node" | "program")
+    matches!(name, "type" | "import" | "extern" | "node" | "program")
 }

@@ -1,7 +1,7 @@
 # Exports a pure Fibonacci node for the wasm32-unknown-unknown cdylib target.
 import std.math { add }
 
-node fib(depth: Int) -> result: Int {
+extern node fib(depth: Int) -> result: Int {
     (0, 1) -> repeat<$depth> _fib_step -> ($result, $)
 }
 

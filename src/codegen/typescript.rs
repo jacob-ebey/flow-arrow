@@ -74,10 +74,11 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             .get(&callable.name)
             .cloned()
             .ok_or_else(|| format!("missing signature for `{}`", callable.name))?;
-        let export = if callable.name.starts_with("__flow_") {
-            ""
-        } else {
+        let export = if is_program || (callable.is_extern && !callable.name.starts_with("__flow_"))
+        {
             "export "
+        } else {
+            ""
         };
         let fn_name = if is_program && callable.name == "main" {
             "main".to_string()

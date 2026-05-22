@@ -508,8 +508,9 @@ Import resolution is deterministic and acyclic. Cyclic imports are
 ill-formed; imports are a module-system feature, not a way to construct
 recursive or dynamic dataflow graphs.
 
-All top-level `node` declarations are exportable from their source
-module. A `program` declaration is an entry point, not a reusable pure
+Only top-level `extern node` declarations are exportable from their
+source module. Plain `node` declarations are private implementation
+helpers. A `program` declaration is an entry point, not a reusable pure
 node, and cannot be called from another graph.
 
 The examples in `examples/` import stdlib primitives such as

@@ -95,12 +95,15 @@
       "patterns": [
         {
           "name": "meta.declaration.node.flowarrow",
-          "match": "\\b(node|program)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(?:(extern)\\s+)?(node|program)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
               "name": "keyword.declaration.flowarrow"
             },
             "2": {
+              "name": "keyword.declaration.flowarrow"
+            },
+            "3": {
               "name": "entity.name.function.flowarrow"
             }
           }
@@ -422,7 +425,7 @@
     },
     "keywords": {
       "name": "keyword.other.reserved.flowarrow",
-      "match": "\\b(?:import|as|type|node|program|cell|fault|ok|match)\\b"
+      "match": "\\b(?:import|as|type|extern|node|program|cell|fault|ok|match)\\b"
     },
     "booleans": {
       "name": "constant.language.boolean.flowarrow",

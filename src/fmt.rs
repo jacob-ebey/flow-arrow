@@ -210,7 +210,14 @@ impl Formatter {
                 ));
             }
             Decl::Import(import) => self.format_import(import),
-            Decl::Node(callable) => self.format_callable(decl_index, "node", callable),
+            Decl::Node(callable) => {
+                let kind = if callable.is_extern {
+                    "extern node"
+                } else {
+                    "node"
+                };
+                self.format_callable(decl_index, kind, callable);
+            }
             Decl::Program(callable) => self.format_callable(decl_index, "program", callable),
         }
     }
@@ -629,12 +636,15 @@ fn update_depths(
 fn starts_declaration(text: &str) -> bool {
     starts_keyword(text, "import")
         || starts_keyword(text, "type")
+        || starts_keyword(text, "extern")
         || starts_keyword(text, "node")
         || starts_keyword(text, "program")
 }
 
 fn starts_callable(text: &str) -> bool {
-    starts_keyword(text, "node") || starts_keyword(text, "program")
+    starts_keyword(text, "extern")
+        || starts_keyword(text, "node")
+        || starts_keyword(text, "program")
 }
 
 fn starts_keyword(text: &str, keyword: &str) -> bool {
@@ -719,6 +729,17 @@ $value->wrap->$right}"#,
             r#"node split(input: (Seq[Real], Seq[Real]), value: Int | Real) -> (left: Seq[Real], right: Faultable[Int]) {
     $input -> first -> $left
     $value -> wrap  -> $right
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn formats_extern_node_declarations() {
+        assert_formats(
+            r#"extern node expose(value:Int)->out:Int{$value->$out}"#,
+            r#"extern node expose(value: Int) -> out: Int {
+    $value -> $out
 }
 "#,
         );

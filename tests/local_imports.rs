@@ -14,7 +14,7 @@ fn local_flow_imports_typecheck_and_run() {
         r#"
             import std.math { add }
 
-            node plus_one(value: Int) -> out: Int {
+            extern node plus_one(value: Int) -> out: Int {
                 ($value, 1) -> add -> $out
             }
         "#,
@@ -36,4 +36,35 @@ fn local_flow_imports_typecheck_and_run() {
     let build = build_file(&main_path, None).expect("build");
     let output = Command::new(&build.executable).output().expect("run");
     assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn local_flow_import_rejects_non_extern_node() {
+    let main_path = support::source_path("local-import-private-node");
+    let dir = main_path.parent().expect("parent");
+    let helper_path = dir.join("helper.flow");
+    fs::write(
+        &helper_path,
+        r#"
+            node hidden(value: Int) -> out: Int {
+                $value -> $out
+            }
+        "#,
+    )
+    .expect("write helper");
+    fs::write(
+        &main_path,
+        r#"
+            import "./helper.flow" { hidden }
+            import std.cli { Args }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> hidden -> $exit_code
+            }
+        "#,
+    )
+    .expect("write main");
+
+    let error = build_file(&main_path, None).expect_err("non-extern node should not import");
+    assert!(error.contains("local module `./helper.flow` does not export `hidden`"));
 }

@@ -12,11 +12,11 @@ import std.predicates { all }
 import std.seq { length, zip, broadcast_left, broadcast_right }
 import std.tuple { first, second }
 
-node sum(values: Seq[Real]) -> total: Real {
+extern node sum(values: Seq[Real]) -> total: Real {
     $values -> reduce _scalar_add(identity: 0.0) -> $total
 }
 
-node mean(values: Seq[Real]) -> average: Real {
+extern node mean(values: Seq[Real]) -> average: Real {
     $values          -> sum         -> $total
     $values          -> length      -> $count
     ($total, $count) -> _scalar_div -> $average
@@ -50,59 +50,59 @@ node _abs_value(value: Real) -> out: Real {
     $value -> _scalar_abs -> $out
 }
 
-node neg(values: Seq[Real]) -> out: Seq[Real] {
+extern node neg(values: Seq[Real]) -> out: Seq[Real] {
     $values -> map _neg_value -> $out
 }
 
-node abs(values: Seq[Real]) -> out: Seq[Real] {
+extern node abs(values: Seq[Real]) -> out: Seq[Real] {
     $values -> map _abs_value -> $out
 }
 
-node add(inputs: (Seq[Real], Seq[Real])) -> out: Seq[Real] {
+extern node add(inputs: (Seq[Real], Seq[Real])) -> out: Seq[Real] {
     $inputs -> zip -> map _add_pair -> $out
 }
 
-node sub(inputs: (Seq[Real], Seq[Real])) -> out: Seq[Real] {
+extern node sub(inputs: (Seq[Real], Seq[Real])) -> out: Seq[Real] {
     $inputs -> zip -> map _sub_pair -> $out
 }
 
-node mul(inputs: (Seq[Real], Seq[Real])) -> out: Seq[Real] {
+extern node mul(inputs: (Seq[Real], Seq[Real])) -> out: Seq[Real] {
     $inputs -> zip -> map _mul_pair -> $out
 }
 
-node div(inputs: (Seq[Real], Seq[Real])) -> out: Seq[Real] {
+extern node div(inputs: (Seq[Real], Seq[Real])) -> out: Seq[Real] {
     $inputs -> zip -> map _div_pair -> $out
 }
 
-node add_scalar(inputs: (Seq[Real], Real)) -> out: Seq[Real] {
+extern node add_scalar(inputs: (Seq[Real], Real)) -> out: Seq[Real] {
     $inputs -> broadcast_right -> map _add_pair -> $out
 }
 
-node sub_scalar(inputs: (Seq[Real], Real)) -> out: Seq[Real] {
+extern node sub_scalar(inputs: (Seq[Real], Real)) -> out: Seq[Real] {
     $inputs -> broadcast_right -> map _sub_pair -> $out
 }
 
-node scalar_sub(inputs: (Real, Seq[Real])) -> out: Seq[Real] {
+extern node scalar_sub(inputs: (Real, Seq[Real])) -> out: Seq[Real] {
     $inputs -> broadcast_left -> map _sub_pair -> $out
 }
 
-node mul_scalar(inputs: (Seq[Real], Real)) -> out: Seq[Real] {
+extern node mul_scalar(inputs: (Seq[Real], Real)) -> out: Seq[Real] {
     $inputs -> broadcast_right -> map _mul_pair -> $out
 }
 
-node scalar_mul(inputs: (Real, Seq[Real])) -> out: Seq[Real] {
+extern node scalar_mul(inputs: (Real, Seq[Real])) -> out: Seq[Real] {
     $inputs -> broadcast_left -> map _mul_pair -> $out
 }
 
-node div_scalar(inputs: (Seq[Real], Real)) -> out: Seq[Real] {
+extern node div_scalar(inputs: (Seq[Real], Real)) -> out: Seq[Real] {
     $inputs -> broadcast_right -> map _div_pair -> $out
 }
 
-node scalar_div(inputs: (Real, Seq[Real])) -> out: Seq[Real] {
+extern node scalar_div(inputs: (Real, Seq[Real])) -> out: Seq[Real] {
     $inputs -> broadcast_left -> map _div_pair -> $out
 }
 
-node equals(inputs: (Seq[Real], Seq[Real])) -> out: Bool {
+extern node equals(inputs: (Seq[Real], Seq[Real])) -> out: Bool {
     $inputs -> zip -> map _eq_pair -> all -> $out
 }
 
@@ -110,7 +110,7 @@ node _dot_pair(pair: (Real, Real)) -> product: Real {
     $pair -> _scalar_mul -> $product
 }
 
-node dot(inputs: (Seq[Real], Seq[Real])) -> total: Real {
+extern node dot(inputs: (Seq[Real], Seq[Real])) -> total: Real {
     $inputs -> zip -> map _dot_pair -> reduce _scalar_add(identity: 0.0) -> $total
 }
 
@@ -118,24 +118,24 @@ node _square(value: Real) -> out: Real {
     ($value, $value) -> _scalar_mul -> $out
 }
 
-node squared_norm(values: Seq[Real]) -> total: Real {
+extern node squared_norm(values: Seq[Real]) -> total: Real {
     $values -> map _square -> sum -> $total
 }
 
-node l1_norm(values: Seq[Real]) -> total: Real {
+extern node l1_norm(values: Seq[Real]) -> total: Real {
     $values -> abs -> sum -> $total
 }
 
-node norm(values: Seq[Real]) -> total: Real {
+extern node norm(values: Seq[Real]) -> total: Real {
     $values -> squared_norm -> _scalar_sqrt -> $total
 }
 
-node normalize(values: Seq[Real]) -> out: Seq[Real] {
+extern node normalize(values: Seq[Real]) -> out: Seq[Real] {
     $values               -> norm       -> $magnitude
     ($values, $magnitude) -> div_scalar -> $out
 }
 
-node cosine_similarity(inputs: (Seq[Real], Seq[Real])) -> out: Real {
+extern node cosine_similarity(inputs: (Seq[Real], Seq[Real])) -> out: Real {
     $inputs                    -> dot         -> $numerator
     $inputs                    -> first       -> norm -> $left_norm
     $inputs                    -> second      -> norm -> $right_norm
@@ -143,10 +143,10 @@ node cosine_similarity(inputs: (Seq[Real], Seq[Real])) -> out: Real {
     ($numerator, $denominator) -> _scalar_div -> $out
 }
 
-node squared_distance(inputs: (Seq[Real], Seq[Real])) -> total: Real {
+extern node squared_distance(inputs: (Seq[Real], Seq[Real])) -> total: Real {
     $inputs -> sub -> squared_norm -> $total
 }
 
-node distance(inputs: (Seq[Real], Seq[Real])) -> total: Real {
+extern node distance(inputs: (Seq[Real], Seq[Real])) -> total: Real {
     $inputs -> squared_distance -> _scalar_sqrt -> $total
 }

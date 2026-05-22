@@ -125,6 +125,8 @@ impl Resolver {
         let mut references = HashMap::new();
         let mut exports = HashMap::new();
         let local_names = declaration_names(&parsed);
+        let extern_nodes = extern_node_names(&parsed);
+        let type_names = type_alias_names(&parsed);
 
         for name in &local_names {
             let internal = internal_name(module, name);
@@ -137,6 +139,11 @@ impl Resolver {
             if !local_names.contains(*name) {
                 return Err(format!(
                     "stdlib module `{module}` declares missing export `{name}`"
+                ));
+            }
+            if !type_names.contains(*name) && !extern_nodes.contains(*name) {
+                return Err(format!(
+                    "stdlib module `{module}` exports non-extern node `{name}`"
                 ));
             }
             exports.insert((*name).to_string(), internal_name(module, name));
@@ -253,12 +260,16 @@ impl Resolver {
         let mut references = HashMap::new();
         let mut exports = HashMap::new();
         let local_names = declaration_names(&parsed);
+        let importable_names = importable_names(&parsed);
         let module_id = full_path.to_string_lossy();
 
         for name in &local_names {
             let internal = internal_name(&module_id, name);
             insert_reference(&mut references, name.clone(), internal.clone())?;
-            exports.insert(name.clone(), internal);
+        }
+
+        for name in importable_names {
+            exports.insert(name.clone(), internal_name(&module_id, &name));
         }
 
         let mut module_declarations = Vec::new();
@@ -518,6 +529,35 @@ fn declaration_names(module: &Module) -> HashSet<String> {
             Decl::Node(callable) | Decl::Program(callable) => Some(callable.name.clone()),
             Decl::Import(_) => None,
         })
+        .collect()
+}
+
+fn type_alias_names(module: &Module) -> HashSet<String> {
+    module
+        .declarations
+        .iter()
+        .filter_map(|decl| match decl {
+            Decl::TypeAlias(alias) => Some(alias.name.clone()),
+            Decl::Node(_) | Decl::Program(_) | Decl::Import(_) => None,
+        })
+        .collect()
+}
+
+fn extern_node_names(module: &Module) -> HashSet<String> {
+    module
+        .declarations
+        .iter()
+        .filter_map(|decl| match decl {
+            Decl::Node(callable) if callable.is_extern => Some(callable.name.clone()),
+            Decl::TypeAlias(_) | Decl::Node(_) | Decl::Program(_) | Decl::Import(_) => None,
+        })
+        .collect()
+}
+
+fn importable_names(module: &Module) -> HashSet<String> {
+    type_alias_names(module)
+        .into_iter()
+        .chain(extern_node_names(module))
         .collect()
 }
 

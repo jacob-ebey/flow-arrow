@@ -4808,8 +4808,13 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             .declarations
             .iter()
             .filter_map(|decl| match decl {
-                Decl::Node(callable) => Some(callable.name.clone()),
+                Decl::Node(callable)
+                    if callable.is_extern && !callable.name.starts_with("__flow_") =>
+                {
+                    Some(callable.name.clone())
+                }
                 Decl::TypeAlias(_) | Decl::Import(_) | Decl::Program(_) => None,
+                Decl::Node(_) => None,
             })
             .collect::<Vec<_>>();
 
@@ -10331,6 +10336,51 @@ mod tests {
             .expect("function end")
             + body_start;
         &runtime_c[body_start..body_end]
+    }
+
+    fn extern_visibility_module() -> Module {
+        parser::parse(
+            r#"
+                extern node exposed(value: Int) -> out: Int {
+                    $value -> hidden -> $out
+                }
+
+                node hidden(value: Int) -> out: Int {
+                    $value -> $out
+                }
+            "#,
+        )
+        .expect("parse")
+    }
+
+    #[test]
+    fn typescript_exports_only_extern_nodes() {
+        let module = extern_visibility_module();
+
+        let ts = typescript::emit_module(TypedCodegen::new(&module).expect("typed codegen"))
+            .expect("typescript");
+
+        assert!(ts.contains("export function exposed(value: bigint): bigint"));
+        assert!(ts.contains("\nfunction hidden(value: bigint): bigint"));
+        assert!(!ts.contains("export function hidden"));
+    }
+
+    #[test]
+    fn wasm_exports_only_extern_nodes() {
+        let module = extern_visibility_module();
+        let emitted = DirectLlvm::emit_with_options(
+            TypedCodegen::new(&module).expect("typed codegen"),
+            DirectLlvmOptions {
+                emit_entrypoint: false,
+                export_nodes: true,
+                ..DirectLlvmOptions::default()
+            },
+        )
+        .expect("llvm");
+
+        assert_eq!(emitted.exports, vec!["exposed"]);
+        assert!(emitted.llvm.contains("define i64 @exposed(i64"));
+        assert!(!emitted.llvm.contains("define i64 @hidden(i64"));
     }
 
     #[test]

@@ -175,13 +175,16 @@ core stdlib nodes for CLI arguments, text/bytes, integer/real conversion,
 math, predicates, faults, tuples, and sequences. Native-backed modules
 such as `std.cv`, `std.http`, and `std.sqlite` are intentionally rejected
 by this backend until they have target-specific runtime support.
+Only nodes declared with `extern node` are emitted as exported
+TypeScript functions; ordinary nodes are generated as internal helpers.
 
 ### 2.5 WebAssembly story
 
 - The `wasm32-unknown-unknown` target produces a freestanding module
   suitable for browsers or JavaScript runtimes. The implemented first
-  slice is `--crate-type cdylib` with ABI-compatible top-level nodes
-  exported as core WASM functions. Exported node inputs and outputs are
+  slice is `--crate-type cdylib` with ABI-compatible top-level
+  `extern node` declarations exported as core WASM functions. Exported
+  node inputs and outputs are
   currently limited to scalar `Int` and `Real` values, with `Int`
   represented as WASM `i64`.
 - The `wasm32-wasi` target produces a module runnable under wasmtime

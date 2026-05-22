@@ -94,7 +94,8 @@ a trailing comma on every item.
 ### Callable Headers
 
 Input ports are written inside `(` and `)`, separated by `, `. Empty input
-lists are written as `()`.
+lists are written as `()`. Public callable nodes retain the `extern node`
+header.
 
 Single-output callables omit output parentheses:
 
