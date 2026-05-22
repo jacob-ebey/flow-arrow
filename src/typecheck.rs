@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::module_resolver;
+use crate::node_ref::{StaticNodeRef, parse_static_node_ref};
 use crate::stdlib::{self, Effect, RuntimeSupport, SymbolKind};
 use std::collections::HashMap;
 use std::fmt;
@@ -110,11 +111,18 @@ enum CallableKind {
 struct CallableInfo {
     signatures: Vec<Signature>,
     reduce_signatures: Vec<Signature>,
+    node_params: Vec<NodeParamInfo>,
     kind: CallableKind,
     effect: Effect,
     runtime: RuntimeSupport,
     is_stdlib: bool,
     runtime_name: String,
+}
+
+#[derive(Debug, Clone)]
+struct NodeParamInfo {
+    name: String,
+    signature: Signature,
 }
 
 struct Checker<'a> {
@@ -298,6 +306,7 @@ impl<'a> Checker<'a> {
                     CallableInfo {
                         signatures,
                         reduce_signatures,
+                        node_params: Vec::new(),
                         kind: CallableKind::Node,
                         effect: symbol.effect,
                         runtime: symbol.runtime,
@@ -411,6 +420,7 @@ impl<'a> Checker<'a> {
             let info = CallableInfo {
                 signatures: vec![self.callable_signature(callable)?],
                 reduce_signatures: Vec::new(),
+                node_params: self.node_param_infos(callable)?,
                 kind,
                 effect: Effect::Pure,
                 runtime: RuntimeSupport::DirectBuiltin,
@@ -492,6 +502,29 @@ impl<'a> Checker<'a> {
         })
     }
 
+    fn node_param_infos(&self, callable: &Callable) -> Result<Vec<NodeParamInfo>, String> {
+        let mut params = Vec::new();
+        for param in &callable.node_params {
+            if params
+                .iter()
+                .any(|existing: &NodeParamInfo| existing.name == param.name)
+            {
+                return Err(format!(
+                    "`{}` declares static node parameter `{}` more than once",
+                    callable.name, param.name
+                ));
+            }
+            params.push(NodeParamInfo {
+                name: param.name.clone(),
+                signature: Signature {
+                    input: self.parse_declared_type(&param.input)?,
+                    output: self.parse_declared_type(&param.output)?,
+                },
+            });
+        }
+        Ok(params)
+    }
+
     fn port_types(&self, ports: &[Port]) -> Result<Type, String> {
         let mut types = Vec::with_capacity(ports.len());
         for port in ports {
@@ -568,6 +601,18 @@ impl<'a> Checker<'a> {
     }
 
     fn check_callable(&self, callable: &Callable, kind: CallableKind) -> Result<(), String> {
+        if kind == CallableKind::Program && !callable.node_params.is_empty() {
+            return Err(format!(
+                "program `{}` cannot declare static node parameters",
+                callable.name
+            ));
+        }
+        if callable.is_extern && !callable.node_params.is_empty() {
+            return Err(format!(
+                "extern node `{}` cannot declare static node parameters",
+                callable.name
+            ));
+        }
         let mut env = HashMap::new();
         for port in &callable.inputs {
             let ty = self.parse_declared_type(&port.ty)?;
@@ -894,6 +939,7 @@ impl<'a> Checker<'a> {
         let inline_callable = Callable {
             name: "<inline>".to_string(),
             is_extern: false,
+            node_params: Vec::new(),
             inputs: Vec::new(),
             outputs: Vec::new(),
             chains: Vec::new(),
@@ -963,21 +1009,18 @@ impl<'a> Checker<'a> {
 
     fn apply_node(
         &self,
-        _callable: &Callable,
+        callable: &Callable,
         _context: CallableKind,
         name: &str,
         input: &Type,
         as_function: bool,
         allow_effectful_function: bool,
     ) -> Result<Type, String> {
-        let node = self
-            .symbols
-            .get(name)
-            .ok_or_else(|| format!("unknown node `{name}`"))?;
+        let node = self.resolve_node(callable, name)?;
         if node.kind == CallableKind::Program {
             return Err(format!("program `{name}` cannot be called from a graph"));
         }
-        if as_function && !self.supports_higher_order_call(node) {
+        if as_function && !self.supports_higher_order_call(&node) {
             return Err(format!("`{name}` cannot be used as a map/filter function"));
         }
         if as_function && node.effect != Effect::Pure && !allow_effectful_function {
@@ -1045,6 +1088,145 @@ impl<'a> Checker<'a> {
             )
         })?;
         Ok(output)
+    }
+
+    fn resolve_node(&self, callable: &Callable, name: &str) -> Result<CallableInfo, String> {
+        let node_ref = parse_static_node_ref(name);
+        if node_ref.args.is_empty() {
+            if let Some(param) = callable
+                .node_params
+                .iter()
+                .find(|param| param.name == node_ref.base)
+            {
+                let input = self.parse_declared_type(&param.input)?;
+                let output = self.parse_declared_type(&param.output)?;
+                return Ok(CallableInfo {
+                    signatures: vec![Signature { input, output }],
+                    reduce_signatures: Vec::new(),
+                    node_params: Vec::new(),
+                    kind: CallableKind::Node,
+                    effect: Effect::Pure,
+                    runtime: RuntimeSupport::DirectBuiltin,
+                    is_stdlib: false,
+                    runtime_name: param.name.clone(),
+                });
+            }
+        }
+        let info = self
+            .symbols
+            .get(&node_ref.base)
+            .ok_or_else(|| format!("unknown node `{name}`"))?;
+        if node_ref.args.is_empty() {
+            if !info.node_params.is_empty() {
+                return Err(format!(
+                    "node `{}` requires {} static node arguments",
+                    node_ref.base,
+                    info.node_params.len()
+                ));
+            }
+            return Ok(info.clone());
+        }
+        self.validate_static_node_args(callable, &node_ref, info)?;
+        Ok(CallableInfo {
+            node_params: Vec::new(),
+            ..info.clone()
+        })
+    }
+
+    fn validate_static_node_args(
+        &self,
+        callable: &Callable,
+        node_ref: &StaticNodeRef,
+        template: &CallableInfo,
+    ) -> Result<(), String> {
+        if template.node_params.is_empty() {
+            return Err(format!(
+                "node `{}` does not take static node arguments",
+                node_ref.base
+            ));
+        }
+        if template.node_params.len() != node_ref.args.len() {
+            return Err(format!(
+                "node `{}` expected {} static node arguments, found {}",
+                node_ref.base,
+                template.node_params.len(),
+                node_ref.args.len()
+            ));
+        }
+        for (param, actual) in template.node_params.iter().zip(&node_ref.args) {
+            let actual_ref = parse_static_node_ref(actual);
+            if !actual_ref.args.is_empty() {
+                return Err(format!(
+                    "static node argument `{actual}` cannot itself take static arguments"
+                ));
+            }
+            let actual_info = self.resolve_static_arg(callable, actual, &actual_ref)?;
+            if actual_info.kind == CallableKind::Program {
+                return Err(format!(
+                    "program `{actual}` cannot be used as a static node argument"
+                ));
+            }
+            if !actual_info.node_params.is_empty() {
+                return Err(format!(
+                    "generic node `{actual}` cannot be used as a static node argument without instantiation"
+                ));
+            }
+            if actual_info.effect != Effect::Pure {
+                return Err(format!(
+                    "`{actual}` cannot be used as a static node argument because it is effectful"
+                ));
+            }
+            if !self.callable_matches_signature(actual, &actual_info, &param.signature) {
+                return Err(format!(
+                    "`{actual}` does not match static node parameter `{}`: expected `node({}) -> {}`",
+                    param.name, param.signature.input, param.signature.output
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_static_arg(
+        &self,
+        callable: &Callable,
+        actual: &str,
+        actual_ref: &StaticNodeRef,
+    ) -> Result<CallableInfo, String> {
+        if let Some(param) = callable
+            .node_params
+            .iter()
+            .find(|param| param.name == actual_ref.base)
+        {
+            let input = self.parse_declared_type(&param.input)?;
+            let output = self.parse_declared_type(&param.output)?;
+            return Ok(CallableInfo {
+                signatures: vec![Signature { input, output }],
+                reduce_signatures: Vec::new(),
+                node_params: Vec::new(),
+                kind: CallableKind::Node,
+                effect: Effect::Pure,
+                runtime: RuntimeSupport::DirectBuiltin,
+                is_stdlib: false,
+                runtime_name: param.name.clone(),
+            });
+        }
+        self.symbols
+            .get(&actual_ref.base)
+            .cloned()
+            .ok_or_else(|| format!("unknown static node argument `{actual}`"))
+    }
+
+    fn callable_matches_signature(
+        &self,
+        _name: &str,
+        info: &CallableInfo,
+        expected: &Signature,
+    ) -> bool {
+        info.signatures.iter().any(|signature| {
+            let mut vars = HashMap::new();
+            match_types(&expected.input, &signature.input, &mut vars).is_ok()
+                && match_types(&expected.output, &signature.output, &mut vars).is_ok()
+        })
     }
 
     fn apply_map(&self, callable: &Callable, name: &str, input: &Type) -> Result<Type, String> {

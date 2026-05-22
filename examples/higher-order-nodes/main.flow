@@ -1,0 +1,24 @@
+# higher-order-nodes
+#
+# Demonstrates a static node parameter. `twice<increment>` is resolved before
+# typecheck/codegen and compiles as two ordinary calls to `increment`.
+import std.bytes { concat_bytes }
+import std.cli { Args }
+import std.io { write_stdout }
+import std.int { format_int }
+import std.math { add }
+
+node increment(x: Int) -> y: Int {
+    ($x, 1) -> add -> $y
+}
+
+node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+    $x -> step -> step -> $y
+}
+
+program main(args: Args) -> exit_code: Int {
+    40                    -> twice<increment> -> $answer
+    $answer               -> format_int       -> $answer_bytes
+    [$answer_bytes, "\n"] -> concat_bytes     -> $output
+    $output               -> write_stdout     -> $exit_code
+}

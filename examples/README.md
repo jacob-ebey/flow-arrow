@@ -112,6 +112,7 @@ intermediate bindings into edge labels for a denser operation-first view.
 | `parse-and-sum-lines/`        | Minimal pressure test for parse faults and graph-visible fault semantics. |
 | `99-bottles/`                 | Pure string generation via `range_step` + `map` + concat reduce. |
 | `fibonacci/`                  | Stdin integer parsing and FlowArrow Fibonacci iteration. |
+| `higher-order-nodes/`         | Static node parameters lowered to concrete graph calls before codegen. |
 | `wasm-fib/`                   | Pure FlowArrow `fib` node exported to WASM and called from Node.js. |
 | `typescript-fib/`             | Pure FlowArrow `fib` node emitted as TypeScript and called from Node.js. |
 | `json-parser/`                | Flat JSON array of numbers → JSON summary object, with bracket framing and fault routing. |

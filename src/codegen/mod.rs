@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::module_resolver;
+use crate::monomorphize;
 use crate::stdlib::{self, RuntimeSupport};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -27,6 +28,7 @@ pub fn emit_module(module: &Module) -> Result<String, String> {
 
 pub fn emit_direct_llvm_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
     let codegen = TypedCodegen::new(&expanded)?;
     DirectLlvm::emit(codegen)
 }
@@ -44,6 +46,7 @@ pub(crate) fn emit_wasm_cdylib_llvm_with_base(
     optimization: OptimizationLevel,
 ) -> Result<WasmCdylibOutput, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
     let codegen = TypedCodegen::new(&expanded)?;
     let emitted = DirectLlvm::emit_with_options(
         codegen,
@@ -67,12 +70,14 @@ pub(crate) fn emit_wasm_cdylib_llvm_with_base(
 #[allow(dead_code)]
 pub fn emit_runtime_c(module: &Module) -> Result<String, String> {
     let expanded = module_resolver::expand_stdlib_sources(module)?;
+    let expanded = monomorphize::expand_module(&expanded)?;
     TypedCodegen::new(&expanded)?.emit()
 }
 
 #[allow(dead_code)]
 pub fn emit_runtime_c_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
     TypedCodegen::new(&expanded)?.emit()
 }
 
@@ -81,12 +86,14 @@ pub fn emit_runtime_support_c_with_base(
     base_dir: &Path,
 ) -> Result<String, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
     let mut codegen = TypedCodegen::new(&expanded)?;
     codegen.emit_runtime_support_c()
 }
 
 pub fn emit_typescript_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
     typescript::emit_module(TypedCodegen::new(&expanded)?)
 }
 

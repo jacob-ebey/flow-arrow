@@ -254,6 +254,7 @@ impl Formatter {
     }
 
     fn format_callable(&mut self, decl_index: usize, kind: &str, callable: &Callable) {
+        let node_params = format_node_params(&callable.node_params);
         let inputs = callable
             .inputs
             .iter()
@@ -261,7 +262,7 @@ impl Formatter {
             .collect::<Vec<_>>()
             .join(", ");
         self.line(format!(
-            "{kind} {}({inputs}) -> {} {{",
+            "{kind} {}{node_params}({inputs}) -> {} {{",
             callable.name,
             format_port_or_list(&callable.outputs)
         ));
@@ -375,6 +376,25 @@ fn needs_blank_between(left: &Decl, right: &Decl) -> bool {
 
 fn format_callable_port_list(ports: &[Port]) -> String {
     ports.iter().map(format_port).collect::<Vec<_>>().join(", ")
+}
+
+fn format_node_params(params: &[NodeParam]) -> String {
+    if params.is_empty() {
+        return String::new();
+    }
+    format!(
+        "<{}>",
+        params
+            .iter()
+            .map(|param| format!(
+                "{}: node({}) -> {}",
+                param.name,
+                format_type_name(&param.input),
+                format_type_name(&param.output)
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn format_port_or_list(ports: &[Port]) -> String {

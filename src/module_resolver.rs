@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::node_ref::{format_static_node_ref, parse_static_node_ref};
 use crate::{parser, stdlib};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -404,6 +405,10 @@ fn rewrite_callable(
     for port in &mut callable.outputs {
         port.ty = rewrite_type_text(&port.ty, references);
     }
+    for param in &mut callable.node_params {
+        param.input = rewrite_type_text(&param.input, references);
+        param.output = rewrite_type_text(&param.output, references);
+    }
     for chain in &mut callable.chains {
         rewrite_endpoint(&mut chain.source, references);
         for stage in &mut chain.stages {
@@ -480,8 +485,19 @@ fn rewrite_stage(stage: &mut Stage, references: &HashMap<String, String>) {
 }
 
 fn rewrite_name(name: &mut String, references: &HashMap<String, String>) {
-    if let Some(internal) = references.get(name) {
-        *name = internal.clone();
+    let node_ref = parse_static_node_ref(name);
+    let base = references
+        .get(&node_ref.base)
+        .cloned()
+        .unwrap_or(node_ref.base);
+    let args = node_ref
+        .args
+        .iter()
+        .map(|arg| references.get(arg).cloned().unwrap_or_else(|| arg.clone()))
+        .collect::<Vec<_>>();
+    let rewritten = format_static_node_ref(&base, &args);
+    if rewritten != *name {
+        *name = rewritten;
     }
 }
 

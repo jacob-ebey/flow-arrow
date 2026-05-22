@@ -106,7 +106,7 @@ import_clause  ::= "as" IDENT
 
 import_item    ::= IDENT ("as" IDENT)?
 
-node_decl      ::= "extern"? "node" IDENT "(" port_list? ")" "->" port_or_list block
+node_decl      ::= "extern"? "node" IDENT node_param_list? "(" port_list? ")" "->" port_or_list block
 
 program_decl   ::= "program" IDENT "(" port_list? ")" "->" port_or_list block
 ```
@@ -123,6 +123,29 @@ surface. Local FlowArrow imports may import type aliases and extern
 nodes; non-extern nodes remain private implementation details. The
 TypeScript and WebAssembly library backends only expose extern nodes as
 host-callable functions.
+
+Static node parameters make a `node` a compile-time graph template:
+
+```ebnf
+node_param_list ::= "<" node_param ("," node_param)* ","? ">"
+node_param      ::= IDENT ":" "node" "(" type? ")" "->" type
+```
+
+Static node parameters are named in the declaration body and supplied
+positionally at use sites:
+
+```flow
+node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+    $x -> step -> step -> $y
+}
+
+40 -> twice<increment> -> $answer
+```
+
+Static node arguments are resolved before typecheck/codegen. They do
+not create runtime values and cannot be selected by runtime data.
+`program` declarations and `extern node` declarations cannot declare
+static node parameters.
 
 Two import sources exist:
 
@@ -161,7 +184,7 @@ A `program_decl` has identical syntax to a `node_decl`; the difference
 is semantic: the canonical command-line entry point is
 `program main(args: Args) -> exit_code: Int`, with stdin/stdout/stderr
 handled by explicit `std.io` boundary nodes or effectful wrapper nodes
-(see `overview.md` §12).
+(see `overview.md` §13).
 
 ```ebnf
 port_or_list   ::= port
@@ -252,11 +275,15 @@ endpoint       ::= variable_ref
                  | literal
 
 variable_ref   ::= "$" IDENT
-node_ref       ::= IDENT ("." IDENT)*
+node_ref       ::= IDENT ("." IDENT)* static_node_args?
+static_node_args ::= "<" static_node_arg ("," static_node_arg)* ","? ">"
+static_node_arg ::= IDENT ("." IDENT)*
 ```
 
 - `variable_ref` — a value name. Variables are always written with `$`.
 - `node_ref` — a node name, including imported aliases such as `math.add`.
+  A node reference may include static node arguments, such as
+  `twice<increment>`.
 - `tuple` — a join of multiple values (§5.1).
 - `fanout` — a fan-out from a single value (§5.2).
 - `seq_literal` — a fixed-arity sequence value (§5.3).
@@ -452,6 +479,8 @@ The following are therefore still **forbidden**:
 
 - Dynamic dispatch (`op_name -> lookup_op -> op; xs -> map op -> ys`).
 - Dynamic dispatch where runtime data chooses arbitrary nodes.
+- Passing nodes as runtime values. Static node parameters such as
+  `twice<increment>` are allowed because they are resolved before execution.
 - Data-dependent branching with hidden topology. Use `select` for eager value
   selection, or `match` for statically listed alternatives where only one arm is
   evaluated.
@@ -532,8 +561,11 @@ import_item    ::= IDENT ("as" IDENT)?
 
 type_alias_decl ::= "type" IDENT "=" type
 
-node_decl      ::= "node"    IDENT "(" port_list? ")" "->" port_or_list block
+node_decl      ::= "node"    IDENT node_param_list? "(" port_list? ")" "->" port_or_list block
 program_decl   ::= "program" IDENT "(" port_list? ")" "->" port_or_list block
+
+node_param_list ::= "<" node_param ("," node_param)* ","? ">"
+node_param      ::= IDENT ":" "node" "(" type? ")" "->" type
 
 port_or_list   ::= port | "(" port_list ")"
 port_list      ::= port ("," port)*
@@ -556,7 +588,9 @@ endpoint       ::= inline_endpoint
 inline_endpoint ::= endpoint_atom ("->" stage)*
 endpoint_atom  ::= variable_ref | tuple | fanout | seq_literal | literal
 variable_ref   ::= "$" IDENT
-node_ref       ::= IDENT ("." IDENT)*
+node_ref       ::= IDENT ("." IDENT)* static_node_args?
+static_node_args ::= "<" static_node_arg ("," static_node_arg)* ","? ">"
+static_node_arg ::= IDENT ("." IDENT)*
 tuple          ::= "(" inline_endpoint "," inline_endpoint ("," inline_endpoint)* ")"
 fanout         ::= "{" fanout_arm ("," fanout_arm)* "}"
 fanout_arm     ::= stage ("->" stage)*

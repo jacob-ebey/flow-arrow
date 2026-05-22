@@ -11,6 +11,8 @@ mod llvm_backend;
 mod lsp;
 mod mermaid;
 mod module_resolver;
+mod monomorphize;
+mod node_ref;
 mod parser;
 mod stdlib;
 mod typecheck;
@@ -233,6 +235,51 @@ mod tests {
         "#;
         let module = parser::parse(source).expect("parse");
         typecheck::check_module(&module).expect("typecheck");
+    }
+
+    #[test]
+    fn parses_and_typechecks_static_node_params() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { add }
+
+            node increment(x: Int) -> y: Int {
+                ($x, 1) -> add -> $y
+            }
+
+            node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+                $x -> step -> step -> $y
+            }
+
+            node wrap<inner: node(Int) -> Int>(x: Int) -> y: Int {
+                $x -> twice<inner> -> $y
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                40 -> wrap<increment> -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+    }
+
+    #[test]
+    fn typecheck_rejects_static_node_param_signature_mismatch() {
+        let source = r#"
+            import std.cli { Args }
+            import std.int { format_int }
+
+            node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+                $x -> step -> step -> $y
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                40 -> twice<format_int> -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("does not match static node parameter `step`"));
     }
 
     #[test]

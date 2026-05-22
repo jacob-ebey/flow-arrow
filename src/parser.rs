@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::diagnostic::{SourceDiagnostic, SourceSpan};
 use crate::lexer::{SpannedToken, Token, lex_spanned};
+use crate::node_ref::format_static_node_ref;
 
 pub fn parse(source: &str) -> Result<Module, String> {
     parse_diagnostic(source).map_err(|error| error.message)
@@ -110,6 +111,7 @@ impl Parser {
 
     fn parse_callable(&mut self, is_extern: bool) -> Result<Callable, SourceDiagnostic> {
         let name = self.expect_ident()?;
+        let node_params = self.parse_node_params()?;
         self.expect(Token::LParen)?;
         let inputs = if self.eat(Token::RParen) {
             Vec::new()
@@ -124,10 +126,50 @@ impl Parser {
         Ok(Callable {
             name,
             is_extern,
+            node_params,
             inputs,
             outputs,
             chains,
         })
+    }
+
+    fn parse_node_params(&mut self) -> Result<Vec<NodeParam>, SourceDiagnostic> {
+        if !self.eat(Token::Less) {
+            return Ok(Vec::new());
+        }
+        let mut params = Vec::new();
+        if self.eat(Token::Greater) {
+            return Err(self.error_here("static node parameter list cannot be empty"));
+        }
+        loop {
+            let name = self.expect_ident()?;
+            self.expect(Token::Colon)?;
+            self.expect_keyword("node")?;
+            self.expect(Token::LParen)?;
+            let input = if self.eat(Token::RParen) {
+                "()".to_string()
+            } else {
+                let input = self.parse_type_name()?;
+                self.expect(Token::RParen)?;
+                input
+            };
+            self.expect(Token::Arrow)?;
+            let output = self.parse_type_name()?;
+            params.push(NodeParam {
+                name,
+                input,
+                output,
+            });
+            if self.eat(Token::Comma) {
+                if self.eat(Token::Greater) {
+                    break;
+                }
+            } else {
+                self.expect(Token::Greater)?;
+                break;
+            }
+        }
+        Ok(params)
     }
 
     fn parse_port_or_list(&mut self) -> Result<Vec<Port>, SourceDiagnostic> {
@@ -205,7 +247,7 @@ impl Parser {
                     self.bump();
                     text.push('.');
                 }
-                Token::Comma | Token::RParen | Token::LBrace | Token::Eof
+                Token::Comma | Token::RParen | Token::LBrace | Token::Greater | Token::Eof
                     if !text.is_empty() && depth == 0 =>
                 {
                     break;
@@ -251,12 +293,12 @@ impl Parser {
         match self.peek_ident() {
             Some("map") => {
                 self.bump();
-                Ok(Stage::Map(self.expect_ident()?))
+                Ok(Stage::Map(self.parse_node_ref_text()?))
             }
             Some("fault") => {
                 self.bump();
                 self.expect_keyword("map")?;
-                let node = self.expect_ident()?;
+                let node = self.parse_node_ref_text()?;
                 self.expect(Token::LBrace)?;
                 self.expect_keyword("ok")?;
                 self.expect(Token::Arrow)?;
@@ -270,7 +312,7 @@ impl Parser {
             }
             Some("filter") => {
                 self.bump();
-                Ok(Stage::Filter(self.expect_ident()?))
+                Ok(Stage::Filter(self.parse_node_ref_text()?))
             }
             Some("repeat") => {
                 self.bump();
@@ -284,12 +326,12 @@ impl Parser {
                     }
                 };
                 self.expect(Token::Greater)?;
-                let node = self.expect_ident()?;
+                let node = self.parse_node_ref_text()?;
                 Ok(Stage::Repeat { count, node })
             }
             Some("reduce") => {
                 self.bump();
-                let op = self.expect_ident()?;
+                let op = self.parse_node_ref_text()?;
                 self.expect(Token::LParen)?;
                 self.expect_keyword("identity")?;
                 self.expect(Token::Colon)?;
@@ -299,7 +341,7 @@ impl Parser {
             }
             Some("scan") => {
                 self.bump();
-                let op = self.expect_ident()?;
+                let op = self.parse_node_ref_text()?;
                 self.expect(Token::LParen)?;
                 self.expect_keyword("identity")?;
                 self.expect(Token::Colon)?;
@@ -308,9 +350,7 @@ impl Parser {
                 Ok(Stage::Scan { op, identity })
             }
             Some("match") => self.parse_match_stage(),
-            Some(_) => Ok(Stage::Endpoint(Endpoint::Name(
-                self.parse_qualified_ident()?,
-            ))),
+            Some(_) => Ok(Stage::Endpoint(Endpoint::Name(self.parse_node_ref_text()?))),
             _ if matches!(
                 self.peek(),
                 Token::Variable(_) | Token::Discard | Token::LParen
@@ -366,7 +406,7 @@ impl Parser {
                 saw_fallback = true;
                 MatchGuard::Fallback
             } else {
-                let node = self.parse_qualified_ident()?;
+                let node = self.parse_node_ref_text()?;
                 self.expect(Token::LParen)?;
                 let mut args = Vec::new();
                 if !self.eat(Token::RParen) {
@@ -399,7 +439,7 @@ impl Parser {
 
     fn parse_match_target(&mut self) -> Result<MatchTarget, SourceDiagnostic> {
         match self.peek() {
-            Token::Ident(_) => Ok(MatchTarget::Node(self.parse_qualified_ident()?)),
+            Token::Ident(_) => Ok(MatchTarget::Node(self.parse_node_ref_text()?)),
             _ => Ok(MatchTarget::Value(self.parse_inline_endpoint()?)),
         }
     }
@@ -498,6 +538,29 @@ impl Parser {
             name.push_str(&self.expect_ident()?);
         }
         Ok(name)
+    }
+
+    fn parse_node_ref_text(&mut self) -> Result<String, SourceDiagnostic> {
+        let base = self.parse_qualified_ident()?;
+        if !self.eat(Token::Less) {
+            return Ok(base);
+        }
+        let mut args = Vec::new();
+        if self.eat(Token::Greater) {
+            return Err(self.error_here("static node argument list cannot be empty"));
+        }
+        loop {
+            args.push(self.parse_qualified_ident()?);
+            if self.eat(Token::Comma) {
+                if self.eat(Token::Greater) {
+                    break;
+                }
+            } else {
+                self.expect(Token::Greater)?;
+                break;
+            }
+        }
+        Ok(format_static_node_ref(&base, &args))
     }
 
     fn expect_keyword(&mut self, keyword: &str) -> Result<(), SourceDiagnostic> {

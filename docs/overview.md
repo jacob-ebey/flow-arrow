@@ -289,7 +289,7 @@ $xs -> length -> $n
 ```
 
 `grid<...>` dimensions and `repeat<...>` counts may also be runtime
-values (see §9 and §15).
+values (see §10 and §16).
 
 ### What stays forbidden
 
@@ -310,7 +310,27 @@ The full forbidden list lives in `syntax.md` §8.
 
 ---
 
-# 9. Bounded iteration only
+# 9. Static node parameters
+
+Reusable nodes may take named static node parameters. The parameter is
+named in the declaration and supplied positionally at the use site:
+
+```flow
+node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+    $x -> step -> step -> $y
+}
+
+40 -> twice<increment> -> $answer
+```
+
+This is not runtime dispatch. The compiler resolves `twice<increment>`
+before typecheck/codegen and lowers it to a concrete graph template
+where `step` is replaced by `increment`. Static node arguments must
+match the declared `node(input) -> output` signature and are pure.
+
+---
+
+# 10. Bounded iteration only
 
 FlowArrow has no unbounded `while`.
 
@@ -344,7 +364,7 @@ depends on a value computed inside the loop.
 
 ---
 
-# 10. Recursion is forbidden
+# 11. Recursion is forbidden
 
 Illegal:
 
@@ -363,7 +383,7 @@ Use explicit parallel combinators instead.
 
 ---
 
-# 11. Pure node definitions
+# 12. Pure node definitions
 
 Every node is pure.
 
@@ -399,7 +419,7 @@ $timestamp -> compute_deadline -> $deadline
 
 ---
 
-# 12. Effects are boundary-only
+# 13. Effects are boundary-only
 
 A complete program receives command-line arguments and flags as its
 ordinary input and returns an integer process exit code.
@@ -434,7 +454,7 @@ malformed input, numeric overflow, or boundary I/O faults. See
 
 ---
 
-# 13. Imports and the standard library
+# 14. Imports and the standard library
 
 FlowArrow source files may import pure nodes, boundary nodes, and types
 from the standard library, package dependencies, or local `.flow` files.
@@ -523,7 +543,7 @@ The initial standard-library module surface is documented in
 
 ---
 
-# 14. Image-processing example
+# 15. Image-processing example
 
 ```flow
 node detect_edges(img: Image[H, W, RGB]) -> edges: Image[H, W, Gray] {
@@ -550,7 +570,7 @@ $img ─────────┤                        ├─> equalize ─>
 
 ---
 
-# 15. Matrix multiplication example
+# 16. Matrix multiplication example
 
 ```flow
 node matmul(
@@ -574,7 +594,7 @@ Each cell computation may itself contain parallelism through `dot`.
 
 ---
 
-# 16. Forbidden syntax
+# 17. Forbidden syntax
 
 FlowArrow deliberately does not include:
 
@@ -605,7 +625,7 @@ These constructs either create hidden ordering, hidden effects, or dynamic depen
 
 ---
 
-# 17. Allowed syntax summary
+# 18. Allowed syntax summary
 
 ```flow
 # imports
@@ -621,6 +641,12 @@ type Pixel = (Real,Real)
 
 # pipeline
 $x -> f -> $y
+
+# static node parameter
+node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+    $x -> step -> step -> $y
+}
+40 -> twice<increment> -> $answer
 
 # fan-out
 $x -> { f -> $a, g -> $b }
@@ -667,7 +693,7 @@ $xs -> length -> $n
 
 ---
 
-# 18. Compilation model
+# 19. Compilation model
 
 Every program compiles to:
 
@@ -708,15 +734,18 @@ Therefore, FlowArrow exposes exactly the maximum legal parallelism expressible b
 
 ---
 
-# 19. Minimal grammar sketch
+# 20. Minimal grammar sketch
 
 ```ebnf
 program     ::= declaration*
 
 declaration ::= import_decl
               | "type" IDENT "=" TYPE
-              | "node" IDENT "(" ports? ")" "->" ports block
+              | "node" IDENT node_param_list? "(" ports? ")" "->" ports block
               | "program" IDENT "(" ports? ")" "->" ports block
+
+node_param_list ::= "<" node_param ("," node_param)* ","? ">"
+node_param      ::= IDENT ":" "node" "(" type? ")" "->" type
 
 import_decl ::= "import" (module_path | STRING)
                 ( "as" IDENT | "{" import_item ("," import_item)* "}" )
@@ -744,7 +773,8 @@ endpoint    ::= variable_ref
               | sequence
 
 variable_ref::= "$" IDENT
-node_ref    ::= IDENT ("." IDENT)*
+node_ref    ::= IDENT ("." IDENT)* ("<" static_node_arg ("," static_node_arg)* ","? ">")?
+static_node_arg ::= IDENT ("." IDENT)*
 
 tuple       ::= "(" inline_endpoint ("," inline_endpoint)+ ")"
 sequence    ::= "[" "]" | "[" inline_endpoint ("," inline_endpoint)* "]"
@@ -766,7 +796,7 @@ combinator  ::= "map" IDENT
 
 ---
 
-# 20. Core invariant
+# 21. Core invariant
 
 A FlowArrow program is valid only if:
 

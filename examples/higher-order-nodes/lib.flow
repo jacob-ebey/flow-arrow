@@ -1,0 +1,17 @@
+# higher-order-nodes library target
+#
+# Pure cdylib-friendly variant used to exercise static node parameters in
+# export-oriented targets.
+import std.math { add }
+
+node increment(x: Int) -> y: Int {
+    ($x, 1) -> add -> $y
+}
+
+node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+    $x -> step -> step -> $y
+}
+
+extern node answer(seed: Int) -> value: Int {
+    $seed -> twice<increment> -> $value
+}
