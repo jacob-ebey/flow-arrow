@@ -207,6 +207,7 @@ dependency:
 - `flowarrow_dealloc(ptr, len)`
 - `flowarrow_compile_typescript(source_ptr, source_len, mode) -> ok`
 - `flowarrow_compile_javascript_artifacts(source_ptr, source_len, mode) -> ok`
+- `flowarrow_compile_llvm_ir(source_ptr, source_len, mode) -> ok`
 - `flowarrow_result_ok() -> ok`
 - `flowarrow_result_ptr() -> ptr`
 - `flowarrow_result_len() -> len`
@@ -216,8 +217,10 @@ dependency:
 exports `extern node` declarations. `flowarrow_compile_typescript`
 returns generated TypeScript or an error message.
 `flowarrow_compile_javascript_artifacts` returns
-`declarations + "\0" + javascript` or an error message. The result
-buffer remains valid until the next compile call or
+`declarations + "\0" + javascript` or an error message.
+`flowarrow_compile_llvm_ir` returns a textual LLVM IR preview that constructs
+the `.ll` module but does not emit an object file or invoke native LLVM target
+compilation. The result buffer remains valid until the next compile call or
 `flowarrow_result_clear()`. This in-memory path supports embedded
 source-backed stdlib modules, but local string imports
 are rejected because the browser compiler has no source file path.

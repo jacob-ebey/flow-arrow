@@ -1,6 +1,7 @@
 use crate::{
     TypeScriptCompileMode, TypeScriptCompileOptions,
-    compile_javascript_artifacts_source_with_options, compile_typescript_source_with_options,
+    compile_javascript_artifacts_source_with_options, compile_llvm_ir_source_with_options,
+    compile_typescript_source_with_options,
 };
 use std::cell::{Cell, RefCell};
 use std::mem;
@@ -88,6 +89,39 @@ pub unsafe extern "C" fn flowarrow_compile_javascript_artifacts(
     ) {
         Ok((declarations, javascript)) => {
             store_result(true, format!("{declarations}\0{javascript}"));
+            1
+        }
+        Err(error) => {
+            store_result(false, error);
+            0
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn flowarrow_compile_llvm_ir(
+    source_ptr: *const u8,
+    source_len: usize,
+    mode: u32,
+) -> u32 {
+    let source = match unsafe { wasm_input(source_ptr, source_len) } {
+        Ok(source) => source,
+        Err(error) => {
+            store_result(false, error);
+            return 0;
+        }
+    };
+    let mode = match mode {
+        0 => TypeScriptCompileMode::Program,
+        1 => TypeScriptCompileMode::Library,
+        other => {
+            store_result(false, format!("unknown LLVM IR compile mode `{other}`"));
+            return 0;
+        }
+    };
+    match compile_llvm_ir_source_with_options(source, TypeScriptCompileOptions { mode }) {
+        Ok(output) => {
+            store_result(true, output);
             1
         }
         Err(error) => {

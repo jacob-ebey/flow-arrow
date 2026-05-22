@@ -133,8 +133,9 @@ These files are generated artifacts. Do not edit them by hand.
 
 ## Static Demo
 
-The static demo in `static/index.html` loads `static/flowarrow.wasm` and compiles a
-FlowArrow Fibonacci example to TypeScript in the browser. Rebuild the WASM
+The static demo in `static/index.html` loads `static/flowarrow.wasm` and compiles
+FlowArrow examples to JavaScript, TypeScript, and LLVM IR preview text in the
+browser. Rebuild the WASM
 compiler artifact before serving or publishing `static/`:
 
 ```sh

@@ -255,15 +255,18 @@
         border-left: 0;
       }
 
-      .results[data-mode="typescript"] {
+      .results[data-mode="typescript"],
+      .results[data-mode="llvm"] {
         grid-template-rows: minmax(0, 1fr);
       }
 
-      .results[data-mode="typescript"] .pane[data-output="declarations"] {
+      .results[data-mode="typescript"] .pane[data-output="declarations"],
+      .results[data-mode="llvm"] .pane[data-output="declarations"] {
         display: none;
       }
 
-      .results[data-mode="typescript"] .pane[data-output="source"] {
+      .results[data-mode="typescript"] .pane[data-output="source"],
+      .results[data-mode="llvm"] .pane[data-output="source"] {
         border-top: 0;
       }
 
@@ -519,6 +522,7 @@
             <div class="target-toggle" role="group" aria-label="Output target">
               <button class="target-option" type="button" data-target="javascript" aria-pressed="true">JavaScript</button>
               <button class="target-option" type="button" data-target="typescript" aria-pressed="false">TypeScript</button>
+              <button class="target-option" type="button" data-target="llvm" aria-pressed="false">LLVM IR</button>
             </div>
             <button id="reset" class="icon-button" type="button" title="Reset example" aria-label="Reset example">
               Reset
@@ -672,6 +676,21 @@ node score_job(n: Int) -> score: Int {
           operator: /->|\$|[+*/%-]/,
           punctuation: /[{}()[\],.:<>]/,
         };
+        window.Prism.languages.llvm = {
+          comment: /;.*/,
+          string: {
+            pattern: /"(?:\\.|[^"\\])*"/,
+            greedy: true,
+          },
+          keyword:
+            /\b(?:addrspace|align|alloca|attributes|br|call|declare|define|dso_local|external|false|global|label|load|module|nonnull|null|opaque|private|ret|source_filename|store|target|to|true|type|unnamed_addr)\b/,
+          builtin: /\b(?:void|half|float|double|metadata|token|ptr|i\d+)\b/,
+          function: /@[A-Za-z_.$-][\w.$-]*/,
+          variable: /%[A-Za-z_.$-][\w.$-]*/,
+          number: /-?\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/i,
+          operator: /[-=*>]+/,
+          punctuation: /[{}()[\],.:]/,
+        };
       }
 
       function highlight(code, language) {
@@ -735,7 +754,18 @@ node score_job(n: Int) -> score: Int {
 
       function clearOutputs() {
         setHighlightedOutput(typesOutputCode, "", "typescript");
-        setHighlightedOutput(sourceOutputCode, "", target === "javascript" ? "javascript" : "typescript");
+        setHighlightedOutput(sourceOutputCode, "", outputLanguage());
+      }
+
+      function outputLanguage() {
+        switch (target) {
+          case "javascript":
+            return "javascript";
+          case "llvm":
+            return "llvm";
+          default:
+            return "typescript";
+        }
       }
 
       function compile() {
@@ -744,10 +774,31 @@ node score_job(n: Int) -> score: Int {
         const ptr = wasm.flowarrow_alloc(bytes.length);
         new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
         try {
+          const compileLlvm = wasm.flowarrow_compile_llvm_ir ?? wasm.flowarrow_compile_llvm;
+          if (target === "llvm" && typeof compileLlvm !== "function") {
+            clearDiagnostics();
+            setHighlightedOutput(typesOutputCode, "", "typescript");
+            setHighlightedOutput(
+              sourceOutputCode,
+              [
+                "; LLVM IR output is not available in this browser compiler build.",
+                ";",
+                "; The static demo is running the wasm-hosted compiler, which currently exposes",
+                "; JavaScript and TypeScript generation. Use the native CLI with --emit-llvm",
+                "; to produce the intermediate .ll file for the same source.",
+              ].join("\n"),
+              "llvm",
+            );
+            setStatus("LLVM IR unavailable", "error");
+            return;
+          }
+
           const ok =
             target === "javascript"
               ? wasm.flowarrow_compile_javascript_artifacts(ptr, bytes.length, 1)
-              : wasm.flowarrow_compile_typescript(ptr, bytes.length, 1);
+              : target === "llvm"
+                ? compileLlvm(ptr, bytes.length, 1)
+                : wasm.flowarrow_compile_typescript(ptr, bytes.length, 1);
           const result = readResult();
           if (!ok) {
             clearOutputs();
@@ -765,6 +816,10 @@ node score_job(n: Int) -> score: Int {
               separator >= 0 ? result.slice(separator + 1) : result,
               "javascript",
             );
+          } else if (target === "llvm") {
+            clearDiagnostics();
+            setHighlightedOutput(typesOutputCode, "", "typescript");
+            setHighlightedOutput(sourceOutputCode, result, "llvm");
           } else {
             clearDiagnostics();
             setHighlightedOutput(typesOutputCode, "", "typescript");
@@ -800,7 +855,8 @@ node score_job(n: Int) -> score: Int {
       function updateOutputTitles() {
         const filename = examples[currentExample].filename;
         typesOutputTitle.textContent = `${filename}.d.ts`;
-        sourceOutputTitle.textContent = target === "javascript" ? `${filename}.js` : `${filename}.ts`;
+        const extension = target === "javascript" ? "js" : target === "llvm" ? "ll" : "ts";
+        sourceOutputTitle.textContent = `${filename}.${extension}`;
       }
 
       compileButton.addEventListener("click", compile);

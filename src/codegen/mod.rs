@@ -32,6 +32,7 @@ use std::path::Path;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod llvm_stdlib;
+mod llvm_text;
 mod oxc_postprocess;
 mod typescript;
 
@@ -132,6 +133,12 @@ pub fn emit_javascript_artifacts(
     let expanded = monomorphize::expand_module(&expanded)?;
     let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
     oxc_postprocess::emit_javascript_artifacts(&source)
+}
+
+pub fn emit_llvm_ir_preview(module: &Module) -> Result<String, String> {
+    let expanded = module_resolver::expand_stdlib_sources(module)?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    llvm_text::emit_module(TypedCodegen::new(&expanded)?)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

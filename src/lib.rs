@@ -66,6 +66,19 @@ pub fn compile_typescript_library_source(source: &str) -> Result<String, String>
     )
 }
 
+pub fn compile_llvm_ir_source(source: &str) -> Result<String, String> {
+    compile_llvm_ir_source_with_options(source, TypeScriptCompileOptions::default())
+}
+
+pub fn compile_llvm_ir_library_source(source: &str) -> Result<String, String> {
+    compile_llvm_ir_source_with_options(
+        source,
+        TypeScriptCompileOptions {
+            mode: TypeScriptCompileMode::Library,
+        },
+    )
+}
+
 pub fn compile_typescript_source_with_options(
     source: &str,
     options: TypeScriptCompileOptions,
@@ -95,6 +108,21 @@ pub fn compile_javascript_artifacts_source_with_options(
     }
     let artifacts = codegen::emit_javascript_artifacts(&module)?;
     Ok((artifacts.declarations, artifacts.javascript))
+}
+
+pub fn compile_llvm_ir_source_with_options(
+    source: &str,
+    options: TypeScriptCompileOptions,
+) -> Result<String, String> {
+    let module = parser::parse_diagnostic(source)
+        .map_err(|error| diagnostic::format_source_diagnostic(&error))?;
+    match options.mode {
+        TypeScriptCompileMode::Program => typecheck::check_module(&module)
+            .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
+        TypeScriptCompileMode::Library => typecheck::check_library_module(&module)
+            .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
+    }
+    codegen::emit_llvm_ir_preview(&module)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -305,6 +333,51 @@ mod tests {
         let ts = compile_typescript_library_source(source).expect("typescript");
         assert!(ts.contains("export function increment(value: bigint): bigint"));
         assert!(ts.contains("1n"));
+    }
+
+    #[test]
+    fn compiles_llvm_ir_preview_in_memory() {
+        let fib_source = r#"
+            import std.math { add }
+
+            extern node fib(depth: Int) -> result: Int {
+                (0, 1) -> repeat<$depth> _fib_step -> ($result, $)
+            }
+
+            node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
+                $b       -> $next_a
+                ($a, $b) -> add -> $next_b
+            }
+        "#;
+        let llvm = compile_llvm_ir_library_source(fib_source).expect("llvm ir");
+        assert!(llvm.starts_with("; FlowArrow LLVM IR preview\n"));
+        assert!(llvm.contains("define i64 @flow_node_fib(i64 %input)"));
+        assert!(llvm.contains("@flow_repeat__fib_step"));
+        assert!(llvm.contains("define { i64, i64 } @flow_node__fib_step"));
+        assert!(llvm.contains(" add i64 "));
+
+        let concurrency_source = r#"
+            import std.math { add, max, mul }
+
+            extern node score_batch(width: Int) -> (total: Int, peak: Int) {
+                (1, $width, 1) -> range_step              -> $jobs
+                $jobs          -> map score_job           -> $scores
+                $scores        -> reduce add(identity: 0) -> $total
+                $scores        -> reduce max(identity: 0) -> $peak
+            }
+
+            node score_job(n: Int) -> score: Int {
+                ($n, $n)      -> mul -> $square
+                ($square, $n) -> add -> $score
+            }
+        "#;
+        let llvm = compile_llvm_ir_library_source(concurrency_source).expect("llvm ir");
+        assert!(llvm.contains("define { i64, i64 } @flow_node_score_batch(i64 %input)"));
+        assert!(llvm.contains("@flow_builtin_range_step"));
+        assert!(llvm.contains("@flow_map_score_job"));
+        assert!(llvm.contains("@flow_reduce_add"));
+        assert!(llvm.contains("@flow_reduce_max"));
+        assert!(llvm.contains(" mul i64 "));
     }
 
     #[test]
