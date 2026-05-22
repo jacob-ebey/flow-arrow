@@ -24,9 +24,16 @@
         box-sizing: border-box;
       }
 
+      html {
+        height: 100%;
+        overflow: hidden;
+      }
+
       body {
         margin: 0;
-        min-height: 100vh;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
         background: var(--bg);
         color: var(--text);
         font-family:
@@ -35,7 +42,11 @@
       }
 
       main {
+        display: flex;
+        flex-direction: column;
         width: min(1180px, calc(100vw - 32px));
+        height: 100vh;
+        min-height: 0;
         margin: 0 auto;
         padding: 24px 0;
       }
@@ -45,7 +56,15 @@
         align-items: center;
         justify-content: space-between;
         gap: 16px;
+        flex: 0 0 auto;
         margin-bottom: 16px;
+      }
+
+      .compiler {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        min-height: 0;
       }
 
       h1 {
@@ -82,6 +101,7 @@
         gap: 12px;
         border: 1px solid var(--line);
         border-radius: 8px 8px 0 0;
+        flex: 0 0 auto;
         background: var(--panel-strong);
         padding: 10px;
       }
@@ -109,9 +129,20 @@
       }
 
       .tab[aria-selected="true"] {
-        background: var(--panel);
-        color: var(--text);
+        background: var(--accent);
+        color: #ffffff;
         font-weight: 650;
+      }
+
+      .tab[aria-selected="false"] {
+        color: var(--muted);
+      }
+
+      .tab[aria-selected="false"]:hover,
+      .target-option[aria-pressed="false"]:hover,
+      .icon-button:hover {
+        background: var(--panel-strong);
+        color: var(--text);
       }
 
       .actions {
@@ -184,7 +215,9 @@
       .workspace {
         display: grid;
         grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
-        min-height: min(680px, calc(100vh - 128px));
+        grid-template-rows: minmax(0, 1fr);
+        flex: 1 1 auto;
+        min-height: 0;
         border: 1px solid var(--line);
         border-top: 0;
         border-radius: 0 0 8px 8px;
@@ -192,10 +225,16 @@
         background: var(--panel);
       }
 
+      .compiler:has(.diagnostics:not([hidden])) .workspace {
+        border-radius: 0;
+      }
+
       .pane {
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
+        min-height: 0;
         min-width: 0;
+        overflow: hidden;
       }
 
       .pane + .pane {
@@ -205,7 +244,9 @@
       .results {
         display: grid;
         grid-template-rows: minmax(0, 0.75fr) minmax(0, 1fr);
+        min-height: 0;
         min-width: 0;
+        overflow: hidden;
         border-left: 1px solid var(--line);
       }
 
@@ -243,6 +284,8 @@
       pre {
         width: 100%;
         height: 100%;
+        min-height: 0;
+        min-width: 0;
         margin: 0;
         border: 0;
         outline: 0;
@@ -262,6 +305,37 @@
         white-space: pre;
       }
 
+      .diagnostics {
+        flex: 0 0 auto;
+        max-height: min(220px, 28vh);
+        border: 1px solid var(--line);
+        border-top: 0;
+        border-radius: 0 0 8px 8px;
+        background: var(--panel);
+        overflow: hidden;
+      }
+
+      .diagnostics[hidden] {
+        display: none;
+      }
+
+      .diagnostics summary {
+        min-height: 38px;
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--line);
+        color: var(--danger);
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 680;
+      }
+
+      .diagnostics pre {
+        max-height: calc(min(220px, 28vh) - 38px);
+        height: auto;
+        color: var(--danger);
+        white-space: pre-wrap;
+      }
+
       @media (max-width: 780px) {
         main {
           width: min(100vw - 20px, 1180px);
@@ -275,10 +349,12 @@
         }
 
         .actions,
+        .tabs,
         .target-toggle {
           width: 100%;
         }
 
+        .tab,
         .target-option {
           flex: 1;
         }
@@ -290,7 +366,8 @@
 
         .workspace {
           grid-template-columns: 1fr;
-          min-height: 760px;
+          grid-template-rows: minmax(0, 0.95fr) minmax(0, 1.05fr);
+          min-height: 0;
         }
 
         .pane + .pane {
@@ -301,7 +378,15 @@
         .results {
           border-left: 0;
           border-top: 1px solid var(--line);
-          min-height: 520px;
+          min-height: 0;
+        }
+
+        .diagnostics {
+          max-height: min(190px, 26vh);
+        }
+
+        .diagnostics pre {
+          max-height: calc(min(190px, 26vh) - 38px);
         }
       }
     </style>
@@ -313,10 +398,13 @@
         <div id="status" class="status" data-state="idle">Loading compiler...</div>
       </header>
 
-      <section aria-label="Compiler">
+      <section class="compiler" aria-label="Compiler">
         <div class="toolbar">
           <div class="tabs" role="tablist" aria-label="Examples">
-            <button class="tab" type="button" role="tab" aria-selected="true">fib.flow</button>
+            <button class="tab" type="button" role="tab" data-example="fib" aria-selected="true">fib.flow</button>
+            <button class="tab" type="button" role="tab" data-example="concurrency" aria-selected="false">
+              concurrency.flow
+            </button>
           </div>
           <div class="actions">
             <div class="target-toggle" role="group" aria-label="Output target">
@@ -336,7 +424,7 @@
           </section>
           <div id="results" class="results" data-mode="javascript">
             <section class="pane" data-output="declarations" aria-label="TypeScript declarations output">
-              <div class="pane-title">fib.d.ts</div>
+              <div id="types-output-title" class="pane-title">fib.d.ts</div>
               <pre id="types-output" aria-live="polite"></pre>
             </section>
             <section class="pane" data-output="source" aria-label="JavaScript output">
@@ -345,6 +433,10 @@
             </section>
           </div>
         </div>
+        <details id="diagnostics" class="diagnostics" hidden>
+          <summary id="diagnostics-summary">Compile Error</summary>
+          <pre id="diagnostics-output" aria-live="polite"></pre>
+        </details>
       </section>
     </main>
 
@@ -362,22 +454,55 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
 }
 `;
 
+      const concurrencyExample = `# Exposes explicit data-parallel work for the browser demo.
+import std.math { add, max, mul }
+
+extern node score_batch(width: Int) -> (total: Int, peak: Int) {
+    (1, $width, 1) -> range_step              -> $jobs
+    $jobs          -> map score_job           -> $scores
+    $scores        -> reduce add(identity: 0) -> $total
+    $scores        -> reduce max(identity: 0) -> $peak
+}
+
+node score_job(n: Int) -> score: Int {
+    ($n, $n)      -> mul -> $square
+    ($square, $n) -> add -> $score
+}
+`;
+
+      const examples = {
+        fib: {
+          filename: "fib",
+          source: fibExample,
+        },
+        concurrency: {
+          filename: "concurrency",
+          source: concurrencyExample,
+        },
+      };
+
       const decoder = new TextDecoder();
       const encoder = new TextEncoder();
       const status = document.querySelector("#status");
       const source = document.querySelector("#source");
       const results = document.querySelector("#results");
       const typesOutput = document.querySelector("#types-output");
+      const typesOutputTitle = document.querySelector("#types-output-title");
       const sourceOutput = document.querySelector("#source-output");
       const sourceOutputTitle = document.querySelector("#source-output-title");
       const compileButton = document.querySelector("#compile");
       const resetButton = document.querySelector("#reset");
+      const diagnostics = document.querySelector("#diagnostics");
+      const diagnosticsSummary = document.querySelector("#diagnostics-summary");
+      const diagnosticsOutput = document.querySelector("#diagnostics-output");
+      const exampleButtons = [...document.querySelectorAll(".tab")];
       const targetButtons = [...document.querySelectorAll(".target-option")];
 
       let wasm = null;
       let target = "javascript";
+      let currentExample = "fib";
 
-      source.value = fibExample;
+      source.value = examples[currentExample].source;
       compileButton.disabled = true;
 
       function setStatus(message, state = "idle") {
@@ -401,6 +526,24 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
         return decoder.decode(new Uint8Array(wasm.memory.buffer, ptr, len));
       }
 
+      function clearDiagnostics() {
+        diagnostics.hidden = true;
+        diagnostics.open = false;
+        diagnosticsOutput.textContent = "";
+      }
+
+      function showDiagnostics(title, message) {
+        diagnosticsSummary.textContent = title;
+        diagnosticsOutput.textContent = message;
+        diagnostics.hidden = false;
+        diagnostics.open = true;
+      }
+
+      function clearOutputs() {
+        typesOutput.textContent = "";
+        sourceOutput.textContent = "";
+      }
+
       function compile() {
         if (!wasm) return;
         const bytes = encoder.encode(source.value);
@@ -412,11 +555,16 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
               ? wasm.flowarrow_compile_javascript_artifacts(ptr, bytes.length, 1)
               : wasm.flowarrow_compile_typescript(ptr, bytes.length, 1);
           const result = readResult();
-          if (target === "javascript") {
+          if (!ok) {
+            clearOutputs();
+            showDiagnostics("Compile Error", result);
+          } else if (target === "javascript") {
             const separator = result.indexOf("\0");
-            typesOutput.textContent = ok && separator >= 0 ? result.slice(0, separator) : result;
-            sourceOutput.textContent = ok && separator >= 0 ? result.slice(separator + 1) : "";
+            clearDiagnostics();
+            typesOutput.textContent = separator >= 0 ? result.slice(0, separator) : "";
+            sourceOutput.textContent = separator >= 0 ? result.slice(separator + 1) : result;
           } else {
+            clearDiagnostics();
             typesOutput.textContent = "";
             sourceOutput.textContent = result;
           }
@@ -429,18 +577,37 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
       function setTarget(nextTarget) {
         target = nextTarget;
         results.dataset.mode = nextTarget;
-        sourceOutputTitle.textContent = nextTarget === "javascript" ? "fib.js" : "fib.ts";
+        updateOutputTitles();
         for (const button of targetButtons) {
           button.setAttribute("aria-pressed", String(button.dataset.target === nextTarget));
         }
         compile();
       }
 
+      function setExample(nextExample) {
+        currentExample = nextExample;
+        source.value = examples[nextExample].source;
+        for (const button of exampleButtons) {
+          button.setAttribute("aria-selected", String(button.dataset.example === nextExample));
+        }
+        updateOutputTitles();
+        compile();
+      }
+
+      function updateOutputTitles() {
+        const filename = examples[currentExample].filename;
+        typesOutputTitle.textContent = `${filename}.d.ts`;
+        sourceOutputTitle.textContent = target === "javascript" ? `${filename}.js` : `${filename}.ts`;
+      }
+
       compileButton.addEventListener("click", compile);
       resetButton.addEventListener("click", () => {
-        source.value = fibExample;
+        source.value = examples[currentExample].source;
         compile();
       });
+      for (const button of exampleButtons) {
+        button.addEventListener("click", () => setExample(button.dataset.example));
+      }
       for (const button of targetButtons) {
         button.addEventListener("click", () => setTarget(button.dataset.target));
       }
@@ -452,8 +619,8 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
         compile();
       } catch (error) {
         setStatus("Compiler failed to load", "error");
-        typesOutput.textContent = error instanceof Error ? error.message : String(error);
-        sourceOutput.textContent = "";
+        clearOutputs();
+        showDiagnostics("Compiler Load Error", error instanceof Error ? error.message : String(error));
       }
     </script>
   </body>
