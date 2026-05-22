@@ -130,7 +130,8 @@ Current implementation status: `flowarrow build` defaults to the host
 native target and accepts `--target native`, `--target host`, or the host
 target triple for that backend. `wasm32-unknown-unknown` supports an
 initial `--crate-type cdylib` reactor-module path for pure scalar node
-exports. `wasm32-wasi` is parsed but not implemented yet.
+exports. `typescript` emits TypeScript source under `build/typescript/`.
+`wasm32-wasi` is parsed but not implemented yet.
 
 Build optimization defaults to `-O3`. Users can select a clang-style
 optimization level with `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, or `-Oz`.
@@ -165,7 +166,15 @@ aarch64-unknown-linux-gnu
 x86_64-pc-windows-msvc
 wasm32-unknown-unknown
 wasm32-wasi
+typescript
 ```
+
+The `typescript` target emits standalone `.ts` source instead of invoking
+a native compiler or linker. It supports the core language lowering and
+core stdlib nodes for CLI arguments, text/bytes, integer/real conversion,
+math, predicates, faults, tuples, and sequences. Native-backed modules
+such as `std.cv`, `std.http`, and `std.sqlite` are intentionally rejected
+by this backend until they have target-specific runtime support.
 
 ### 2.5 WebAssembly story
 

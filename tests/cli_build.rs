@@ -120,6 +120,139 @@ fn build_wasm_fib_example_and_run_node_script() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "55");
 }
 
+#[test]
+fn build_typescript_fib_example_and_run_node_script() {
+    let output = Command::new(flowarrow())
+        .args([
+            "build",
+            "--target",
+            "typescript",
+            "--crate-type",
+            "cdylib",
+            "examples/typescript-fib/fib.flow",
+        ])
+        .output()
+        .expect("run flowarrow build");
+    assert!(
+        output.status.success(),
+        "flowarrow build failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let generated = fs::read_to_string("examples/typescript-fib/build/typescript/fib.ts")
+        .expect("read generated TypeScript");
+    assert!(generated.contains("export function fib(depth: bigint): bigint"));
+    assert!(generated.contains("for (let"));
+
+    if Command::new("tsc").arg("--version").output().is_ok() {
+        let output = Command::new("tsc")
+            .args([
+                "--noEmit",
+                "--target",
+                "ES2022",
+                "--module",
+                "NodeNext",
+                "--moduleResolution",
+                "NodeNext",
+                "--allowImportingTsExtensions",
+                "examples/typescript-fib/run.ts",
+                "examples/typescript-fib/build/typescript/fib.ts",
+            ])
+            .output()
+            .expect("run tsc");
+        assert!(
+            output.status.success(),
+            "generated TypeScript failed typecheck:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    } else {
+        eprintln!("skipping TypeScript typecheck: tsc is not installed");
+    }
+
+    if Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipping TypeScript example runtime test: node is not installed");
+        return;
+    }
+
+    let output = Command::new("node")
+        .arg("examples/typescript-fib/run.ts")
+        .output()
+        .expect("run node TypeScript example");
+    assert!(
+        output.status.success(),
+        "node TypeScript example failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "55");
+}
+
+#[test]
+fn build_typescript_program_with_core_stdlib_and_run_node() {
+    let output = Command::new(flowarrow())
+        .args([
+            "build",
+            "--target",
+            "typescript",
+            "examples/add-numbers-from-args/main.flow",
+        ])
+        .output()
+        .expect("run flowarrow build");
+    assert!(
+        output.status.success(),
+        "flowarrow build failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    if Command::new("tsc").arg("--version").output().is_ok() {
+        let output = Command::new("tsc")
+            .args([
+                "--noEmit",
+                "--target",
+                "ES2022",
+                "--module",
+                "ES2022",
+                "--allowImportingTsExtensions",
+                "examples/add-numbers-from-args/build/typescript/main.ts",
+            ])
+            .output()
+            .expect("run tsc");
+        assert!(
+            output.status.success(),
+            "generated program TypeScript failed typecheck:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    } else {
+        eprintln!("skipping TypeScript program typecheck: tsc is not installed");
+    }
+
+    if Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipping TypeScript program runtime test: node is not installed");
+        return;
+    }
+
+    let output = Command::new("node")
+        .args([
+            "examples/add-numbers-from-args/build/typescript/main.ts",
+            "1.5",
+            "2.5",
+            "3",
+        ])
+        .output()
+        .expect("run node TypeScript program");
+    assert!(
+        output.status.success(),
+        "node TypeScript program failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "7");
+}
+
 fn temp_flow_path(prefix: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(

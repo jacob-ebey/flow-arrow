@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "scripts": {
+    "build": "flowarrow build --target typescript --crate-type cdylib fib.flow",
+    "check": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --allowImportingTsExtensions run.ts build/typescript/fib.ts",
+    "start": "node run.ts"
+  }
+}

@@ -138,6 +138,7 @@ impl FromStr for CrateType {
 pub enum BuildTarget {
     Native(NativeTarget),
     Wasm(WasmTarget),
+    Typescript,
 }
 
 impl BuildTarget {
@@ -149,6 +150,7 @@ impl BuildTarget {
         match self {
             Self::Native(target) => target.triple(),
             Self::Wasm(target) => target.triple(),
+            Self::Typescript => "typescript",
         }
     }
 
@@ -159,6 +161,7 @@ impl BuildTarget {
     pub fn supported_targets() -> Vec<&'static str> {
         let mut targets = Vec::from(NATIVE_TARGETS);
         targets.extend(WasmTarget::SUPPORTED.iter().map(|target| target.triple()));
+        targets.push("typescript");
         targets
     }
 }
@@ -177,6 +180,7 @@ impl FromStr for BuildTarget {
             "native" | "host" => Ok(Self::native_host()),
             "wasm32-unknown-unknown" => Ok(Self::Wasm(WasmTarget::UnknownUnknown)),
             "wasm32-wasi" => Ok(Self::Wasm(WasmTarget::Wasi)),
+            "typescript" | "ts" => Ok(Self::Typescript),
             target if NATIVE_TARGETS.contains(&target) => Ok(Self::Native(NativeTarget {
                 triple: target.to_string(),
             })),
@@ -267,7 +271,38 @@ pub fn build_file_with_options(path: &Path, options: &BuildOptions) -> Result<Bu
     match &options.target {
         BuildTarget::Native(target) => build_native(path, base_dir, &module, target, options),
         BuildTarget::Wasm(target) => build_wasm(path, base_dir, &module, *target, options),
+        BuildTarget::Typescript => build_typescript(path, base_dir, &module, options),
     }
+}
+
+fn build_typescript(
+    path: &Path,
+    base_dir: &Path,
+    module: &Module,
+    options: &BuildOptions,
+) -> Result<BuildOutput, String> {
+    if !options.compiler_flags.is_empty() || !options.linker_flags.is_empty() {
+        return Err(
+            "TypeScript builds emit source directly and do not accept compiler or linker flags"
+                .to_string(),
+        );
+    }
+    if options.emit_llvm.is_some() {
+        return Err("TypeScript builds do not support `--emit-llvm`".to_string());
+    }
+
+    let source = codegen::emit_typescript_with_base(module, base_dir)?;
+    let target = BuildTarget::Typescript;
+    let build_dir = build_dir(path, &target);
+    fs::create_dir_all(&build_dir)
+        .map_err(|error| format!("failed to create `{}`: {error}", build_dir.display()))?;
+    let artifact = build_dir.join(format!("{}.ts", executable_name(path)?));
+    fs::write(&artifact, source)
+        .map_err(|error| format!("failed to write `{}`: {error}", artifact.display()))?;
+    Ok(BuildOutput {
+        build_dir,
+        executable: artifact,
+    })
 }
 
 fn build_native(
@@ -408,6 +443,7 @@ impl BuildPlan {
                 build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX))
             }
             BuildTarget::Wasm(_) => build_dir.join(format!("{executable_name}.wasm")),
+            BuildTarget::Typescript => build_dir.join(format!("{executable_name}.ts")),
         };
         Ok(Self {
             build_dir,
@@ -881,6 +917,11 @@ mod tests {
             BuildTarget::from_str("wasm32-wasi"),
             Ok(BuildTarget::Wasm(WasmTarget::Wasi))
         );
+        assert_eq!(
+            BuildTarget::from_str("typescript"),
+            Ok(BuildTarget::Typescript)
+        );
+        assert_eq!(BuildTarget::from_str("ts"), Ok(BuildTarget::Typescript));
     }
 
     #[test]
