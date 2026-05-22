@@ -95,11 +95,12 @@ fn std_vector_source_nodes_run() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let runtime_c = fs::read_to_string(build.build_dir.join(".cache/runtime.c")).expect("runtime");
-    assert!(runtime_c.contains("flow_node___flow_std_vector_sum"));
-    assert!(runtime_c.contains("flow_node___flow_std_vector_dot"));
-    assert!(runtime_c.contains("for (size_t"));
-    assert!(!runtime_c.contains("FaValue"));
+    let runtime_llvm =
+        fs::read_to_string(build.build_dir.join(".cache/runtime.ll")).expect("runtime llvm");
+    let main_llvm = fs::read_to_string(build.build_dir.join(".cache/main.ll")).expect("main llvm");
+    assert!(runtime_llvm.contains("define"));
+    assert!(main_llvm.contains("@flow_unboxed_main"));
+    assert!(!build.build_dir.join(".cache/runtime.c").exists());
 }
 
 #[test]
@@ -285,11 +286,12 @@ fn std_matrix_source_nodes_run() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let runtime_c = fs::read_to_string(build.build_dir.join(".cache/runtime.c")).expect("runtime");
-    assert!(runtime_c.contains("flow_node___flow_std_matrix_matmul"));
-    assert!(runtime_c.contains("flow_node___flow_std_matrix_outer"));
-    assert!(runtime_c.contains("for (size_t"));
-    assert!(!runtime_c.contains("FaValue"));
+    let runtime_llvm =
+        fs::read_to_string(build.build_dir.join(".cache/runtime.ll")).expect("runtime llvm");
+    let main_llvm = fs::read_to_string(build.build_dir.join(".cache/main.ll")).expect("main llvm");
+    assert!(runtime_llvm.contains("define"));
+    assert!(main_llvm.contains("@flow_unboxed_main"));
+    assert!(!build.build_dir.join(".cache/runtime.c").exists());
 }
 
 #[test]

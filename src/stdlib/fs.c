@@ -385,15 +385,37 @@ static FaFaultable_Stream_Bytes fa_open_file(FaBytes path) {
   return FaFaultable_Stream_Bytes_ok(stream);
 }
 
+static FaFileStreamState *fa_file_stream_state(FaStream *stream) {
+  return stream && stream->state ? (FaFileStreamState *)stream->state : NULL;
+}
+
+static FILE *fa_stream_file_handle(FaStream *stream) {
+  if (stream->file) return stream->file;
+  FaFileStreamState *state = fa_file_stream_state(stream);
+  return state && !state->closed ? state->file : NULL;
+}
+
+static int fa_stream_fd_value(FaStream *stream) {
+  if (stream->fd >= 0) return stream->fd;
+  FaFileStreamState *state = fa_file_stream_state(stream);
+  return state ? state->fd : -1;
+}
+
+static FaBytes fa_stream_path_value(FaStream *stream) {
+  if (stream->path.bytes) return stream->path;
+  FaFileStreamState *state = fa_file_stream_state(stream);
+  return state ? state->path : fa_bytes_literal("", 0);
+}
+
 static FaFaultable_Int fa_stream_size(FaStream stream) {
-  if (!stream.file) return FaFaultable_Int_fault(fa_fault_cstr("size: stream is closed"));
+  if (!fa_stream_file_handle(&stream)) return FaFaultable_Int_fault(fa_fault_cstr("size: stream is closed"));
   struct stat st;
-  if (fstat(stream.fd, &st) != 0) return FaFaultable_Int_fault(fa_io_fault(stream.path, "size"));
+  if (fstat(fa_stream_fd_value(&stream), &st) != 0) return FaFaultable_Int_fault(fa_io_fault(fa_stream_path_value(&stream), "size"));
   return FaFaultable_Int_ok((int64_t)st.st_size);
 }
 
 static FaFaultable_Bytes fa_stream_read_at(FaStream stream, int64_t offset, int64_t len) {
-  if (!stream.file) return FaFaultable_Bytes_fault(fa_fault_cstr("read_at: stream is closed"));
+  if (!fa_stream_file_handle(&stream)) return FaFaultable_Bytes_fault(fa_fault_cstr("read_at: stream is closed"));
   if (offset < 0) return FaFaultable_Bytes_fault(fa_fault_cstr("read_at: offset must be non-negative"));
   if (len < 0) return FaFaultable_Bytes_fault(fa_fault_cstr("read_at: length must be non-negative"));
 
@@ -402,9 +424,9 @@ static FaFaultable_Bytes fa_stream_read_at(FaStream stream, int64_t offset, int6
 
   size_t done = 0;
   while (done < (size_t)len) {
-    ssize_t read = pread(stream.fd, buffer + done, (size_t)len - done, (off_t)offset + (off_t)done);
+    ssize_t read = pread(fa_stream_fd_value(&stream), buffer + done, (size_t)len - done, (off_t)offset + (off_t)done);
     if (read < 0) {
-      FaFault fault = fa_io_fault(stream.path, "read_at");
+      FaFault fault = fa_io_fault(fa_stream_path_value(&stream), "read_at");
       free(buffer);
       return FaFaultable_Bytes_fault(fault);
     }
@@ -419,7 +441,8 @@ static FaFaultable_Bytes fa_stream_read_at(FaStream stream, int64_t offset, int6
 }
 
 static FaFaultable_Int fa_copy_stream_to_file(FaStream stream, FaBytes output_path) {
-  if (!stream.file) return FaFaultable_Int_fault(fa_fault_cstr("copy_to_file: stream is closed"));
+  FILE *input = fa_stream_file_handle(&stream);
+  if (!input) return FaFaultable_Int_fault(fa_fault_cstr("copy_to_file: stream is closed"));
   if (memchr(output_path.bytes, '\0', output_path.len)) {
     return FaFaultable_Int_fault(fa_fault_cstr("copy_to_file: output path contains NUL byte"));
   }
@@ -432,7 +455,7 @@ static FaFaultable_Int fa_copy_stream_to_file(FaStream stream, FaBytes output_pa
   char *buffer = (char *)malloc(FA_STREAM_BUFFER_SIZE);
   if (!buffer) fa_die_alloc();
   for (;;) {
-    size_t read = fread(buffer, 1, FA_STREAM_BUFFER_SIZE, stream.file);
+    size_t read = fread(buffer, 1, FA_STREAM_BUFFER_SIZE, input);
     if (read > 0) {
       size_t written = fwrite(buffer, 1, read, output);
       if (written != read) {
@@ -443,8 +466,8 @@ static FaFaultable_Int fa_copy_stream_to_file(FaStream stream, FaBytes output_pa
       }
     }
     if (read < FA_STREAM_BUFFER_SIZE) {
-      if (ferror(stream.file)) {
-        FaFault fault = fa_io_fault(stream.path, "copy_to_file");
+      if (ferror(input)) {
+        FaFault fault = fa_io_fault(fa_stream_path_value(&stream), "copy_to_file");
         free(buffer);
         fclose(output);
         return FaFaultable_Int_fault(fault);
@@ -470,4 +493,20 @@ static FaFaultable_Int fa_close_stream(FaStream stream) {
     return FaFaultable_Int_fault(fa_io_fault(stream.path, "close"));
   }
   return FaFaultable_Int_ok(0);
+}
+
+static FaFaultable_Int fa_stream_size_ptr(FaStream *stream) {
+  return fa_stream_size(*stream);
+}
+
+static FaFaultable_Bytes fa_stream_read_at_ptr(FaStream *stream, int64_t offset, int64_t len) {
+  return fa_stream_read_at(*stream, offset, len);
+}
+
+static FaFaultable_Int fa_copy_stream_to_file_ptr(FaStream *stream, FaBytes output_path) {
+  return fa_copy_stream_to_file(*stream, output_path);
+}
+
+static FaFaultable_Int fa_close_stream_ptr(FaStream *stream) {
+  return fa_close_stream(*stream);
 }

@@ -11,20 +11,21 @@ import std.fault { expect }
 import std.int { format_int }
 import std.io { write_stdout }
 import std.sqlite as sqlite
-import std.stream as stream
 import std.tuple { first }
 
 program main(args: Args) -> exit_code: Faultable[Int] {
-    () -> sqlite.open_memory -> $conn0
+    () -> sqlite.open_memory -> expect -> $conn0
 
-    ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", []) -> sqlite.exec -> first -> $conn1
+    ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", []) -> sqlite.exec -> expect -> first -> $conn1
 
-    ($conn1, "INSERT INTO todos (title) VALUES (?)", ["write sqlite docs" -> sqlite.text])        -> sqlite.exec -> first -> $conn2
-    ($conn1, "INSERT INTO todos (title) VALUES (?)", ["implement sqlite runtime" -> sqlite.text]) -> sqlite.exec -> first -> $conn3
-    ($conn2, $conn3)                                                                              -> first       -> $conn4
+    "write sqlite docs"        -> sqlite.text -> $todo_title1
+    "implement sqlite runtime" -> sqlite.text -> $todo_title2
+    ($conn1, "INSERT INTO todos (title) VALUES (?)", [$todo_title1]) -> sqlite.exec -> expect -> first -> $conn2
+    ($conn1, "INSERT INTO todos (title) VALUES (?)", [$todo_title2]) -> sqlite.exec -> expect -> first -> $conn3
+    ($conn2, $conn3)                                                 -> first                         -> $conn4
 
-    ($conn4, "SELECT id, title FROM todos ORDER BY id", []) -> sqlite.query  -> ($conn5, $rows)
-    $rows                                                   -> map todo_line -> stream.to_seq -> concat_bytes -> $output
+    ($conn4, "SELECT id, title FROM todos ORDER BY id", []) -> sqlite.query_all -> expect -> ($conn5, $rows)
+    $rows                                                   -> map todo_line    -> concat_bytes -> $output
 
     $output -> write_stdout -> $written
     $conn5  -> sqlite.close -> $closed
@@ -32,7 +33,7 @@ program main(args: Args) -> exit_code: Faultable[Int] {
 }
 
 node todo_line(row: sqlite.Row) -> line: Bytes {
-    ($row, "id")                       -> sqlite.value_named -> sqlite.as_int  -> expect -> format_int -> $id
-    ($row, "title")                    -> sqlite.value_named -> sqlite.as_text -> expect -> $title
+    ($row, "id")                       -> sqlite.value_named -> expect -> sqlite.as_int  -> expect -> format_int -> $id
+    ($row, "title")                    -> sqlite.value_named -> expect -> sqlite.as_text -> expect -> $title
     ["todo ", $id, ": ", $title, "\n"] -> concat_bytes       -> $line
 }

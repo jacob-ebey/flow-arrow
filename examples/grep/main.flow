@@ -18,13 +18,13 @@ import std.bytes {
     trim,
 }
 import std.cli { Args, argv }
-import std.fault { collect }
+import std.fault { collect, expect }
 import std.fs {
     dirname,
     exists,
     is_dir,
     join_path,
-    open_file,
+    read_file,
     read_files,
     walk_files,
 }
@@ -41,7 +41,6 @@ import std.seq {
     tail,
     zip,
 }
-import std.stream as stream
 
 program main(args: Args) -> exit_code: Faultable[Int] {
     $args     -> argv -> $raw_args
@@ -97,7 +96,7 @@ node one_path(input: Bytes) -> out: Faultable[Seq[Bytes]] {
 
 node grep_visible_path(input: (Bytes, (Bytes, Seq[Bytes]))) -> out: Faultable[Seq[Bytes]] {
     $input                      -> ($path, ($needle, $ignore_filters))
-    $path                       -> open_file -> stream.to_seq -> concat_bytes -> $contents
+    $path                       -> read_file -> expect -> $contents
     ($path, $contents, $needle) -> grep_file -> $out
 }
 

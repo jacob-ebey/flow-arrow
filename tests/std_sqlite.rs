@@ -58,11 +58,10 @@ fn std_sqlite_build_reports_missing_pkg_config_or_builds() {
     typecheck_file(&path).expect("typecheck");
     match build_file(&path, None) {
         Ok(build) => {
-            let runtime_c =
-                fs::read_to_string(build.build_dir.join(".cache/runtime.c")).expect("read runtime");
-            assert!(runtime_c.contains("#include <sqlite3.h>"));
-            assert!(runtime_c.contains("fa_sqlite_query"));
-            assert!(!runtime_c.contains("#include \"sqlite.h\""));
+            let runtime_llvm = fs::read_to_string(build.build_dir.join(".cache/runtime.ll"))
+                .expect("read runtime llvm");
+            assert!(runtime_llvm.contains("fa_sqlite_query"));
+            assert!(!build.build_dir.join(".cache/runtime.c").exists());
         }
         Err(error) => {
             assert!(error.contains("std.sqlite"), "unexpected error: {error}");
@@ -104,9 +103,10 @@ fn non_sqlite_build_does_not_emit_sqlite_runtime() {
             }
         "#,
     );
-    let runtime_c = fs::read_to_string(build.build_dir.join(".cache/runtime.c")).expect("runtime");
-    assert!(!runtime_c.contains("sqlite3.h"));
-    assert!(!runtime_c.contains("fa_sqlite_"));
+    let runtime_llvm =
+        fs::read_to_string(build.build_dir.join(".cache/runtime.ll")).expect("runtime llvm");
+    assert!(!runtime_llvm.contains("fa_sqlite_"));
+    assert!(!build.build_dir.join(".cache/runtime.c").exists());
 }
 
 #[test]

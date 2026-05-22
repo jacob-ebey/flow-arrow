@@ -52,7 +52,7 @@ import std.bytes {
     trim,
 }
 import std.cli { Args }
-import std.fault { has_faults, format_faults }
+import std.fault { has_faults, format_faults, expect }
 import std.io { read_stdin, write_stdout, write_stderr }
 import std.int { format_int }
 import std.math { add, max }
@@ -62,8 +62,10 @@ import std.real { parse_real, format_real }
 program main(args: Args) -> exit_code: Int {
     ()                 -> read_stdin       -> $input
     $input             -> trim             -> $framed
-    ($framed, "[")     -> strip_prefix     -> $after_open
-    ($after_open, "]") -> strip_suffix     -> $inner
+    ($framed, "[")     -> strip_prefix     -> $after_open_fault
+    $after_open_fault  -> expect           -> $after_open
+    ($after_open, "]") -> strip_suffix     -> $inner_fault
+    $inner_fault       -> expect           -> $inner
     ($inner, ",")      -> split_on         -> $raw_tokens
     $raw_tokens        -> map trim         -> $tokens
     $tokens            -> filter not_empty -> $nonempty

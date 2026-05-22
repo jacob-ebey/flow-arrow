@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -7,6 +8,7 @@ mod codegen;
 mod diagnostic;
 mod fmt;
 mod lexer;
+mod llvm_backend;
 mod lsp;
 mod mermaid;
 mod module_resolver;
@@ -46,13 +48,8 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
     let module = parser::parse(&source)?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     typecheck::check_module_with_base(&module, base_dir)?;
-    let llvm = codegen::emit_module(&module)?;
-    let runtime_c = codegen::emit_runtime_c_with_base(&module, base_dir)?;
-
-    if let Some(out) = emit_llvm {
-        fs::write(out, &llvm)
-            .map_err(|error| format!("failed to write `{}`: {error}", out.display()))?;
-    }
+    let llvm = codegen::emit_direct_llvm_with_base(&module, base_dir)?;
+    let runtime_c = codegen::emit_runtime_support_c_with_base(&module, base_dir)?;
 
     let build_dir = build_dir(path);
     let cache_dir = build_dir.join(".cache");
@@ -60,16 +57,28 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
         .map_err(|error| format!("failed to create `{}`: {error}", cache_dir.display()))?;
     let executable_name = executable_name(path)?;
     let llvm_path = cache_dir.join("main.ll");
-    let runtime_path = cache_dir.join("runtime.c");
+    let runtime_llvm_path = cache_dir.join("runtime.ll");
+    let stale_runtime_c_path = cache_dir.join("runtime.c");
     let hash_path = cache_dir.join("build.hash");
     let executable = build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX));
-    let build_hash = format!("{:016x}", build_hash(&source, &runtime_c));
+    let build_hash = format!("{:016x}", build_hash(&llvm, &runtime_c));
 
     if executable.exists()
+        && runtime_llvm_path.exists()
+        && llvm_path.exists()
         && fs::read_to_string(&hash_path)
             .map(|cached_hash| cached_hash == build_hash)
             .unwrap_or(false)
     {
+        if let Some(out) = emit_llvm {
+            fs::copy(&llvm_path, out).map_err(|error| {
+                format!(
+                    "failed to copy emitted LLVM from `{}` to `{}`: {error}",
+                    llvm_path.display(),
+                    out.display()
+                )
+            })?;
+        }
         return Ok(BuildOutput {
             build_dir,
             executable,
@@ -78,15 +87,31 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
 
     fs::write(&llvm_path, llvm)
         .map_err(|error| format!("failed to write `{}`: {error}", llvm_path.display()))?;
-    fs::write(&runtime_path, &runtime_c)
-        .map_err(|error| format!("failed to write `{}`: {error}", runtime_path.display()))?;
+    emit_runtime_llvm(&runtime_c, &runtime_llvm_path)?;
+    if let Some(out) = emit_llvm {
+        fs::copy(&llvm_path, out).map_err(|error| {
+            format!(
+                "failed to copy emitted LLVM from `{}` to `{}`: {error}",
+                llvm_path.display(),
+                out.display()
+            )
+        })?;
+    }
+    if stale_runtime_c_path.exists() {
+        fs::remove_file(&stale_runtime_c_path).map_err(|error| {
+            format!(
+                "failed to remove stale generated C artifact `{}`: {error}",
+                stale_runtime_c_path.display()
+            )
+        })?;
+    }
 
     let mut clang = Command::new("clang");
     clang
         .arg("-O3")
         .arg("-pthread")
         .arg(&llvm_path)
-        .arg(&runtime_path);
+        .arg(&runtime_llvm_path);
     if runtime_c.contains("jpeglib.h") || runtime_c.contains("png.h") {
         for flag in cv_compiler_flags(&runtime_c)? {
             clang.arg(flag);
@@ -119,6 +144,62 @@ pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, 
         build_dir,
         executable,
     })
+}
+
+fn emit_runtime_llvm(runtime_c: &str, runtime_llvm_path: &Path) -> Result<(), String> {
+    let mut clang = Command::new("clang");
+    clang
+        .arg("-O3")
+        .arg("-pthread")
+        .arg("-x")
+        .arg("c")
+        .arg("-S")
+        .arg("-emit-llvm")
+        .arg("-o")
+        .arg(runtime_llvm_path)
+        .arg("-");
+    if runtime_c.contains("jpeglib.h") || runtime_c.contains("png.h") {
+        for flag in cv_compiler_flags(runtime_c)? {
+            clang.arg(flag);
+        }
+    }
+    if runtime_c.contains("h2o.h") {
+        for flag in http_compiler_flags()? {
+            clang.arg(flag);
+        }
+    }
+    if runtime_c.contains("sqlite3.h") {
+        for flag in sqlite_compiler_flags()? {
+            clang.arg(flag);
+        }
+    }
+
+    let mut child = clang
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to invoke clang for LLVM runtime emission: {error}"))?;
+    let runtime_c = runtime_c
+        .replace("static inline ", "inline ")
+        .replace("static ", "");
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "failed to open clang stdin".to_string())?
+        .write_all(runtime_c.as_bytes())
+        .map_err(|error| format!("failed to write generated runtime to clang stdin: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("failed to wait for clang runtime emission: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "LLVM runtime emission failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
 }
 
 pub fn typecheck_file(path: &Path) -> Result<(), String> {
@@ -192,6 +273,7 @@ fn build_hash(source: &str, runtime_c: &str) -> u64 {
     for byte in env!("CARGO_PKG_VERSION")
         .as_bytes()
         .iter()
+        .chain(b":llvm-runtime-ir-v1")
         .chain(source.as_bytes())
         .chain(runtime_c.as_bytes())
     {
@@ -948,7 +1030,8 @@ mod tests {
         assert!(build.executable.exists());
         assert!(build.build_dir.join(".cache").is_dir());
         assert!(build.build_dir.join(".cache/main.ll").exists());
-        assert!(build.build_dir.join(".cache/runtime.c").exists());
+        assert!(build.build_dir.join(".cache/runtime.ll").exists());
+        assert!(!build.build_dir.join(".cache/runtime.c").exists());
         assert!(build.build_dir.join(".cache/build.hash").exists());
         assert!(!build.build_dir.join("app").exists());
     }

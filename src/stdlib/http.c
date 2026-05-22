@@ -357,10 +357,16 @@ static bool fa_http_route(FaTuple_HttpRequest_Bytes_Bytes input) {
   FaHttpRequest request = input.f0;
   FaBytes method = input.f1;
   FaBytes path = input.f2;
-  return request.method.len == method.len
-      && memcmp(request.method.bytes, method.bytes, method.len) == 0
-      && request.path.len == path.len
-      && memcmp(request.path.bytes, path.bytes, path.len) == 0;
+  if (request.method.len != method.len || memcmp(request.method.bytes, method.bytes, method.len) != 0) {
+    return false;
+  }
+  if (request.path.len == path.len && memcmp(request.path.bytes, path.bytes, path.len) == 0) {
+    return true;
+  }
+  return path.len > 0
+      && path.bytes[0] == '/'
+      && request.path.len + 1 == path.len
+      && memcmp(request.path.bytes, path.bytes + 1, request.path.len) == 0;
 }
 
 static FaBytes fa_http_body(FaHttpRequest request) {

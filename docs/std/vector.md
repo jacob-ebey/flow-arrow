@@ -2,7 +2,7 @@
 
 `std.vector` is backed by bundled FlowArrow source instead of native
 runtime code. Importing it expands its FlowArrow nodes into the program
-under compiler-internal names, so the LLVM/C backend compiles the same
+under compiler-internal names, so the LLVM backend compiles the same
 graph structure it would compile for user-defined nodes.
 
 | Export | Input | Output | Description |

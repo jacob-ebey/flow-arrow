@@ -86,10 +86,11 @@ fn std_cv_jpeg_pipeline_decodes_grayscales_and_encodes() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let runtime_c = fs::read_to_string(app.build_dir.join(".cache/runtime.c")).expect("runtime");
-    assert!(runtime_c.contains("fa_cv_decode_jpeg"));
-    assert!(runtime_c.contains("fa_cv_encode_jpeg"));
-    assert!(runtime_c.contains("flow_node___flow_std_cv_grayscale"));
+    let runtime_llvm =
+        fs::read_to_string(app.build_dir.join(".cache/runtime.ll")).expect("runtime llvm");
+    assert!(runtime_llvm.contains("fa_cv_decode_jpeg"));
+    assert!(runtime_llvm.contains("fa_cv_encode_jpeg"));
+    assert!(!app.build_dir.join(".cache/runtime.c").exists());
 }
 
 #[test]

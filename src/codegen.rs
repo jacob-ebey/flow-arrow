@@ -1,17 +1,28 @@
 use crate::ast::*;
 use crate::module_resolver;
 use crate::stdlib::{self, RuntimeSupport};
+use inkwell::AddressSpace;
+use inkwell::IntPredicate;
+use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::builder::Builder;
+use inkwell::context::Context;
+use inkwell::module::Module as LlvmModule;
+use inkwell::types::{AnyType, BasicType, BasicTypeEnum, StructType};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
+mod llvm_stdlib;
+
+#[allow(dead_code)]
 pub fn emit_module(module: &Module) -> Result<String, String> {
-    let _ = module;
-    Ok("declare i32 @flow_unboxed_main(i32, ptr)\n\n\
-define i32 @main(i32 %argc, ptr %argv) {\n\
-  %exit = call i32 @flow_unboxed_main(i32 %argc, ptr %argv)\n\
-  ret i32 %exit\n\
-}\n"
-    .to_string())
+    crate::llvm_backend::emit_module(module)
+}
+
+pub fn emit_direct_llvm_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let codegen = TypedCodegen::new(&expanded)?;
+    DirectLlvm::emit(codegen)
 }
 
 #[allow(dead_code)]
@@ -20,9 +31,19 @@ pub fn emit_runtime_c(module: &Module) -> Result<String, String> {
     TypedCodegen::new(&expanded)?.emit()
 }
 
+#[allow(dead_code)]
 pub fn emit_runtime_c_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     TypedCodegen::new(&expanded)?.emit()
+}
+
+pub fn emit_runtime_support_c_with_base(
+    module: &Module,
+    base_dir: &Path,
+) -> Result<String, String> {
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let mut codegen = TypedCodegen::new(&expanded)?;
+    codegen.emit_runtime_support_c()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -169,6 +190,16 @@ impl<'a> TypedCodegen<'a> {
             self.types.c_type(&Ty::HttpListener);
             self.types.c_type(&Ty::HttpRequest);
             self.types.c_type(&Ty::HttpResponse);
+            self.types.c_type(&Ty::Tuple(vec![
+                Ty::HttpListener,
+                Ty::Stream(Box::new(Ty::HttpResponse)),
+            ]));
+            self.types
+                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Int]));
+            self.types
+                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Bytes]));
+            self.types
+                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Bytes, Ty::Bytes]));
             self.types
                 .c_type(&Ty::Faultable(Box::new(Ty::HttpListener)));
             self.types.c_type(&Ty::Stream(Box::new(Ty::HttpRequest)));
@@ -279,6 +310,115 @@ impl<'a> TypedCodegen<'a> {
             other => return Err(format!("program main output must be Int, found `{other}`")),
         }
         Ok(out)
+    }
+
+    fn emit_runtime_support_c(&mut self) -> Result<String, String> {
+        let mut out = String::new();
+        let uses_cv_runtime = self.uses_cv_runtime();
+        let uses_http_runtime = self.uses_http_runtime();
+        let uses_sqlite_runtime = self.uses_sqlite_runtime();
+        self.collect_runtime_support_types(uses_cv_runtime, uses_http_runtime, uses_sqlite_runtime);
+        self.types.set_use_cv_header(uses_cv_runtime);
+
+        emit_preamble(&mut out);
+        if uses_cv_runtime {
+            stdlib::emit_cv_type_h(&mut out);
+        }
+        if uses_http_runtime {
+            stdlib::emit_http_runtime_h(&mut out);
+        }
+        if uses_sqlite_runtime {
+            stdlib::emit_sqlite_runtime_h(&mut out);
+        }
+        out.push_str(&self.types.emit_typedefs());
+        out.push_str(&self.types.emit_helpers());
+        if uses_cv_runtime {
+            stdlib::emit_cv_runtime_h(&mut out);
+            stdlib::emit_cv_runtime_c(&mut out);
+        }
+        if uses_http_runtime {
+            stdlib::emit_http_runtime_c(&mut out);
+        }
+        if uses_sqlite_runtime {
+            stdlib::emit_sqlite_runtime_c(&mut out);
+        }
+        out.push_str(
+            "static int64_t fa_write_stdout(FaBytes bytes) { return fa_write_bytes(stdout, bytes); }\n\
+static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, bytes); }\n",
+        );
+        Ok(out)
+    }
+
+    fn collect_runtime_support_types(
+        &mut self,
+        uses_cv_runtime: bool,
+        uses_http_runtime: bool,
+        uses_sqlite_runtime: bool,
+    ) {
+        if uses_cv_runtime {
+            let image = cv_image_ty();
+            self.types.c_type(&image);
+            self.types.c_type(&Ty::Faultable(Box::new(image)));
+            self.types.c_type(&Ty::Faultable(Box::new(Ty::Bytes)));
+        }
+        if uses_http_runtime {
+            self.types.c_type(&Ty::HttpServerConfig);
+            self.types.c_type(&Ty::HttpListener);
+            self.types.c_type(&Ty::HttpRequest);
+            self.types.c_type(&Ty::HttpResponse);
+            self.types.c_type(&Ty::Tuple(vec![
+                Ty::HttpListener,
+                Ty::Stream(Box::new(Ty::HttpResponse)),
+            ]));
+            self.types
+                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Int]));
+            self.types
+                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Bytes]));
+            self.types
+                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Bytes, Ty::Bytes]));
+            self.types
+                .c_type(&Ty::Faultable(Box::new(Ty::HttpListener)));
+            self.types.c_type(&Ty::Stream(Box::new(Ty::HttpRequest)));
+            self.types.c_type(&Ty::Stream(Box::new(Ty::HttpResponse)));
+        }
+        if uses_sqlite_runtime {
+            self.types.c_type(&Ty::SqliteConnection);
+            self.types.c_type(&Ty::SqliteRow);
+            self.types.c_type(&Ty::SqliteValue);
+            let seq_sqlite_value = Ty::Seq(Box::new(Ty::SqliteValue));
+            let seq_sqlite_row = Ty::Seq(Box::new(Ty::SqliteRow));
+            let stream_sqlite_row = Ty::Stream(Box::new(Ty::SqliteRow));
+            let tuple_conn_bool = Ty::Tuple(vec![Ty::SqliteConnection, Ty::Bool]);
+            let tuple_conn_int = Ty::Tuple(vec![Ty::SqliteConnection, Ty::Int]);
+            let tuple_conn_bytes_params = Ty::Tuple(vec![
+                Ty::SqliteConnection,
+                Ty::Bytes,
+                seq_sqlite_value.clone(),
+            ]);
+            let tuple_conn_stream_row =
+                Ty::Tuple(vec![Ty::SqliteConnection, stream_sqlite_row.clone()]);
+            let tuple_conn_seq_row = Ty::Tuple(vec![Ty::SqliteConnection, seq_sqlite_row.clone()]);
+            let tuple_row_int = Ty::Tuple(vec![Ty::SqliteRow, Ty::Int]);
+            let tuple_row_bytes = Ty::Tuple(vec![Ty::SqliteRow, Ty::Bytes]);
+            self.types.c_type(&tuple_conn_bool);
+            self.types.c_type(&tuple_conn_int);
+            self.types.c_type(&tuple_conn_bytes_params);
+            self.types.c_type(&tuple_conn_stream_row);
+            self.types.c_type(&tuple_conn_seq_row);
+            self.types.c_type(&tuple_row_int);
+            self.types.c_type(&tuple_row_bytes);
+            self.types
+                .c_type(&Ty::Faultable(Box::new(Ty::SqliteConnection)));
+            self.types.c_type(&Ty::Faultable(Box::new(Ty::SqliteValue)));
+            self.types.c_type(&Ty::Faultable(Box::new(tuple_conn_int)));
+            self.types
+                .c_type(&Ty::Faultable(Box::new(tuple_conn_stream_row)));
+            self.types
+                .c_type(&Ty::Faultable(Box::new(tuple_conn_seq_row)));
+            self.types.c_type(&seq_sqlite_value);
+            self.types.c_type(&seq_sqlite_row);
+            self.types.c_type(&stream_sqlite_row);
+        }
     }
 
     fn uses_cv_runtime(&self) -> bool {
@@ -1330,6 +1470,9 @@ impl<'a> TypedCodegen<'a> {
                 let mut item_ty = values[0].ty.clone();
                 for value in values.iter().skip(1) {
                     item_ty = sequence_item_type(&item_ty, &value.ty)?;
+                }
+                if let Some(Ty::Seq(expected_item)) = expected {
+                    item_ty = expected_item.as_ref().clone();
                 }
                 let seq_ty = Ty::Seq(Box::new(item_ty.clone()));
                 let c_ty = self.types.c_type(&seq_ty);
@@ -4519,7 +4662,7 @@ impl<'a> TypedCodegen<'a> {
                             "empty sequence literals need a concrete type context".to_string()
                         );
                     }
-                    return Ok(input);
+                    return Ok(input_context_ty(&input, actual));
                 }
                 Err(error) => last_error = Some(error),
             }
@@ -4565,6 +4708,3986 @@ impl<'a> TypedCodegen<'a> {
         let tmp = format!("t{}", self.temp);
         self.temp += 1;
         tmp
+    }
+}
+
+#[derive(Clone)]
+struct LlvmValue<'ctx> {
+    value: BasicValueEnum<'ctx>,
+    ty: Ty,
+}
+
+struct DirectLlvm<'ctx, 'a> {
+    context: &'ctx Context,
+    module: LlvmModule<'ctx>,
+    builder: Builder<'ctx>,
+    codegen: TypedCodegen<'a>,
+    types: LlvmTypeRegistry<'ctx>,
+    functions: HashMap<String, FunctionValue<'ctx>>,
+    stream_helper: usize,
+}
+
+impl<'a> DirectLlvm<'_, 'a> {
+    fn emit(codegen: TypedCodegen<'a>) -> Result<String, String> {
+        let context = Context::create();
+        let module = context.create_module("flowarrow");
+        let builder = context.create_builder();
+        let types = LlvmTypeRegistry::new(&context);
+        let mut direct = DirectLlvm {
+            context: &context,
+            module,
+            builder,
+            codegen,
+            types,
+            functions: HashMap::new(),
+            stream_helper: 0,
+        };
+        direct.declare_callables()?;
+        direct.emit_callables()?;
+        direct.emit_entrypoint()?;
+        Ok(direct.module.print_to_string().to_string())
+    }
+}
+
+impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
+    fn declare_callables(&mut self) -> Result<(), String> {
+        let names = self.codegen.callables.keys().cloned().collect::<Vec<_>>();
+        for name in names {
+            let sig = self
+                .codegen
+                .signatures
+                .get(&name)
+                .ok_or_else(|| format!("missing signature for `{name}`"))?
+                .clone();
+            let output_ty = self.types.basic_type(&sig.output)?;
+            let input_ty = self.types.basic_type(&sig.input)?;
+            let function_ty = output_ty.fn_type(&[input_ty.into()], false);
+            let function = self
+                .module
+                .add_function(&user_fn_name(&name), function_ty, None);
+            self.functions.insert(name, function);
+        }
+        Ok(())
+    }
+
+    fn emit_callables(&mut self) -> Result<(), String> {
+        let mut names = self.codegen.callables.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        for name in names {
+            let callable = *self
+                .codegen
+                .callables
+                .get(&name)
+                .ok_or_else(|| format!("missing callable `{name}`"))?;
+            self.emit_callable(callable)?;
+        }
+        Ok(())
+    }
+
+    fn emit_callable(&mut self, callable: &Callable) -> Result<(), String> {
+        let function = *self
+            .functions
+            .get(&callable.name)
+            .ok_or_else(|| format!("missing LLVM function for `{}`", callable.name))?;
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let sig = self
+            .codegen
+            .signatures
+            .get(&callable.name)
+            .ok_or_else(|| format!("missing signature for `{}`", callable.name))?
+            .clone();
+        let input = function
+            .get_nth_param(0)
+            .ok_or_else(|| format!("missing input parameter for `{}`", callable.name))?;
+        let mut env = HashMap::new();
+        match callable.inputs.as_slice() {
+            [] => {}
+            [port] => {
+                env.insert(
+                    port.name.clone(),
+                    LlvmValue {
+                        value: input,
+                        ty: sig.input.clone(),
+                    },
+                );
+            }
+            ports => {
+                let Ty::Tuple(items) = &sig.input else {
+                    return Err(format!("callable `{}` expected tuple input", callable.name));
+                };
+                for (index, (port, ty)) in ports.iter().zip(items.iter()).enumerate() {
+                    let value = self
+                        .builder
+                        .build_extract_value(input.into_struct_value(), index as u32, &port.name)
+                        .map_err(|error| {
+                            format!(
+                                "LLVM backend failed to extract input `{}`: {error}",
+                                port.name
+                            )
+                        })?;
+                    env.insert(
+                        port.name.clone(),
+                        LlvmValue {
+                            value,
+                            ty: ty.clone(),
+                        },
+                    );
+                }
+            }
+        }
+
+        for chain in &callable.chains {
+            self.emit_chain(chain, &mut env)?;
+        }
+        let result = self.emit_outputs(callable, &env, &sig.output)?;
+        self.builder
+            .build_return(Some(&result.value))
+            .map_err(|error| {
+                format!(
+                    "LLVM backend failed to return from `{}`: {error}",
+                    callable.name
+                )
+            })?;
+        Ok(())
+    }
+
+    fn emit_outputs(
+        &mut self,
+        callable: &Callable,
+        env: &HashMap<String, LlvmValue<'ctx>>,
+        expected_ty: &Ty,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        match callable.outputs.as_slice() {
+            [] => {
+                let value = self.types.basic_type(&Ty::Unit)?.const_zero();
+                self.coerce_value_to_ty(
+                    LlvmValue {
+                        value,
+                        ty: Ty::Unit,
+                    },
+                    expected_ty,
+                )
+            }
+            [port] => {
+                let value = env
+                    .get(&port.name)
+                    .cloned()
+                    .ok_or_else(|| format!("output `{}` is not bound", port.name))?;
+                self.coerce_value_to_ty(value, expected_ty)
+            }
+            ports => {
+                let values = ports
+                    .iter()
+                    .map(|port| {
+                        env.get(&port.name)
+                            .cloned()
+                            .ok_or_else(|| format!("output `{}` is not bound", port.name))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let Ty::Tuple(expected_items) = expected_ty else {
+                    return Err(format!(
+                        "callable `{}` has multiple outputs but signature output is `{expected_ty}`",
+                        callable.name
+                    ));
+                };
+                if expected_items.len() != values.len() {
+                    return Err(format!(
+                        "callable `{}` output arity mismatch: signature has {}, callable has {}",
+                        callable.name,
+                        expected_items.len(),
+                        values.len()
+                    ));
+                }
+                let mut out = self
+                    .types
+                    .basic_type(expected_ty)?
+                    .into_struct_type()
+                    .const_zero();
+                for (index, (value, expected_item)) in
+                    values.into_iter().zip(expected_items.iter()).enumerate()
+                {
+                    let value = self.coerce_value_to_ty(value, expected_item)?;
+                    out = self
+                        .builder
+                        .build_insert_value(out, value.value, index as u32, "out")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to assemble output tuple: {error}")
+                        })?
+                        .into_struct_value();
+                }
+                Ok(LlvmValue {
+                    value: out.into(),
+                    ty: expected_ty.clone(),
+                })
+            }
+        }
+    }
+
+    fn emit_chain(
+        &mut self,
+        chain: &Chain,
+        env: &mut HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<(), String> {
+        let mut value = if endpoint_contains_empty_seq(&chain.source) {
+            if let Some(Stage::Endpoint(Endpoint::Name(name))) = chain.stages.first() {
+                let actual = self.endpoint_type(&chain.source, env)?;
+                let expected = self.codegen.call_input_type_for_value(name, &actual)?;
+                self.emit_endpoint_expected(&chain.source, env, Some(&expected))?
+            } else {
+                self.emit_endpoint(&chain.source, env)?
+            }
+        } else {
+            self.emit_endpoint(&chain.source, env)?
+        };
+        for (index, stage) in chain.stages.iter().enumerate() {
+            let is_last = index + 1 == chain.stages.len();
+            match stage {
+                Stage::Bind(target) if is_last => self.bind_target(target, value.clone(), env)?,
+                Stage::Endpoint(Endpoint::Name(name)) => {
+                    value = self.emit_call(name, value)?;
+                }
+                Stage::Map(name) => {
+                    value = self.emit_map(name, value)?;
+                }
+                Stage::Filter(name) => {
+                    value = self.emit_filter(name, value)?;
+                }
+                Stage::Reduce { op, identity } => {
+                    let identity = self.emit_endpoint(identity, env)?;
+                    value = self.emit_reduce(op, value, identity)?;
+                }
+                Stage::Scan { op, identity } => {
+                    let identity = self.emit_endpoint(identity, env)?;
+                    value = self.emit_scan(op, value, identity)?;
+                }
+                Stage::Repeat { count, node } => {
+                    let count = self.emit_endpoint(count, env)?;
+                    value = self.emit_repeat(node, value, count)?;
+                }
+                Stage::Match { arms } => {
+                    value = self.emit_match(arms, value, env)?;
+                }
+                Stage::FaultMap { node, ok, fault } => {
+                    if !is_last {
+                        return Err("`fault map` must be the final stage in a chain".to_string());
+                    }
+                    let (ok_value, fault_value) = self.emit_fault_map(node, value.clone())?;
+                    if env.insert(ok.clone(), ok_value).is_some() {
+                        return Err(format!("value `{ok}` is bound more than once"));
+                    }
+                    if env.insert(fault.clone(), fault_value).is_some() {
+                        return Err(format!("value `{fault}` is bound more than once"));
+                    }
+                }
+                Stage::Endpoint(_) => {
+                    return Err("non-name endpoints may only appear as source values".to_string());
+                }
+                Stage::Bind(_) => {
+                    return Err("binding targets may only appear as final stages".to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_endpoint(
+        &mut self,
+        endpoint: &Endpoint,
+        env: &HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        self.emit_endpoint_expected(endpoint, env, None)
+    }
+
+    fn emit_endpoint_expected(
+        &mut self,
+        endpoint: &Endpoint,
+        env: &HashMap<String, LlvmValue<'ctx>>,
+        expected: Option<&Ty>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        match endpoint {
+            Endpoint::Variable(name) => env
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("unknown value `{name}`")),
+            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
+            Endpoint::Int(value) => Ok(LlvmValue {
+                value: self
+                    .context
+                    .i64_type()
+                    .const_int(*value as u64, true)
+                    .into(),
+                ty: Ty::Int,
+            }),
+            Endpoint::Real(value) => Ok(LlvmValue {
+                value: self.context.f64_type().const_float(*value).into(),
+                ty: Ty::Real,
+            }),
+            Endpoint::Bool(value) => Ok(LlvmValue {
+                value: self
+                    .context
+                    .i8_type()
+                    .const_int(if *value { 1 } else { 0 }, false)
+                    .into(),
+                ty: Ty::Bool,
+            }),
+            Endpoint::Unit => Ok(LlvmValue {
+                value: self.types.basic_type(&Ty::Unit)?.const_zero(),
+                ty: Ty::Unit,
+            }),
+            Endpoint::Tuple(items) => {
+                let values = items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        let expected = match expected {
+                            Some(Ty::Tuple(items)) => items.get(index),
+                            _ => None,
+                        };
+                        self.emit_endpoint_expected(item, env, expected)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ty = expected.cloned().unwrap_or_else(|| {
+                    Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect())
+                });
+                let mut out = self.types.basic_type(&ty)?.into_struct_type().const_zero();
+                let Ty::Tuple(expected_items) = &ty else {
+                    return Err(format!("tuple literal expected tuple type, found `{ty}`"));
+                };
+                for (index, (value, expected_item)) in
+                    values.into_iter().zip(expected_items.iter()).enumerate()
+                {
+                    let value = self.coerce_value_to_ty(value, expected_item)?;
+                    out = self
+                        .builder
+                        .build_insert_value(out, value.value, index as u32, "tuple")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to assemble tuple literal: {error}")
+                        })?
+                        .into_struct_value();
+                }
+                Ok(LlvmValue {
+                    value: out.into(),
+                    ty,
+                })
+            }
+            Endpoint::String(_) | Endpoint::Seq(_) => {
+                self.emit_literal_endpoint_expected(endpoint, env, expected)
+            }
+            Endpoint::Eval { source, stages } => self.emit_inline_eval(source, stages, env),
+        }
+    }
+
+    fn emit_inline_eval(
+        &mut self,
+        source: &Endpoint,
+        stages: &[Stage],
+        env: &HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let mut value = if endpoint_contains_empty_seq(source) {
+            if let Some(Stage::Endpoint(Endpoint::Name(name))) = stages.first() {
+                let actual = self.endpoint_type(source, env)?;
+                let expected = self.codegen.call_input_type_for_value(name, &actual)?;
+                self.emit_endpoint_expected(source, env, Some(&expected))?
+            } else {
+                self.emit_endpoint(source, env)?
+            }
+        } else {
+            self.emit_endpoint(source, env)?
+        };
+        for stage in stages {
+            match stage {
+                Stage::Endpoint(Endpoint::Name(name)) => {
+                    value = self.emit_call(name, value)?;
+                }
+                Stage::Endpoint(Endpoint::Variable(_)) | Stage::Bind(_) => {
+                    return Err("inline evaluations cannot bind values".to_string());
+                }
+                Stage::Endpoint(_) => {
+                    return Err(
+                        "non-name endpoints may only appear as inline evaluation sources"
+                            .to_string(),
+                    );
+                }
+                Stage::Map(name) => value = self.emit_map(name, value)?,
+                Stage::FaultMap { .. } => {
+                    return Err("inline evaluations cannot use `fault map`".to_string());
+                }
+                Stage::Filter(name) => value = self.emit_filter(name, value)?,
+                Stage::Reduce { op, identity } => {
+                    let identity = self.emit_endpoint(identity, env)?;
+                    value = self.emit_reduce(op, value, identity)?;
+                }
+                Stage::Scan { op, identity } => {
+                    let identity = self.emit_endpoint(identity, env)?;
+                    value = self.emit_scan(op, value, identity)?;
+                }
+                Stage::Repeat { count, node } => {
+                    let count = self.emit_endpoint(count, env)?;
+                    value = self.emit_repeat(node, value, count)?;
+                }
+                Stage::Match { arms } => {
+                    value = self.emit_match(arms, value, env)?;
+                }
+            }
+        }
+        Ok(value)
+    }
+
+    fn emit_literal_endpoint_expected(
+        &mut self,
+        endpoint: &Endpoint,
+        env: &HashMap<String, LlvmValue<'ctx>>,
+        expected: Option<&Ty>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        match endpoint {
+            Endpoint::String(value) => {
+                let global =
+                    self.builder
+                        .build_global_string_ptr(value, "str")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to build string literal: {error}")
+                        })?;
+                let pair_ty = self.runtime_pair_type();
+                let fn_value = self.runtime_function(
+                    "fa_bytes_literal",
+                    Some(pair_ty.into()),
+                    &[
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                        self.context.i64_type().into(),
+                    ],
+                )?;
+                let len = self.context.i64_type().const_int(value.len() as u64, false);
+                let call = self
+                    .builder
+                    .build_call(
+                        fn_value,
+                        &[global.as_pointer_value().into(), len.into()],
+                        "bytes",
+                    )
+                    .map_err(|error| {
+                        format!("LLVM backend failed to call fa_bytes_literal: {error}")
+                    })?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| "fa_bytes_literal did not return a value".to_string())?;
+                let call = self.runtime_pair_to_value(call, &Ty::Bytes)?;
+                Ok(LlvmValue {
+                    value: call,
+                    ty: Ty::Bytes,
+                })
+            }
+            Endpoint::Seq(items) => {
+                if items.is_empty() {
+                    let Some(seq_ty @ Ty::Seq(_)) = expected else {
+                        return Err("empty sequence literals need a type context".to_string());
+                    };
+                    return self.emit_seq_new(seq_ty, self.context.i64_type().const_zero());
+                }
+                let values = items
+                    .iter()
+                    .map(|item| {
+                        let expected_item = match expected {
+                            Some(Ty::Seq(item)) => Some(item.as_ref()),
+                            _ => None,
+                        };
+                        self.emit_endpoint_expected(item, env, expected_item)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut item_ty = values[0].ty.clone();
+                for value in values.iter().skip(1) {
+                    item_ty = sequence_item_type(&item_ty, &value.ty)?;
+                }
+                let seq_ty = Ty::Seq(Box::new(item_ty.clone()));
+                let count = self
+                    .context
+                    .i64_type()
+                    .const_int(values.len() as u64, false);
+                let seq = self.emit_seq_new(&seq_ty, count)?;
+                for (index, value) in values.into_iter().enumerate() {
+                    let value = self.coerce_value_to_ty(value, &item_ty)?;
+                    self.store_seq_item(
+                        seq.value,
+                        &seq_ty,
+                        self.context.i64_type().const_int(index as u64, false),
+                        value.value,
+                    )?;
+                }
+                Ok(seq)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn endpoint_type(
+        &self,
+        endpoint: &Endpoint,
+        env: &HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<Ty, String> {
+        match endpoint {
+            Endpoint::Variable(name) => env
+                .get(name)
+                .map(|value| value.ty.clone())
+                .ok_or_else(|| format!("unknown value `{name}`")),
+            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
+            Endpoint::Int(_) => Ok(Ty::Int),
+            Endpoint::Real(_) => Ok(Ty::Real),
+            Endpoint::Bool(_) => Ok(Ty::Bool),
+            Endpoint::String(_) => Ok(Ty::Bytes),
+            Endpoint::Unit => Ok(Ty::Unit),
+            Endpoint::Tuple(items) => items
+                .iter()
+                .map(|item| self.endpoint_type(item, env))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Ty::Tuple),
+            Endpoint::Seq(items) => {
+                let mut item_ty = None;
+                for item in items {
+                    let ty = self.endpoint_type(item, env)?;
+                    item_ty = Some(if let Some(current) = item_ty {
+                        sequence_item_type(&current, &ty)?
+                    } else {
+                        ty
+                    });
+                }
+                Ok(item_ty
+                    .map(|ty| Ty::Seq(Box::new(ty)))
+                    .unwrap_or(Ty::EmptySeq))
+            }
+            Endpoint::Eval { source, stages } => self.inline_eval_type(source, stages, env),
+        }
+    }
+
+    fn inline_eval_type(
+        &self,
+        source: &Endpoint,
+        stages: &[Stage],
+        env: &HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<Ty, String> {
+        let mut value_ty = self.endpoint_type(source, env)?;
+        for stage in stages {
+            match stage {
+                Stage::Endpoint(Endpoint::Name(name)) => {
+                    value_ty = self.codegen.call_output_type(name, &value_ty)?;
+                }
+                Stage::Endpoint(Endpoint::Variable(_)) | Stage::Bind(_) => {
+                    return Err("inline evaluations cannot bind values".to_string());
+                }
+                Stage::Endpoint(_) => {
+                    return Err(
+                        "non-name endpoints may only appear as inline evaluation sources"
+                            .to_string(),
+                    );
+                }
+                Stage::Map(name) => {
+                    value_ty = match &value_ty {
+                        Ty::Seq(item_ty) => {
+                            Ty::Seq(Box::new(self.codegen.call_output_type(name, item_ty)?))
+                        }
+                        Ty::Stream(item_ty) => {
+                            Ty::Stream(Box::new(self.codegen.call_output_type(name, item_ty)?))
+                        }
+                        _ => return Err(format!("`map {name}` expected Seq or Stream input")),
+                    };
+                }
+                Stage::FaultMap { .. } => {
+                    return Err("inline evaluations cannot use `fault map`".to_string());
+                }
+                Stage::Filter(name) => {
+                    let Ty::Seq(item_ty) = &value_ty else {
+                        return Err(format!("`filter {name}` expected Seq input"));
+                    };
+                    let predicate_ty = self.codegen.call_output_type(name, item_ty)?;
+                    if predicate_ty != Ty::Bool {
+                        return Err(format!(
+                            "`filter {name}` predicate expected `Bool`, found `{predicate_ty}`"
+                        ));
+                    }
+                }
+                Stage::Reduce { op, identity } => {
+                    let Ty::Seq(item_ty) = &value_ty else {
+                        return Err(format!("`reduce {op}` expected Seq input"));
+                    };
+                    let identity_ty = self.endpoint_type(identity, env)?;
+                    if item_ty.as_ref() != &identity_ty {
+                        return Err(format!(
+                            "`reduce {op}` identity expected `{item_ty}`, found `{identity_ty}`"
+                        ));
+                    }
+                    value_ty = self.codegen.call_output_type(op, item_ty)?;
+                }
+                Stage::Scan { op, identity } => {
+                    let Ty::Seq(item_ty) = &value_ty else {
+                        return Err(format!("`scan {op}` expected Seq input"));
+                    };
+                    let identity_ty = self.endpoint_type(identity, env)?;
+                    if item_ty.as_ref() != &identity_ty {
+                        return Err(format!(
+                            "`scan {op}` identity expected `{item_ty}`, found `{identity_ty}`"
+                        ));
+                    }
+                }
+                Stage::Repeat { node, .. } => {
+                    value_ty = self.codegen.call_output_type(node, &value_ty)?;
+                }
+                Stage::Match { arms } => {
+                    value_ty = self.match_output_type_llvm(arms, &value_ty, env)?;
+                }
+            }
+        }
+        Ok(value_ty)
+    }
+
+    fn emit_match(
+        &mut self,
+        arms: &[MatchArm],
+        subject: LlvmValue<'ctx>,
+        env: &HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let output_ty = self.match_output_type_llvm(arms, &subject.ty, env)?;
+        let output_llvm_ty = self.types.basic_type(&output_ty)?;
+        let out_ptr = self
+            .builder
+            .build_alloca(output_llvm_ty, "match.result")
+            .map_err(|error| format!("LLVM backend failed to allocate match result: {error}"))?;
+        let function = self.current_function()?;
+        let after_block = self.context.append_basic_block(function, "match.after");
+
+        for (index, arm) in arms.iter().enumerate() {
+            let arm_block = self.context.append_basic_block(function, "match.arm");
+            let next_block = match &arm.guard {
+                MatchGuard::Fallback => {
+                    if index + 1 != arms.len() {
+                        return Err("`match` fallback arm must be last".to_string());
+                    }
+                    self.builder
+                        .build_unconditional_branch(arm_block)
+                        .map_err(|error| {
+                            format!("LLVM backend failed to branch to match fallback: {error}")
+                        })?;
+                    None
+                }
+                MatchGuard::Call { node, args } => {
+                    let next_block = self.context.append_basic_block(function, "match.next");
+                    let guard_input = self.emit_match_guard_input(subject.clone(), args, env)?;
+                    let guard = self.emit_call(node, guard_input)?;
+                    if guard.ty != Ty::Bool {
+                        return Err(format!(
+                            "match guard `{node}` result expected `Bool`, found `{}`",
+                            guard.ty
+                        ));
+                    }
+                    let guard_bit = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            guard.value.into_int_value(),
+                            self.context.i8_type().const_zero(),
+                            "match.guard",
+                        )
+                        .map_err(|error| {
+                            format!("LLVM backend failed to compare match guard: {error}")
+                        })?;
+                    self.builder
+                        .build_conditional_branch(guard_bit, arm_block, next_block)
+                        .map_err(|error| {
+                            format!("LLVM backend failed to branch on match guard: {error}")
+                        })?;
+                    Some(next_block)
+                }
+            };
+
+            self.builder.position_at_end(arm_block);
+            let value = self.emit_match_target(&arm.target, subject.clone(), env)?;
+            let value = self.coerce_value_to_ty(value, &output_ty)?;
+            self.builder
+                .build_store(out_ptr, value.value)
+                .map_err(|error| format!("LLVM backend failed to store match result: {error}"))?;
+            self.builder
+                .build_unconditional_branch(after_block)
+                .map_err(|error| format!("LLVM backend failed to leave match arm: {error}"))?;
+            if let Some(next_block) = next_block {
+                self.builder.position_at_end(next_block);
+            } else if index + 1 == arms.len() {
+                self.builder.position_at_end(after_block);
+            }
+        }
+
+        if arms.is_empty() {
+            return Err("`match` must contain at least one arm".to_string());
+        }
+        self.builder.position_at_end(after_block);
+        let result = self
+            .builder
+            .build_load(output_llvm_ty, out_ptr, "match.result")
+            .map_err(|error| format!("LLVM backend failed to load match result: {error}"))?;
+        Ok(LlvmValue {
+            value: result,
+            ty: output_ty,
+        })
+    }
+
+    fn match_output_type_llvm(
+        &self,
+        arms: &[MatchArm],
+        subject_ty: &Ty,
+        env: &HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<Ty, String> {
+        let mut output = None;
+        for arm in arms {
+            let arm_ty = match &arm.target {
+                MatchTarget::Node(node) => self.codegen.call_output_type(node, subject_ty)?,
+                MatchTarget::Value(endpoint) => self.endpoint_type(endpoint, env)?,
+            };
+            output = Some(if let Some(current) = output {
+                common_assignable_output_ty(
+                    &current,
+                    &arm_ty,
+                    &format!("match arm `{}` result", format_match_target(&arm.target)),
+                )?
+            } else {
+                arm_ty
+            });
+        }
+        output.ok_or_else(|| "`match` must contain at least one arm".to_string())
+    }
+
+    fn emit_match_target(
+        &mut self,
+        target: &MatchTarget,
+        subject: LlvmValue<'ctx>,
+        env: &HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        match target {
+            MatchTarget::Node(node) => self.emit_call(node, subject),
+            MatchTarget::Value(endpoint) => self.emit_endpoint(endpoint, env),
+        }
+    }
+
+    fn emit_match_guard_input(
+        &mut self,
+        subject: LlvmValue<'ctx>,
+        args: &[Endpoint],
+        env: &HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        if args.is_empty() {
+            return Ok(subject);
+        }
+        let mut values = Vec::with_capacity(args.len() + 1);
+        values.push(subject);
+        for arg in args {
+            values.push(self.emit_endpoint(arg, env)?);
+        }
+        let ty = Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect());
+        let mut out = self.types.basic_type(&ty)?.into_struct_type().const_zero();
+        for (index, value) in values.iter().enumerate() {
+            out = self
+                .builder
+                .build_insert_value(out, value.value, index as u32, "match.guard")
+                .map_err(|error| {
+                    format!("LLVM backend failed to build match guard input: {error}")
+                })?
+                .into_struct_value();
+        }
+        Ok(LlvmValue {
+            value: out.into(),
+            ty,
+        })
+    }
+
+    fn bind_target(
+        &mut self,
+        target: &BindingTarget,
+        value: LlvmValue<'ctx>,
+        env: &mut HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<(), String> {
+        match target {
+            BindingTarget::Discard => Ok(()),
+            BindingTarget::Variable(name) => {
+                if env.insert(name.clone(), value).is_some() {
+                    return Err(format!("value `{name}` is bound more than once"));
+                }
+                Ok(())
+            }
+            BindingTarget::Tuple(targets) => {
+                if let Ty::Faultable(inner) = value.ty.clone() {
+                    let Ty::Tuple(items) = inner.as_ref() else {
+                        return Err("tuple binding expected tuple value".to_string());
+                    };
+                    let faultable = value.value.into_struct_value();
+                    let flag = self
+                        .builder
+                        .build_extract_value(faultable, 0, "is_fault")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to extract tuple fault flag: {error}")
+                        })?
+                        .into_int_value();
+                    let fault = self
+                        .builder
+                        .build_extract_value(faultable, 1, "fault")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to extract tuple fault: {error}")
+                        })?;
+                    let inner_value = self
+                        .builder
+                        .build_extract_value(faultable, 2, "value")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to extract tuple value: {error}")
+                        })?;
+                    for (index, (target, ty)) in targets.iter().zip(items.iter()).enumerate() {
+                        if binding_target_is_discard(target) {
+                            continue;
+                        }
+                        let field = self
+                            .builder
+                            .build_extract_value(
+                                inner_value.into_struct_value(),
+                                index as u32,
+                                "field",
+                            )
+                            .map_err(|error| {
+                                format!("LLVM backend failed to extract tuple binding: {error}")
+                            })?;
+                        let wrapped = self.faultable_value_with_flag(ty, flag, fault, field)?;
+                        self.bind_target(
+                            target,
+                            LlvmValue {
+                                value: wrapped,
+                                ty: Ty::Faultable(Box::new(ty.clone())),
+                            },
+                            env,
+                        )?;
+                    }
+                    return Ok(());
+                }
+                let Ty::Tuple(items) = value.ty.clone() else {
+                    return Err("tuple binding expected tuple value".to_string());
+                };
+                for (index, (target, ty)) in targets.iter().zip(items.iter()).enumerate() {
+                    if binding_target_is_discard(target) {
+                        continue;
+                    }
+                    let field = self
+                        .builder
+                        .build_extract_value(value.value.into_struct_value(), index as u32, "field")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to extract tuple binding: {error}")
+                        })?;
+                    self.bind_target(
+                        target,
+                        LlvmValue {
+                            value: field,
+                            ty: ty.clone(),
+                        },
+                        env,
+                    )?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn emit_call(&mut self, name: &str, input: LlvmValue<'ctx>) -> Result<LlvmValue<'ctx>, String> {
+        let output_ty = self.codegen.call_output_type(name, &input.ty)?;
+        if let Some(function) = self.functions.get(name).copied() {
+            let signature = self
+                .codegen
+                .signatures
+                .get(name)
+                .ok_or_else(|| format!("missing signature for `{name}`"))?
+                .clone();
+            let result =
+                self.emit_user_function_call(name, function, &signature, input, &output_ty)?;
+            return Ok(LlvmValue {
+                value: result,
+                ty: output_ty,
+            });
+        }
+        self.emit_builtin_call(&self.codegen.canonical_name(name), input, output_ty)
+    }
+
+    fn emit_user_function_call(
+        &mut self,
+        name: &str,
+        function: FunctionValue<'ctx>,
+        signature: &Signature,
+        input: LlvmValue<'ctx>,
+        output_ty: &Ty,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if input.ty == signature.input {
+            return self
+                .builder
+                .build_call(function, &[input.value.into()], "call")
+                .map_err(|error| format!("LLVM backend failed to call `{name}`: {error}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| format!("LLVM callable `{name}` did not return a value"));
+        }
+
+        if unwrap_faultable_tuple(&input.ty)
+            .as_ref()
+            .is_some_and(|plain| plain == &signature.input)
+        {
+            let wrapped = self.coerce_faultable_tuple_to_faultable(input, &signature.input)?;
+            return self.emit_user_function_call(name, function, signature, wrapped, output_ty);
+        }
+
+        let Ty::Faultable(input_inner) = input.ty.clone() else {
+            return Err(format!(
+                "direct LLVM backend cannot pass `{}` to `{name}` expecting `{}`",
+                input.ty, signature.input
+            ));
+        };
+        if input_inner.as_ref() != &signature.input {
+            return Err(format!(
+                "direct LLVM backend cannot pass `{}` to `{name}` expecting `{}`",
+                input.ty, signature.input
+            ));
+        }
+        let Ty::Faultable(output_inner) = output_ty else {
+            return Err(format!(
+                "faultable input to `{name}` expected faultable output"
+            ));
+        };
+        let output_llvm_ty = self.types.basic_type(output_ty)?;
+        let out_ptr = self
+            .builder
+            .build_alloca(output_llvm_ty, "faultable.user_call")
+            .map_err(|error| format!("LLVM backend failed to allocate user call: {error}"))?;
+        let current = self.current_function()?;
+        let fault_block = self.context.append_basic_block(current, "user_call.fault");
+        let ok_block = self.context.append_basic_block(current, "user_call.ok");
+        let after_block = self.context.append_basic_block(current, "user_call.after");
+        let is_fault = self.extract_faultable_is_fault(input.value)?;
+        self.builder
+            .build_conditional_branch(is_fault, fault_block, ok_block)
+            .map_err(|error| {
+                format!("LLVM backend failed to branch on user call fault: {error}")
+            })?;
+
+        self.builder.position_at_end(fault_block);
+        let fault = self.extract_faultable_fault(input.value)?;
+        let faulted = self.faultable_value(output_inner, true, Some(fault), None)?;
+        self.builder
+            .build_store(out_ptr, faulted)
+            .map_err(|error| format!("LLVM backend failed to store user call fault: {error}"))?;
+        self.builder
+            .build_unconditional_branch(after_block)
+            .map_err(|error| format!("LLVM backend failed to leave user call fault: {error}"))?;
+
+        self.builder.position_at_end(ok_block);
+        let plain_input = self.extract_faultable_value(input.value)?;
+        let plain_result = self
+            .builder
+            .build_call(function, &[plain_input.into()], "call")
+            .map_err(|error| format!("LLVM backend failed to call `{name}`: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("LLVM callable `{name}` did not return a value"))?;
+        let ok = if &signature.output == output_inner.as_ref() {
+            self.faultable_value(output_inner, false, None, Some(plain_result))?
+        } else if &signature.output == output_ty {
+            plain_result
+        } else {
+            return Err(format!(
+                "direct LLVM backend cannot wrap `{}` as `{output_ty}`",
+                signature.output
+            ));
+        };
+        self.builder
+            .build_store(out_ptr, ok)
+            .map_err(|error| format!("LLVM backend failed to store user call value: {error}"))?;
+        self.builder
+            .build_unconditional_branch(after_block)
+            .map_err(|error| format!("LLVM backend failed to leave user call ok: {error}"))?;
+
+        self.builder.position_at_end(after_block);
+        self.builder
+            .build_load(output_llvm_ty, out_ptr, "user_call.result")
+            .map_err(|error| format!("LLVM backend failed to load user call result: {error}"))
+    }
+
+    fn emit_faultable_plain_builtin_call(
+        &mut self,
+        name: &str,
+        input: LlvmValue<'ctx>,
+        plain_output_ty: &Ty,
+        output_ty: &Ty,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Ty::Faultable(input_inner) = input.ty.clone() else {
+            return Err(format!(
+                "faultable builtin wrapper expected faultable input to `{name}`"
+            ));
+        };
+        let Ty::Faultable(output_inner) = output_ty else {
+            return Err(format!(
+                "faultable builtin wrapper expected faultable output from `{name}`"
+            ));
+        };
+        if output_inner.as_ref() != plain_output_ty && output_ty != plain_output_ty {
+            return Err(format!("faultable builtin `{name}` output mismatch"));
+        }
+        let output_llvm_ty = self.types.basic_type(output_ty)?;
+        let out_ptr = self
+            .builder
+            .build_alloca(output_llvm_ty, "faultable.builtin")
+            .map_err(|error| {
+                format!("LLVM backend failed to allocate faultable builtin: {error}")
+            })?;
+        let function = self.current_function()?;
+        let fault_block = self.context.append_basic_block(function, "builtin.fault");
+        let ok_block = self.context.append_basic_block(function, "builtin.ok");
+        let after_block = self.context.append_basic_block(function, "builtin.after");
+        let is_fault = self.extract_faultable_is_fault(input.value)?;
+        self.builder
+            .build_conditional_branch(is_fault, fault_block, ok_block)
+            .map_err(|error| {
+                format!("LLVM backend failed to branch on faultable builtin: {error}")
+            })?;
+
+        self.builder.position_at_end(fault_block);
+        let fault = self.extract_faultable_fault(input.value)?;
+        let faulted = self.faultable_value(output_inner, true, Some(fault), None)?;
+        self.builder
+            .build_store(out_ptr, faulted)
+            .map_err(|error| {
+                format!("LLVM backend failed to store faultable builtin fault: {error}")
+            })?;
+        self.builder
+            .build_unconditional_branch(after_block)
+            .map_err(|error| {
+                format!("LLVM backend failed to leave faultable builtin fault: {error}")
+            })?;
+
+        self.builder.position_at_end(ok_block);
+        let plain_input = self.extract_faultable_value(input.value)?;
+        let plain = self.emit_builtin_call(
+            name,
+            LlvmValue {
+                value: plain_input,
+                ty: input_inner.as_ref().clone(),
+            },
+            plain_output_ty.clone(),
+        )?;
+        let ok = if plain_output_ty == output_ty {
+            plain.value
+        } else {
+            self.faultable_value(output_inner, false, None, Some(plain.value))?
+        };
+        self.builder.build_store(out_ptr, ok).map_err(|error| {
+            format!("LLVM backend failed to store faultable builtin value: {error}")
+        })?;
+        self.builder
+            .build_unconditional_branch(after_block)
+            .map_err(|error| {
+                format!("LLVM backend failed to leave faultable builtin ok: {error}")
+            })?;
+
+        self.builder.position_at_end(after_block);
+        self.builder
+            .build_load(output_llvm_ty, out_ptr, "faultable.builtin")
+            .map_err(|error| format!("LLVM backend failed to load faultable builtin: {error}"))
+    }
+
+    fn emit_builtin_call(
+        &mut self,
+        name: &str,
+        input: LlvmValue<'ctx>,
+        output_ty: Ty,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        self.emit_stdlib_builtin_call(name, input, output_ty)
+    }
+
+    fn emit_map(&mut self, name: &str, input: LlvmValue<'ctx>) -> Result<LlvmValue<'ctx>, String> {
+        if let Ty::Faultable(inner) = input.ty.clone() {
+            let plain_output_ty = match inner.as_ref() {
+                Ty::Seq(item_ty) => {
+                    let mapped_item_ty = self.codegen.call_output_type(name, item_ty)?;
+                    Ty::Seq(Box::new(mapped_item_ty))
+                }
+                Ty::Stream(item_ty) => {
+                    let mapped_item_ty = self.codegen.call_output_type(name, item_ty)?;
+                    Ty::Stream(Box::new(mapped_item_ty))
+                }
+                _ => {
+                    return Err(format!("`map {name}` expected Seq or Stream input"));
+                }
+            };
+            let output_ty = Ty::Faultable(Box::new(plain_output_ty.clone()));
+            let output_llvm_ty = self.types.basic_type(&output_ty)?;
+            let out_ptr = self
+                .builder
+                .build_alloca(output_llvm_ty, "faultable.map")
+                .map_err(|error| {
+                    format!("LLVM backend failed to allocate faultable map: {error}")
+                })?;
+            let function = self.current_function()?;
+            let fault_block = self.context.append_basic_block(function, "map.fault");
+            let ok_block = self.context.append_basic_block(function, "map.ok");
+            let after_block = self.context.append_basic_block(function, "map.after");
+            let is_fault = self.extract_faultable_is_fault(input.value)?;
+            self.builder
+                .build_conditional_branch(is_fault, fault_block, ok_block)
+                .map_err(|error| {
+                    format!("LLVM backend failed to branch on faultable map: {error}")
+                })?;
+            self.builder.position_at_end(fault_block);
+            let fault = self.extract_faultable_fault(input.value)?;
+            let faulted = self.faultable_value(&plain_output_ty, true, Some(fault), None)?;
+            self.builder
+                .build_store(out_ptr, faulted)
+                .map_err(|error| {
+                    format!("LLVM backend failed to store faultable map fault: {error}")
+                })?;
+            self.builder
+                .build_unconditional_branch(after_block)
+                .map_err(|error| {
+                    format!("LLVM backend failed to leave faultable map fault: {error}")
+                })?;
+            self.builder.position_at_end(ok_block);
+            let plain_input = self.extract_faultable_value(input.value)?;
+            let mapped = self.emit_map(
+                name,
+                LlvmValue {
+                    value: plain_input,
+                    ty: inner.as_ref().clone(),
+                },
+            )?;
+            let ok = self.faultable_value(&plain_output_ty, false, None, Some(mapped.value))?;
+            self.builder.build_store(out_ptr, ok).map_err(|error| {
+                format!("LLVM backend failed to store faultable map value: {error}")
+            })?;
+            self.builder
+                .build_unconditional_branch(after_block)
+                .map_err(|error| {
+                    format!("LLVM backend failed to leave faultable map ok: {error}")
+                })?;
+            self.builder.position_at_end(after_block);
+            let value = self
+                .builder
+                .build_load(output_llvm_ty, out_ptr, "map.result")
+                .map_err(|error| {
+                    format!("LLVM backend failed to load faultable map result: {error}")
+                })?;
+            return Ok(LlvmValue {
+                value,
+                ty: output_ty,
+            });
+        }
+        if let Ty::Stream(item_ty) = input.ty.clone() {
+            let output_item_ty = self.codegen.call_output_type(name, &item_ty)?;
+            let output_ty = Ty::Stream(Box::new(output_item_ty.clone()));
+            let function = self.functions.get(name).copied().ok_or_else(|| {
+                format!("direct LLVM backend cannot map stream with builtin `{name}`")
+            })?;
+            let output_item_llvm_ty = self.types.basic_type(&output_item_ty)?;
+            let mut item_size = output_item_llvm_ty.size_of().ok_or_else(|| {
+                format!("LLVM backend cannot compute stream item size for `{name}`")
+            })?;
+            if item_size.get_type().get_bit_width() != 64 {
+                item_size = self
+                    .builder
+                    .build_int_z_extend(item_size, self.context.i64_type(), "stream.item_size")
+                    .map_err(|error| {
+                        format!("LLVM backend failed to extend stream item size: {error}")
+                    })?;
+            }
+            let stream_ty = self.types.basic_type(&output_ty)?;
+            let out_ptr = self
+                .builder
+                .build_alloca(stream_ty, "stream.map")
+                .map_err(|error| format!("LLVM backend failed to allocate stream map: {error}"))?;
+            let stream = input.value.into_struct_value();
+            let next = self
+                .builder
+                .build_extract_value(stream, 5, "stream.next")
+                .map_err(|error| format!("LLVM backend failed to extract stream next: {error}"))?
+                .into_pointer_value();
+            let has_next = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    next,
+                    self.context.ptr_type(AddressSpace::default()).const_null(),
+                    "stream.has_next",
+                )
+                .map_err(|error| format!("LLVM backend failed to test stream next: {error}"))?;
+            let current = self.current_function()?;
+            let pull_block = self.context.append_basic_block(current, "stream.map_pull");
+            let direct_block = self
+                .context
+                .append_basic_block(current, "stream.map_direct");
+            let after_block = self.context.append_basic_block(current, "stream.map_after");
+            self.builder
+                .build_conditional_branch(has_next, pull_block, direct_block)
+                .map_err(|error| format!("LLVM backend failed to branch on stream map: {error}"))?;
+
+            self.builder.position_at_end(pull_block);
+            let (next_fn, close_fn, ctx_ty) =
+                self.emit_stream_map_helper(name, &item_ty, &output_item_ty)?;
+            let ctx_size = ctx_ty
+                .size_of()
+                .ok_or_else(|| "LLVM backend cannot compute stream map context size".to_string())?;
+            let calloc = self.runtime_function(
+                "calloc",
+                Some(self.context.ptr_type(AddressSpace::default()).into()),
+                &[
+                    self.context.i64_type().into(),
+                    self.context.i64_type().into(),
+                ],
+            )?;
+            let ctx = self
+                .builder
+                .build_call(
+                    calloc,
+                    &[
+                        self.context.i64_type().const_int(1, false).into(),
+                        ctx_size.into(),
+                    ],
+                    "stream.ctx",
+                )
+                .map_err(|error| {
+                    format!("LLVM backend failed to allocate stream context: {error}")
+                })?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| "calloc did not return a value".to_string())?
+                .into_pointer_value();
+            let upstream_ptr = self
+                .builder
+                .build_struct_gep(ctx_ty, ctx, 0, "stream.upstream")
+                .map_err(|error| {
+                    format!("LLVM backend failed to build stream context gep: {error}")
+                })?;
+            self.builder
+                .build_store(upstream_ptr, input.value)
+                .map_err(|error| {
+                    format!("LLVM backend failed to store stream upstream: {error}")
+                })?;
+            let mut mapped_pull = stream;
+            mapped_pull = self
+                .builder
+                .build_insert_value(mapped_pull, ctx, 3, "stream.state")
+                .map_err(|error| format!("LLVM backend failed to set stream state: {error}"))?
+                .into_struct_value();
+            mapped_pull = self
+                .builder
+                .build_insert_value(
+                    mapped_pull,
+                    self.context.ptr_type(AddressSpace::default()).const_null(),
+                    4,
+                    "stream.map_fn",
+                )
+                .map_err(|error| format!("LLVM backend failed to clear stream map fn: {error}"))?
+                .into_struct_value();
+            mapped_pull = self
+                .builder
+                .build_insert_value(
+                    mapped_pull,
+                    next_fn.as_global_value().as_pointer_value(),
+                    5,
+                    "stream.next",
+                )
+                .map_err(|error| format!("LLVM backend failed to set stream next: {error}"))?
+                .into_struct_value();
+            mapped_pull = self
+                .builder
+                .build_insert_value(
+                    mapped_pull,
+                    close_fn.as_global_value().as_pointer_value(),
+                    6,
+                    "stream.close",
+                )
+                .map_err(|error| format!("LLVM backend failed to set stream close: {error}"))?
+                .into_struct_value();
+            mapped_pull = self
+                .builder
+                .build_insert_value(mapped_pull, item_size, 7, "stream.item_size")
+                .map_err(|error| format!("LLVM backend failed to set stream item size: {error}"))?
+                .into_struct_value();
+            mapped_pull = self
+                .builder
+                .build_insert_value(
+                    mapped_pull,
+                    self.context.i8_type().const_zero(),
+                    8,
+                    "stream.closed",
+                )
+                .map_err(|error| format!("LLVM backend failed to set stream closed: {error}"))?
+                .into_struct_value();
+            self.builder
+                .build_store(out_ptr, mapped_pull)
+                .map_err(|error| {
+                    format!("LLVM backend failed to store pull stream map: {error}")
+                })?;
+            self.builder
+                .build_unconditional_branch(after_block)
+                .map_err(|error| {
+                    format!("LLVM backend failed to leave pull stream map: {error}")
+                })?;
+
+            self.builder.position_at_end(direct_block);
+            let function =
+                self.stream_direct_map_function(name, &item_ty, &output_item_ty, function)?;
+            let mut mapped_direct = stream;
+            mapped_direct = self
+                .builder
+                .build_insert_value(
+                    mapped_direct,
+                    function.as_global_value().as_pointer_value(),
+                    4,
+                    "stream.map_fn",
+                )
+                .map_err(|error| format!("LLVM backend failed to attach stream map fn: {error}"))?
+                .into_struct_value();
+            mapped_direct = self
+                .builder
+                .build_insert_value(mapped_direct, item_size, 7, "stream.item_size")
+                .map_err(|error| format!("LLVM backend failed to set stream item size: {error}"))?
+                .into_struct_value();
+            self.builder
+                .build_store(out_ptr, mapped_direct)
+                .map_err(|error| {
+                    format!("LLVM backend failed to store direct stream map: {error}")
+                })?;
+            self.builder
+                .build_unconditional_branch(after_block)
+                .map_err(|error| {
+                    format!("LLVM backend failed to leave direct stream map: {error}")
+                })?;
+            self.builder.position_at_end(after_block);
+            let stream = self
+                .builder
+                .build_load(stream_ty, out_ptr, "stream.map")
+                .map_err(|error| format!("LLVM backend failed to load stream map: {error}"))?;
+            return Ok(LlvmValue {
+                value: stream,
+                ty: output_ty,
+            });
+        }
+
+        let Ty::Seq(item_ty) = input.ty.clone() else {
+            return Err(format!("`map {name}` expected Seq input"));
+        };
+        let output_item_ty = self.codegen.call_output_type(name, &item_ty)?;
+        let output_ty = Ty::Seq(Box::new(output_item_ty.clone()));
+        let count = self.seq_count(input.value)?;
+        let output = self.emit_seq_new(&output_ty, count)?;
+
+        let function = self.current_function()?;
+        let loop_block = self.context.append_basic_block(function, "map.loop");
+        let body_block = self.context.append_basic_block(function, "map.body");
+        let after_block = self.context.append_basic_block(function, "map.after");
+        let i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "i")
+            .map_err(|error| format!("LLVM backend failed to allocate map index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, self.context.i64_type().const_zero())
+            .map_err(|error| format!("LLVM backend failed to initialize map index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to branch to map loop: {error}"))?;
+
+        self.builder.position_at_end(loop_block);
+        let i = self
+            .builder
+            .build_load(self.context.i64_type(), i_ptr, "i")
+            .map_err(|error| format!("LLVM backend failed to load map index: {error}"))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, count, "map.cond")
+            .map_err(|error| format!("LLVM backend failed to compare map index: {error}"))?;
+        self.builder
+            .build_conditional_branch(cond, body_block, after_block)
+            .map_err(|error| format!("LLVM backend failed to branch in map loop: {error}"))?;
+
+        self.builder.position_at_end(body_block);
+        let item = self.load_seq_item(input.value, &input.ty, i)?;
+        let mapped = self.emit_call(
+            name,
+            LlvmValue {
+                value: item,
+                ty: item_ty.as_ref().clone(),
+            },
+        )?;
+        self.store_seq_item(output.value, &output_ty, i, mapped.value)?;
+        let next = self
+            .builder
+            .build_int_add(i, self.context.i64_type().const_int(1, false), "next")
+            .map_err(|error| format!("LLVM backend failed to increment map index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, next)
+            .map_err(|error| format!("LLVM backend failed to store map index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to continue map loop: {error}"))?;
+
+        self.builder.position_at_end(after_block);
+        Ok(output)
+    }
+
+    fn stream_direct_map_function(
+        &mut self,
+        name: &str,
+        input_item_ty: &Ty,
+        output_item_ty: &Ty,
+        function: FunctionValue<'ctx>,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        if !matches!(input_item_ty, Ty::HttpRequest) || !matches!(output_item_ty, Ty::HttpResponse)
+        {
+            return Ok(function);
+        }
+
+        let wrapper_id = self.stream_helper;
+        self.stream_helper += 1;
+        let wrapper_name = format!("flow_http_handler_{wrapper_id}");
+        if let Some(existing) = self.module.get_function(&wrapper_name) {
+            return Ok(existing);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let wrapper_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let wrapper = self.module.add_function(&wrapper_name, wrapper_ty, None);
+        let output_ty = self.types.basic_type(output_item_ty)?;
+        let sret = self.context.create_type_attribute(
+            Attribute::get_named_enum_kind_id("sret"),
+            output_ty.as_any_type_enum(),
+        );
+        wrapper.add_attribute(AttributeLoc::Param(0), sret);
+        let restore_block = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(wrapper, "entry");
+        self.builder.position_at_end(entry);
+
+        let out_ptr = wrapper
+            .get_nth_param(0)
+            .ok_or_else(|| "HTTP handler wrapper missing output pointer".to_string())?
+            .into_pointer_value();
+        let input_ptr = wrapper
+            .get_nth_param(1)
+            .ok_or_else(|| "HTTP handler wrapper missing input pointer".to_string())?
+            .into_pointer_value();
+        let input_ty = self.types.basic_type(input_item_ty)?;
+        let input = self
+            .builder
+            .build_load(input_ty, input_ptr, "http.request")
+            .map_err(|error| format!("LLVM backend failed to load HTTP request: {error}"))?;
+        let output = self
+            .builder
+            .build_call(function, &[input.into()], "http.response")
+            .map_err(|error| format!("LLVM backend failed to call HTTP handler `{name}`: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("HTTP handler `{name}` did not return a value"))?;
+        let output = self.coerce_value_to_ty(
+            LlvmValue {
+                value: output,
+                ty: self.codegen.call_output_type(name, input_item_ty)?,
+            },
+            output_item_ty,
+        )?;
+        self.builder
+            .build_store(out_ptr, output.value)
+            .map_err(|error| format!("LLVM backend failed to store HTTP response: {error}"))?;
+        self.builder
+            .build_return(None)
+            .map_err(|error| format!("LLVM backend failed to return HTTP wrapper: {error}"))?;
+
+        if let Some(block) = restore_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(wrapper)
+    }
+
+    fn emit_stream_map_helper(
+        &mut self,
+        name: &str,
+        input_item_ty: &Ty,
+        output_item_ty: &Ty,
+    ) -> Result<(FunctionValue<'ctx>, FunctionValue<'ctx>, StructType<'ctx>), String> {
+        let helper_id = self.stream_helper;
+        self.stream_helper += 1;
+        let helper = format!("flow_stream_map_{helper_id}");
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_ty = self.context.i32_type();
+        let stream_ty = self
+            .types
+            .basic_type(&Ty::Stream(Box::new(input_item_ty.clone())))?
+            .into_struct_type();
+        let ctx_ty = self.context.struct_type(&[stream_ty.into()], false);
+        let next_ty = i32_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let close_ty = i32_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let next_fn = self
+            .module
+            .add_function(&format!("{helper}_next"), next_ty, None);
+        let close_fn = self
+            .module
+            .add_function(&format!("{helper}_close"), close_ty, None);
+        let mapped = *self
+            .functions
+            .get(name)
+            .ok_or_else(|| format!("missing stream map function `{name}`"))?;
+        let restore_block = self.builder.get_insert_block();
+
+        let entry = self.context.append_basic_block(next_fn, "entry");
+        let no_next_block = self.context.append_basic_block(next_fn, "no_next");
+        let call_block = self.context.append_basic_block(next_fn, "call_next");
+        let map_block = self.context.append_basic_block(next_fn, "map");
+        let done_block = self.context.append_basic_block(next_fn, "done");
+        self.builder.position_at_end(entry);
+        let ctx = next_fn
+            .get_nth_param(0)
+            .ok_or_else(|| "stream map next missing ctx".to_string())?
+            .into_pointer_value();
+        let out_item = next_fn
+            .get_nth_param(1)
+            .ok_or_else(|| "stream map next missing output".to_string())?
+            .into_pointer_value();
+        let fault = next_fn
+            .get_nth_param(2)
+            .ok_or_else(|| "stream map next missing fault".to_string())?
+            .into_pointer_value();
+        let upstream_ptr = self
+            .builder
+            .build_struct_gep(ctx_ty, ctx, 0, "upstream.ptr")
+            .map_err(|error| format!("LLVM backend failed to gep stream upstream: {error}"))?;
+        let upstream = self
+            .builder
+            .build_load(stream_ty, upstream_ptr, "upstream")
+            .map_err(|error| format!("LLVM backend failed to load stream upstream: {error}"))?
+            .into_struct_value();
+        let upstream_next = self
+            .builder
+            .build_extract_value(upstream, 5, "upstream.next")
+            .map_err(|error| format!("LLVM backend failed to extract stream next: {error}"))?
+            .into_pointer_value();
+        let has_next = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                upstream_next,
+                ptr_ty.const_null(),
+                "has_next",
+            )
+            .map_err(|error| format!("LLVM backend failed to test stream next: {error}"))?;
+        self.builder
+            .build_conditional_branch(has_next, call_block, no_next_block)
+            .map_err(|error| format!("LLVM backend failed to branch in stream next: {error}"))?;
+
+        self.builder.position_at_end(no_next_block);
+        self.builder
+            .build_return(Some(&i32_ty.const_zero()))
+            .map_err(|error| format!("LLVM backend failed to return stream no-next: {error}"))?;
+
+        self.builder.position_at_end(call_block);
+        let input_llvm_ty = self.types.basic_type(input_item_ty)?;
+        let input_ptr = self
+            .builder
+            .build_alloca(input_llvm_ty, "input_item")
+            .map_err(|error| {
+                format!("LLVM backend failed to allocate stream input item: {error}")
+            })?;
+        let upstream_state = self
+            .builder
+            .build_extract_value(upstream, 3, "upstream.state")
+            .map_err(|error| format!("LLVM backend failed to extract stream state: {error}"))?
+            .into_pointer_value();
+        let status = self
+            .builder
+            .build_indirect_call(
+                next_ty,
+                upstream_next,
+                &[upstream_state.into(), input_ptr.into(), fault.into()],
+                "upstream.status",
+            )
+            .map_err(|error| format!("LLVM backend failed to call upstream stream: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "stream next did not return a value".to_string())?
+            .into_int_value();
+        let ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::SGT,
+                status,
+                i32_ty.const_zero(),
+                "stream.next_ok",
+            )
+            .map_err(|error| format!("LLVM backend failed to test stream status: {error}"))?;
+        self.builder
+            .build_conditional_branch(ok, map_block, done_block)
+            .map_err(|error| format!("LLVM backend failed to branch on stream status: {error}"))?;
+
+        self.builder.position_at_end(map_block);
+        let input_item = self
+            .builder
+            .build_load(input_llvm_ty, input_ptr, "input_item")
+            .map_err(|error| format!("LLVM backend failed to load stream input item: {error}"))?;
+        let output = self
+            .builder
+            .build_call(mapped, &[input_item.into()], "mapped_item")
+            .map_err(|error| {
+                format!("LLVM backend failed to call stream mapper `{name}`: {error}")
+            })?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("stream mapper `{name}` did not return a value"))?;
+        let output = self.coerce_value_to_ty(
+            LlvmValue {
+                value: output,
+                ty: self.codegen.call_output_type(name, input_item_ty)?,
+            },
+            output_item_ty,
+        )?;
+        self.builder
+            .build_store(out_item, output.value)
+            .map_err(|error| format!("LLVM backend failed to store mapped stream item: {error}"))?;
+        self.builder
+            .build_return(Some(&i32_ty.const_int(1, false)))
+            .map_err(|error| {
+                format!("LLVM backend failed to return mapped stream status: {error}")
+            })?;
+
+        self.builder.position_at_end(done_block);
+        self.builder
+            .build_return(Some(&status))
+            .map_err(|error| format!("LLVM backend failed to return stream status: {error}"))?;
+
+        let close_entry = self.context.append_basic_block(close_fn, "entry");
+        let close_call = self.context.append_basic_block(close_fn, "call");
+        let close_done = self.context.append_basic_block(close_fn, "done");
+        self.builder.position_at_end(close_entry);
+        let ctx = close_fn
+            .get_nth_param(0)
+            .ok_or_else(|| "stream map close missing ctx".to_string())?
+            .into_pointer_value();
+        let fault = close_fn
+            .get_nth_param(1)
+            .ok_or_else(|| "stream map close missing fault".to_string())?
+            .into_pointer_value();
+        let upstream_ptr = self
+            .builder
+            .build_struct_gep(ctx_ty, ctx, 0, "upstream.ptr")
+            .map_err(|error| format!("LLVM backend failed to gep close upstream: {error}"))?;
+        let upstream = self
+            .builder
+            .build_load(stream_ty, upstream_ptr, "upstream")
+            .map_err(|error| format!("LLVM backend failed to load close upstream: {error}"))?
+            .into_struct_value();
+        let upstream_close = self
+            .builder
+            .build_extract_value(upstream, 6, "upstream.close")
+            .map_err(|error| format!("LLVM backend failed to extract stream close: {error}"))?
+            .into_pointer_value();
+        let has_close = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                upstream_close,
+                ptr_ty.const_null(),
+                "has_close",
+            )
+            .map_err(|error| format!("LLVM backend failed to test stream close: {error}"))?;
+        self.builder
+            .build_conditional_branch(has_close, close_call, close_done)
+            .map_err(|error| format!("LLVM backend failed to branch in stream close: {error}"))?;
+        self.builder.position_at_end(close_call);
+        let upstream_state = self
+            .builder
+            .build_extract_value(upstream, 3, "upstream.state")
+            .map_err(|error| format!("LLVM backend failed to extract close state: {error}"))?
+            .into_pointer_value();
+        let status = self
+            .builder
+            .build_indirect_call(
+                close_ty,
+                upstream_close,
+                &[upstream_state.into(), fault.into()],
+                "upstream.close_status",
+            )
+            .map_err(|error| format!("LLVM backend failed to call upstream close: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "stream close did not return a value".to_string())?;
+        self.builder.build_return(Some(&status)).map_err(|error| {
+            format!("LLVM backend failed to return stream close status: {error}")
+        })?;
+        self.builder.position_at_end(close_done);
+        self.builder
+            .build_return(Some(&i32_ty.const_zero()))
+            .map_err(|error| format!("LLVM backend failed to return stream close done: {error}"))?;
+
+        if let Some(block) = restore_block {
+            self.builder.position_at_end(block);
+        }
+        Ok((next_fn, close_fn, ctx_ty))
+    }
+
+    fn emit_filter(
+        &mut self,
+        name: &str,
+        input: LlvmValue<'ctx>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        if let Ty::Faultable(inner) = input.ty.clone() {
+            let Ty::Seq(_) = inner.as_ref() else {
+                return Err(format!("`filter {name}` expected Seq input"));
+            };
+            let output_ty = Ty::Faultable(inner.clone());
+            let output_llvm_ty = self.types.basic_type(&output_ty)?;
+            let out_ptr = self
+                .builder
+                .build_alloca(output_llvm_ty, "faultable.filter")
+                .map_err(|error| {
+                    format!("LLVM backend failed to allocate faultable filter: {error}")
+                })?;
+            let function = self.current_function()?;
+            let fault_block = self.context.append_basic_block(function, "filter.fault");
+            let ok_block = self.context.append_basic_block(function, "filter.ok");
+            let after_block = self.context.append_basic_block(function, "filter.after");
+            let is_fault = self.extract_faultable_is_fault(input.value)?;
+            self.builder
+                .build_conditional_branch(is_fault, fault_block, ok_block)
+                .map_err(|error| {
+                    format!("LLVM backend failed to branch on faultable filter: {error}")
+                })?;
+
+            self.builder.position_at_end(fault_block);
+            let fault = self.extract_faultable_fault(input.value)?;
+            let faulted = self.faultable_value(inner.as_ref(), true, Some(fault), None)?;
+            self.builder
+                .build_store(out_ptr, faulted)
+                .map_err(|error| {
+                    format!("LLVM backend failed to store faultable filter fault: {error}")
+                })?;
+            self.builder
+                .build_unconditional_branch(after_block)
+                .map_err(|error| {
+                    format!("LLVM backend failed to leave faultable filter fault: {error}")
+                })?;
+
+            self.builder.position_at_end(ok_block);
+            let plain_input = self.extract_faultable_value(input.value)?;
+            let filtered = self.emit_filter(
+                name,
+                LlvmValue {
+                    value: plain_input,
+                    ty: inner.as_ref().clone(),
+                },
+            )?;
+            let ok = self.faultable_value(inner.as_ref(), false, None, Some(filtered.value))?;
+            self.builder.build_store(out_ptr, ok).map_err(|error| {
+                format!("LLVM backend failed to store faultable filter value: {error}")
+            })?;
+            self.builder
+                .build_unconditional_branch(after_block)
+                .map_err(|error| {
+                    format!("LLVM backend failed to leave faultable filter ok: {error}")
+                })?;
+
+            self.builder.position_at_end(after_block);
+            let value = self
+                .builder
+                .build_load(output_llvm_ty, out_ptr, "filter.result")
+                .map_err(|error| {
+                    format!("LLVM backend failed to load faultable filter result: {error}")
+                })?;
+            return Ok(LlvmValue {
+                value,
+                ty: output_ty,
+            });
+        }
+        let Ty::Seq(item_ty) = input.ty.clone() else {
+            return Err(format!("`filter {name}` expected Seq input"));
+        };
+        let predicate_ty = self.codegen.call_output_type(name, item_ty.as_ref())?;
+        if predicate_ty != Ty::Bool {
+            return Err(format!(
+                "`filter {name}` predicate expected Bool, found `{predicate_ty}`"
+            ));
+        }
+        let output_ty = input.ty.clone();
+        let count = self.seq_count(input.value)?;
+        let output = self.emit_seq_new(&output_ty, count)?;
+
+        let function = self.current_function()?;
+        let loop_block = self.context.append_basic_block(function, "filter.loop");
+        let body_block = self.context.append_basic_block(function, "filter.body");
+        let keep_block = self.context.append_basic_block(function, "filter.keep");
+        let skip_block = self.context.append_basic_block(function, "filter.skip");
+        let after_block = self.context.append_basic_block(function, "filter.after");
+        let i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "i")
+            .map_err(|error| format!("LLVM backend failed to allocate filter index: {error}"))?;
+        let out_i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "out_i")
+            .map_err(|error| {
+                format!("LLVM backend failed to allocate filter output index: {error}")
+            })?;
+        self.builder
+            .build_store(i_ptr, self.context.i64_type().const_zero())
+            .map_err(|error| format!("LLVM backend failed to initialize filter index: {error}"))?;
+        self.builder
+            .build_store(out_i_ptr, self.context.i64_type().const_zero())
+            .map_err(|error| {
+                format!("LLVM backend failed to initialize filter output index: {error}")
+            })?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to branch to filter loop: {error}"))?;
+
+        self.builder.position_at_end(loop_block);
+        let i = self
+            .builder
+            .build_load(self.context.i64_type(), i_ptr, "i")
+            .map_err(|error| format!("LLVM backend failed to load filter index: {error}"))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, count, "filter.cond")
+            .map_err(|error| format!("LLVM backend failed to compare filter index: {error}"))?;
+        self.builder
+            .build_conditional_branch(cond, body_block, after_block)
+            .map_err(|error| format!("LLVM backend failed to branch in filter loop: {error}"))?;
+
+        self.builder.position_at_end(body_block);
+        let item = self.load_seq_item(input.value, &input.ty, i)?;
+        let keep = self.emit_call(
+            name,
+            LlvmValue {
+                value: item,
+                ty: item_ty.as_ref().clone(),
+            },
+        )?;
+        let keep = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                keep.value.into_int_value(),
+                self.context.i8_type().const_zero(),
+                "keep",
+            )
+            .map_err(|error| format!("LLVM backend failed to compare filter predicate: {error}"))?;
+        self.builder
+            .build_conditional_branch(keep, keep_block, skip_block)
+            .map_err(|error| {
+                format!("LLVM backend failed to branch on filter predicate: {error}")
+            })?;
+
+        self.builder.position_at_end(keep_block);
+        let out_i = self
+            .builder
+            .build_load(self.context.i64_type(), out_i_ptr, "out_i")
+            .map_err(|error| format!("LLVM backend failed to load filter output index: {error}"))?
+            .into_int_value();
+        self.store_seq_item(output.value, &output_ty, out_i, item)?;
+        let next_out_i = self
+            .builder
+            .build_int_add(
+                out_i,
+                self.context.i64_type().const_int(1, false),
+                "next_out",
+            )
+            .map_err(|error| format!("LLVM backend failed to increment filter output: {error}"))?;
+        self.builder
+            .build_store(out_i_ptr, next_out_i)
+            .map_err(|error| {
+                format!("LLVM backend failed to store filter output index: {error}")
+            })?;
+        self.builder
+            .build_unconditional_branch(skip_block)
+            .map_err(|error| format!("LLVM backend failed to leave filter keep: {error}"))?;
+
+        self.builder.position_at_end(skip_block);
+        let next_i = self
+            .builder
+            .build_int_add(i, self.context.i64_type().const_int(1, false), "next")
+            .map_err(|error| format!("LLVM backend failed to increment filter index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, next_i)
+            .map_err(|error| format!("LLVM backend failed to store filter index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to continue filter loop: {error}"))?;
+
+        self.builder.position_at_end(after_block);
+        let out_count = self
+            .builder
+            .build_load(self.context.i64_type(), out_i_ptr, "out_count")
+            .map_err(|error| format!("LLVM backend failed to load filter count: {error}"))?;
+        let filtered = self
+            .builder
+            .build_insert_value(output.value.into_struct_value(), out_count, 0, "filtered")
+            .map_err(|error| format!("LLVM backend failed to set filter count: {error}"))?;
+        Ok(LlvmValue {
+            value: filtered.as_basic_value_enum(),
+            ty: output_ty,
+        })
+    }
+
+    fn emit_fault_map(
+        &mut self,
+        name: &str,
+        input: LlvmValue<'ctx>,
+    ) -> Result<(LlvmValue<'ctx>, LlvmValue<'ctx>), String> {
+        let Ty::Seq(item_ty) = input.ty.clone() else {
+            return Err(format!("`fault map {name}` expected Seq input"));
+        };
+        let output_item_ty = self.codegen.call_output_type(name, item_ty.as_ref())?;
+        let Ty::Faultable(ok_item_ty) = output_item_ty else {
+            return Err(format!("`fault map {name}` expected faultable output"));
+        };
+        let ok_ty = Ty::Seq(ok_item_ty.clone());
+        let fault_ty = Ty::Seq(Box::new(Ty::Fault));
+        let count = self.seq_count(input.value)?;
+        let ok_seq = self.emit_seq_new(&ok_ty, count)?;
+        let fault_seq = self.emit_seq_new(&fault_ty, count)?;
+
+        let function = self.current_function()?;
+        let loop_block = self.context.append_basic_block(function, "fault_map.loop");
+        let body_block = self.context.append_basic_block(function, "fault_map.body");
+        let fault_block = self.context.append_basic_block(function, "fault_map.fault");
+        let ok_block = self.context.append_basic_block(function, "fault_map.ok");
+        let next_block = self.context.append_basic_block(function, "fault_map.next");
+        let after_block = self.context.append_basic_block(function, "fault_map.after");
+        let i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "i")
+            .map_err(|error| format!("LLVM backend failed to allocate fault map index: {error}"))?;
+        let ok_i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "ok_i")
+            .map_err(|error| {
+                format!("LLVM backend failed to allocate fault map ok index: {error}")
+            })?;
+        let fault_i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "fault_i")
+            .map_err(|error| {
+                format!("LLVM backend failed to allocate fault map fault index: {error}")
+            })?;
+        for ptr in [i_ptr, ok_i_ptr, fault_i_ptr] {
+            self.builder
+                .build_store(ptr, self.context.i64_type().const_zero())
+                .map_err(|error| {
+                    format!("LLVM backend failed to initialize fault map index: {error}")
+                })?;
+        }
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to branch to fault map loop: {error}"))?;
+
+        self.builder.position_at_end(loop_block);
+        let i = self
+            .builder
+            .build_load(self.context.i64_type(), i_ptr, "i")
+            .map_err(|error| format!("LLVM backend failed to load fault map index: {error}"))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, count, "fault_map.cond")
+            .map_err(|error| format!("LLVM backend failed to compare fault map index: {error}"))?;
+        self.builder
+            .build_conditional_branch(cond, body_block, after_block)
+            .map_err(|error| format!("LLVM backend failed to branch in fault map loop: {error}"))?;
+
+        self.builder.position_at_end(body_block);
+        let item = self.load_seq_item(input.value, &input.ty, i)?;
+        let result = self.emit_call(
+            name,
+            LlvmValue {
+                value: item,
+                ty: item_ty.as_ref().clone(),
+            },
+        )?;
+        let is_fault = self.extract_faultable_is_fault(result.value)?;
+        self.builder
+            .build_conditional_branch(is_fault, fault_block, ok_block)
+            .map_err(|error| {
+                format!("LLVM backend failed to branch on fault map result: {error}")
+            })?;
+
+        self.builder.position_at_end(fault_block);
+        let mut fault = self.extract_faultable_fault(result.value)?;
+        if matches!(
+            self.codegen.canonical_name(name).as_str(),
+            "parse_real" | "parse_int"
+        ) {
+            let runtime_fault = self.value_to_runtime_arg(fault, &Ty::Fault)?;
+            let fn_value = self.runtime_function(
+                "fa_fault_with_line",
+                Some(self.runtime_pair_type().into()),
+                &[
+                    self.context.i64_type().into(),
+                    self.runtime_pair_type().into(),
+                ],
+            )?;
+            let line = self
+                .builder
+                .build_int_add(i, self.context.i64_type().const_int(1, false), "line")
+                .map_err(|error| format!("LLVM backend failed to build fault line: {error}"))?;
+            let with_line = self
+                .builder
+                .build_call(
+                    fn_value,
+                    &[line.into(), runtime_fault.into()],
+                    "fault_with_line",
+                )
+                .map_err(|error| {
+                    format!("LLVM backend failed to call fa_fault_with_line: {error}")
+                })?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| "fa_fault_with_line did not return a value".to_string())?;
+            fault = self.runtime_pair_to_value(with_line, &Ty::Fault)?;
+        }
+        let fault_i = self
+            .builder
+            .build_load(self.context.i64_type(), fault_i_ptr, "fault_i")
+            .map_err(|error| format!("LLVM backend failed to load fault index: {error}"))?
+            .into_int_value();
+        self.store_seq_item(fault_seq.value, &fault_ty, fault_i, fault)?;
+        let next_fault_i = self
+            .builder
+            .build_int_add(
+                fault_i,
+                self.context.i64_type().const_int(1, false),
+                "next_fault",
+            )
+            .map_err(|error| format!("LLVM backend failed to increment fault index: {error}"))?;
+        self.builder
+            .build_store(fault_i_ptr, next_fault_i)
+            .map_err(|error| format!("LLVM backend failed to store fault index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(next_block)
+            .map_err(|error| {
+                format!("LLVM backend failed to leave fault map fault block: {error}")
+            })?;
+
+        self.builder.position_at_end(ok_block);
+        let ok_value = self.extract_faultable_value(result.value)?;
+        let ok_i = self
+            .builder
+            .build_load(self.context.i64_type(), ok_i_ptr, "ok_i")
+            .map_err(|error| format!("LLVM backend failed to load ok index: {error}"))?
+            .into_int_value();
+        self.store_seq_item(ok_seq.value, &ok_ty, ok_i, ok_value)?;
+        let next_ok_i = self
+            .builder
+            .build_int_add(ok_i, self.context.i64_type().const_int(1, false), "next_ok")
+            .map_err(|error| format!("LLVM backend failed to increment ok index: {error}"))?;
+        self.builder
+            .build_store(ok_i_ptr, next_ok_i)
+            .map_err(|error| format!("LLVM backend failed to store ok index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(next_block)
+            .map_err(|error| format!("LLVM backend failed to leave fault map ok block: {error}"))?;
+
+        self.builder.position_at_end(next_block);
+        let next_i = self
+            .builder
+            .build_int_add(i, self.context.i64_type().const_int(1, false), "next")
+            .map_err(|error| {
+                format!("LLVM backend failed to increment fault map index: {error}")
+            })?;
+        self.builder
+            .build_store(i_ptr, next_i)
+            .map_err(|error| format!("LLVM backend failed to store fault map index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to continue fault map loop: {error}"))?;
+
+        self.builder.position_at_end(after_block);
+        let ok_count = self
+            .builder
+            .build_load(self.context.i64_type(), ok_i_ptr, "ok_count")
+            .map_err(|error| format!("LLVM backend failed to load ok count: {error}"))?;
+        let fault_count = self
+            .builder
+            .build_load(self.context.i64_type(), fault_i_ptr, "fault_count")
+            .map_err(|error| format!("LLVM backend failed to load fault count: {error}"))?;
+        let ok_value = self
+            .builder
+            .build_insert_value(ok_seq.value.into_struct_value(), ok_count, 0, "ok_seq")
+            .map_err(|error| format!("LLVM backend failed to set ok sequence count: {error}"))?
+            .as_basic_value_enum();
+        let fault_value = self
+            .builder
+            .build_insert_value(
+                fault_seq.value.into_struct_value(),
+                fault_count,
+                0,
+                "fault_seq",
+            )
+            .map_err(|error| format!("LLVM backend failed to set fault sequence count: {error}"))?
+            .as_basic_value_enum();
+        Ok((
+            LlvmValue {
+                value: ok_value,
+                ty: ok_ty,
+            },
+            LlvmValue {
+                value: fault_value,
+                ty: fault_ty,
+            },
+        ))
+    }
+
+    fn emit_repeat(
+        &mut self,
+        node: &str,
+        input: LlvmValue<'ctx>,
+        count: LlvmValue<'ctx>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let Ty::Int = count.ty else {
+            return Err(format!(
+                "`repeat {node}` count expected Int, found `{}`",
+                count.ty
+            ));
+        };
+        let value_ty = self.types.basic_type(&input.ty)?;
+        let state_ptr = self
+            .builder
+            .build_alloca(value_ty, "repeat.state")
+            .map_err(|error| format!("LLVM backend failed to allocate repeat state: {error}"))?;
+        self.builder
+            .build_store(state_ptr, input.value)
+            .map_err(|error| format!("LLVM backend failed to initialize repeat state: {error}"))?;
+        let function = self.current_function()?;
+        let loop_block = self.context.append_basic_block(function, "repeat.loop");
+        let body_block = self.context.append_basic_block(function, "repeat.body");
+        let after_block = self.context.append_basic_block(function, "repeat.after");
+        let i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "i")
+            .map_err(|error| format!("LLVM backend failed to allocate repeat index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, self.context.i64_type().const_zero())
+            .map_err(|error| format!("LLVM backend failed to initialize repeat index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to branch to repeat loop: {error}"))?;
+
+        self.builder.position_at_end(loop_block);
+        let i = self
+            .builder
+            .build_load(self.context.i64_type(), i_ptr, "i")
+            .map_err(|error| format!("LLVM backend failed to load repeat index: {error}"))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(
+                IntPredicate::SLT,
+                i,
+                count.value.into_int_value(),
+                "repeat.cond",
+            )
+            .map_err(|error| format!("LLVM backend failed to compare repeat index: {error}"))?;
+        self.builder
+            .build_conditional_branch(cond, body_block, after_block)
+            .map_err(|error| format!("LLVM backend failed to branch in repeat loop: {error}"))?;
+
+        self.builder.position_at_end(body_block);
+        let state = self
+            .builder
+            .build_load(value_ty, state_ptr, "state")
+            .map_err(|error| format!("LLVM backend failed to load repeat state: {error}"))?;
+        let next_state = self.emit_call(
+            node,
+            LlvmValue {
+                value: state,
+                ty: input.ty.clone(),
+            },
+        )?;
+        self.builder
+            .build_store(state_ptr, next_state.value)
+            .map_err(|error| format!("LLVM backend failed to store repeat state: {error}"))?;
+        let next_i = self
+            .builder
+            .build_int_add(i, self.context.i64_type().const_int(1, false), "next")
+            .map_err(|error| format!("LLVM backend failed to increment repeat index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, next_i)
+            .map_err(|error| format!("LLVM backend failed to store repeat index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to continue repeat loop: {error}"))?;
+
+        self.builder.position_at_end(after_block);
+        let result = self
+            .builder
+            .build_load(value_ty, state_ptr, "repeat.result")
+            .map_err(|error| format!("LLVM backend failed to load repeat result: {error}"))?;
+        Ok(LlvmValue {
+            value: result,
+            ty: input.ty,
+        })
+    }
+
+    fn emit_scan(
+        &mut self,
+        op: &str,
+        input: LlvmValue<'ctx>,
+        identity: LlvmValue<'ctx>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let Ty::Seq(item_ty) = input.ty.clone() else {
+            return Err(format!("`scan {op}` expected Seq input"));
+        };
+        let item_ty = item_ty.as_ref().clone();
+        let output_ty = Ty::Seq(Box::new(item_ty.clone()));
+        let count = self.seq_count(input.value)?;
+        let output = self.emit_seq_new(&output_ty, count)?;
+        let item_llvm_ty = self.types.basic_type(&item_ty)?;
+        let state_ptr = self
+            .builder
+            .build_alloca(item_llvm_ty, "scan.state")
+            .map_err(|error| format!("LLVM backend failed to allocate scan state: {error}"))?;
+        let identity = self.coerce_value_to_ty(identity, &item_ty)?;
+        self.builder
+            .build_store(state_ptr, identity.value)
+            .map_err(|error| format!("LLVM backend failed to initialize scan state: {error}"))?;
+
+        let function = self.current_function()?;
+        let loop_block = self.context.append_basic_block(function, "scan.loop");
+        let body_block = self.context.append_basic_block(function, "scan.body");
+        let after_block = self.context.append_basic_block(function, "scan.after");
+        let i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "i")
+            .map_err(|error| format!("LLVM backend failed to allocate scan index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, self.context.i64_type().const_zero())
+            .map_err(|error| format!("LLVM backend failed to initialize scan index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to branch to scan loop: {error}"))?;
+
+        self.builder.position_at_end(loop_block);
+        let i = self
+            .builder
+            .build_load(self.context.i64_type(), i_ptr, "i")
+            .map_err(|error| format!("LLVM backend failed to load scan index: {error}"))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, count, "scan.cond")
+            .map_err(|error| format!("LLVM backend failed to compare scan index: {error}"))?;
+        self.builder
+            .build_conditional_branch(cond, body_block, after_block)
+            .map_err(|error| format!("LLVM backend failed to branch in scan loop: {error}"))?;
+
+        self.builder.position_at_end(body_block);
+        let state = self
+            .builder
+            .build_load(item_llvm_ty, state_ptr, "state")
+            .map_err(|error| format!("LLVM backend failed to load scan state: {error}"))?;
+        let item = self.load_seq_item(input.value, &input.ty, i)?;
+        let pair_ty = Ty::Tuple(vec![item_ty.clone(), item_ty.clone()]);
+        let mut pair = self
+            .types
+            .basic_type(&pair_ty)?
+            .into_struct_type()
+            .const_zero();
+        pair = self
+            .builder
+            .build_insert_value(pair, state, 0, "scan.pair")
+            .map_err(|error| format!("LLVM backend failed to build scan pair: {error}"))?
+            .into_struct_value();
+        pair = self
+            .builder
+            .build_insert_value(pair, item, 1, "scan.pair")
+            .map_err(|error| format!("LLVM backend failed to build scan pair: {error}"))?
+            .into_struct_value();
+        let next_state = self.emit_call(
+            op,
+            LlvmValue {
+                value: pair.into(),
+                ty: pair_ty,
+            },
+        )?;
+        self.builder
+            .build_store(state_ptr, next_state.value)
+            .map_err(|error| format!("LLVM backend failed to store scan state: {error}"))?;
+        self.store_seq_item(output.value, &output_ty, i, next_state.value)?;
+        let next_i = self
+            .builder
+            .build_int_add(i, self.context.i64_type().const_int(1, false), "next")
+            .map_err(|error| format!("LLVM backend failed to increment scan index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, next_i)
+            .map_err(|error| format!("LLVM backend failed to store scan index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to continue scan loop: {error}"))?;
+
+        self.builder.position_at_end(after_block);
+        Ok(output)
+    }
+
+    fn emit_reduce(
+        &mut self,
+        op: &str,
+        input: LlvmValue<'ctx>,
+        identity: LlvmValue<'ctx>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let Ty::Seq(item_ty) = input.ty.clone() else {
+            return Err(format!("`reduce {op}` expected Seq input"));
+        };
+        let canonical = self.codegen.canonical_name(op);
+        if canonical == "add" {
+            return self.emit_reduce_add_llvm(op, input, item_ty.as_ref().clone(), identity);
+        }
+        if canonical == "min" || canonical == "max" {
+            return self.emit_reduce_min_max_llvm(
+                &canonical,
+                input,
+                item_ty.as_ref().clone(),
+                identity,
+            );
+        }
+        let output_ty = self.codegen.call_output_type(op, &item_ty)?;
+        if canonical == "concat_bytes" {
+            let value = self.emit_reduce_concat_bytes(input, identity)?;
+            return Ok(LlvmValue {
+                value,
+                ty: output_ty,
+            });
+        }
+        let state_ptr = self
+            .builder
+            .build_alloca(self.types.basic_type(&output_ty)?, "reduce.state")
+            .map_err(|error| format!("LLVM backend failed to allocate reduce state: {error}"))?;
+        self.builder
+            .build_store(state_ptr, identity.value)
+            .map_err(|error| format!("LLVM backend failed to initialize reduce state: {error}"))?;
+        let count = self.seq_count(input.value)?;
+        let function = self.current_function()?;
+        let loop_block = self.context.append_basic_block(function, "reduce.loop");
+        let body_block = self.context.append_basic_block(function, "reduce.body");
+        let after_block = self.context.append_basic_block(function, "reduce.after");
+        let i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "i")
+            .map_err(|error| format!("LLVM backend failed to allocate reduce index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, self.context.i64_type().const_zero())
+            .map_err(|error| format!("LLVM backend failed to initialize reduce index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to branch to reduce loop: {error}"))?;
+
+        self.builder.position_at_end(loop_block);
+        let i = self
+            .builder
+            .build_load(self.context.i64_type(), i_ptr, "i")
+            .map_err(|error| format!("LLVM backend failed to load reduce index: {error}"))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, count, "reduce.cond")
+            .map_err(|error| format!("LLVM backend failed to compare reduce index: {error}"))?;
+        self.builder
+            .build_conditional_branch(cond, body_block, after_block)
+            .map_err(|error| format!("LLVM backend failed to branch in reduce loop: {error}"))?;
+
+        self.builder.position_at_end(body_block);
+        let state = self
+            .builder
+            .build_load(self.types.basic_type(&output_ty)?, state_ptr, "state")
+            .map_err(|error| format!("LLVM backend failed to load reduce state: {error}"))?;
+        let item = self.load_seq_item(input.value, &input.ty, i)?;
+        let pair_ty = Ty::Tuple(vec![output_ty.clone(), item_ty.as_ref().clone()]);
+        let mut pair = self
+            .types
+            .basic_type(&pair_ty)?
+            .into_struct_type()
+            .const_zero();
+        pair = self
+            .builder
+            .build_insert_value(pair, state, 0, "pair")
+            .map_err(|error| format!("LLVM backend failed to build reduce pair: {error}"))?
+            .into_struct_value();
+        pair = self
+            .builder
+            .build_insert_value(pair, item, 1, "pair")
+            .map_err(|error| format!("LLVM backend failed to build reduce pair: {error}"))?
+            .into_struct_value();
+        let next_state = self.emit_call(
+            op,
+            LlvmValue {
+                value: pair.into(),
+                ty: pair_ty,
+            },
+        )?;
+        self.builder
+            .build_store(state_ptr, next_state.value)
+            .map_err(|error| format!("LLVM backend failed to store reduce state: {error}"))?;
+        let next = self
+            .builder
+            .build_int_add(i, self.context.i64_type().const_int(1, false), "next")
+            .map_err(|error| format!("LLVM backend failed to increment reduce index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, next)
+            .map_err(|error| format!("LLVM backend failed to store reduce index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to continue reduce loop: {error}"))?;
+
+        self.builder.position_at_end(after_block);
+        let result = self
+            .builder
+            .build_load(
+                self.types.basic_type(&output_ty)?,
+                state_ptr,
+                "reduce.result",
+            )
+            .map_err(|error| format!("LLVM backend failed to load reduce result: {error}"))?;
+        Ok(LlvmValue {
+            value: result,
+            ty: output_ty,
+        })
+    }
+
+    fn emit_reduce_add_llvm(
+        &mut self,
+        _op: &str,
+        input: LlvmValue<'ctx>,
+        item_ty: Ty,
+        identity: LlvmValue<'ctx>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let (plain_ty, faultable) = match item_ty {
+            Ty::Faultable(inner) => (*inner, true),
+            other => (other, false),
+        };
+        let output_ty = if faultable {
+            Ty::Faultable(Box::new(plain_ty.clone()))
+        } else {
+            plain_ty.clone()
+        };
+        let output_llvm_ty = self.types.basic_type(&output_ty)?;
+        let state_ptr = self
+            .builder
+            .build_alloca(output_llvm_ty, "reduce.state")
+            .map_err(|error| format!("LLVM backend failed to allocate reduce state: {error}"))?;
+        let initial = if faultable {
+            self.faultable_value(&plain_ty, false, None, Some(identity.value))?
+        } else {
+            identity.value
+        };
+        self.builder
+            .build_store(state_ptr, initial)
+            .map_err(|error| format!("LLVM backend failed to initialize reduce state: {error}"))?;
+
+        let count = self.seq_count(input.value)?;
+        let function = self.current_function()?;
+        let loop_block = self.context.append_basic_block(function, "reduce.add.loop");
+        let body_block = self.context.append_basic_block(function, "reduce.add.body");
+        let after_block = self
+            .context
+            .append_basic_block(function, "reduce.add.after");
+        let i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "i")
+            .map_err(|error| format!("LLVM backend failed to allocate reduce index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, self.context.i64_type().const_zero())
+            .map_err(|error| format!("LLVM backend failed to initialize reduce index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to branch to reduce loop: {error}"))?;
+
+        self.builder.position_at_end(loop_block);
+        let i = self
+            .builder
+            .build_load(self.context.i64_type(), i_ptr, "i")
+            .map_err(|error| format!("LLVM backend failed to load reduce index: {error}"))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, count, "reduce.cond")
+            .map_err(|error| format!("LLVM backend failed to compare reduce index: {error}"))?;
+        self.builder
+            .build_conditional_branch(cond, body_block, after_block)
+            .map_err(|error| format!("LLVM backend failed to branch in reduce loop: {error}"))?;
+
+        self.builder.position_at_end(body_block);
+        let item = self.load_seq_item(input.value, &input.ty, i)?;
+        if faultable {
+            let state = self
+                .builder
+                .build_load(output_llvm_ty, state_ptr, "state")
+                .map_err(|error| format!("LLVM backend failed to load reduce state: {error}"))?;
+            let state_fault = self.extract_faultable_is_fault(state)?;
+            let item_fault = self.extract_faultable_is_fault(item)?;
+            let any_fault = self
+                .builder
+                .build_or(state_fault, item_fault, "any.fault")
+                .map_err(|error| format!("LLVM backend failed to combine fault flags: {error}"))?;
+            let state_value = self.extract_faultable_value(state)?;
+            let item_value = self.extract_faultable_value(item)?;
+            let sum_value = self.emit_add_values(state_value, item_value, &plain_ty)?;
+            let item_fault_value = self.extract_faultable_fault(item)?;
+            let state_fault_value = self.extract_faultable_fault(state)?;
+            let selected_fault = self
+                .builder
+                .build_select(item_fault, item_fault_value, state_fault_value, "fault")
+                .map_err(|error| format!("LLVM backend failed to select reduce fault: {error}"))?;
+            let next =
+                self.faultable_value(&plain_ty, true, Some(selected_fault), Some(sum_value))?;
+            let any_fault_i8 = self
+                .builder
+                .build_int_z_extend(any_fault, self.context.i8_type(), "fault.flag")
+                .map_err(|error| format!("LLVM backend failed to extend fault flag: {error}"))?;
+            let next = self
+                .builder
+                .build_insert_value(next.into_struct_value(), any_fault_i8, 0, "fault.flag")
+                .map_err(|error| format!("LLVM backend failed to set reduce fault flag: {error}"))?
+                .as_basic_value_enum();
+            self.builder
+                .build_store(state_ptr, next)
+                .map_err(|error| format!("LLVM backend failed to store reduce state: {error}"))?;
+        } else {
+            let state = self
+                .builder
+                .build_load(output_llvm_ty, state_ptr, "state")
+                .map_err(|error| format!("LLVM backend failed to load reduce state: {error}"))?;
+            let sum = self.emit_add_values(state, item, &plain_ty)?;
+            self.builder
+                .build_store(state_ptr, sum)
+                .map_err(|error| format!("LLVM backend failed to store reduce state: {error}"))?;
+        }
+        let next_i = self
+            .builder
+            .build_int_add(i, self.context.i64_type().const_int(1, false), "next")
+            .map_err(|error| format!("LLVM backend failed to increment reduce index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, next_i)
+            .map_err(|error| format!("LLVM backend failed to store reduce index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to continue reduce loop: {error}"))?;
+
+        self.builder.position_at_end(after_block);
+        let result = self
+            .builder
+            .build_load(output_llvm_ty, state_ptr, "reduce.result")
+            .map_err(|error| format!("LLVM backend failed to load reduce result: {error}"))?;
+        Ok(LlvmValue {
+            value: result,
+            ty: output_ty,
+        })
+    }
+
+    fn emit_reduce_min_max_llvm(
+        &mut self,
+        op: &str,
+        input: LlvmValue<'ctx>,
+        item_ty: Ty,
+        identity: LlvmValue<'ctx>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        if matches!(item_ty, Ty::Faultable(_)) {
+            return Err(format!(
+                "direct LLVM backend does not yet support faultable reduce {op}"
+            ));
+        }
+        let output_llvm_ty = self.types.basic_type(&item_ty)?;
+        let state_ptr = self
+            .builder
+            .build_alloca(output_llvm_ty, "reduce.state")
+            .map_err(|error| format!("LLVM backend failed to allocate reduce state: {error}"))?;
+        let identity = self.coerce_value_to_ty(identity, &item_ty)?;
+        self.builder
+            .build_store(state_ptr, identity.value)
+            .map_err(|error| format!("LLVM backend failed to initialize reduce state: {error}"))?;
+        let count = self.seq_count(input.value)?;
+        let function = self.current_function()?;
+        let loop_block = self
+            .context
+            .append_basic_block(function, "reduce.minmax.loop");
+        let body_block = self
+            .context
+            .append_basic_block(function, "reduce.minmax.body");
+        let after_block = self
+            .context
+            .append_basic_block(function, "reduce.minmax.after");
+        let i_ptr = self
+            .builder
+            .build_alloca(self.context.i64_type(), "i")
+            .map_err(|error| format!("LLVM backend failed to allocate reduce index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, self.context.i64_type().const_zero())
+            .map_err(|error| format!("LLVM backend failed to initialize reduce index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to branch to reduce loop: {error}"))?;
+
+        self.builder.position_at_end(loop_block);
+        let i = self
+            .builder
+            .build_load(self.context.i64_type(), i_ptr, "i")
+            .map_err(|error| format!("LLVM backend failed to load reduce index: {error}"))?
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, count, "reduce.cond")
+            .map_err(|error| format!("LLVM backend failed to compare reduce index: {error}"))?;
+        self.builder
+            .build_conditional_branch(cond, body_block, after_block)
+            .map_err(|error| format!("LLVM backend failed to branch in reduce loop: {error}"))?;
+
+        self.builder.position_at_end(body_block);
+        let state = self
+            .builder
+            .build_load(output_llvm_ty, state_ptr, "state")
+            .map_err(|error| format!("LLVM backend failed to load reduce state: {error}"))?;
+        let item = self.load_seq_item(input.value, &input.ty, i)?;
+        let next = self.emit_min_max_values(op, state, item, &item_ty)?;
+        self.builder
+            .build_store(state_ptr, next)
+            .map_err(|error| format!("LLVM backend failed to store reduce state: {error}"))?;
+        let next_i = self
+            .builder
+            .build_int_add(i, self.context.i64_type().const_int(1, false), "next")
+            .map_err(|error| format!("LLVM backend failed to increment reduce index: {error}"))?;
+        self.builder
+            .build_store(i_ptr, next_i)
+            .map_err(|error| format!("LLVM backend failed to store reduce index: {error}"))?;
+        self.builder
+            .build_unconditional_branch(loop_block)
+            .map_err(|error| format!("LLVM backend failed to continue reduce loop: {error}"))?;
+
+        self.builder.position_at_end(after_block);
+        let result = self
+            .builder
+            .build_load(output_llvm_ty, state_ptr, "reduce.result")
+            .map_err(|error| format!("LLVM backend failed to load reduce result: {error}"))?;
+        Ok(LlvmValue {
+            value: result,
+            ty: item_ty,
+        })
+    }
+
+    fn emit_numeric_binary(
+        &mut self,
+        name: &str,
+        input: LlvmValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Ty::Tuple(items) = &input.ty else {
+            return Err(format!("`{name}` expected tuple input"));
+        };
+        let [left_ty, right_ty] = items.as_slice() else {
+            return Err(format!("`{name}` expected pair input"));
+        };
+        let left = self.extract_tuple_field(&input, 0)?;
+        let right = self.extract_tuple_field(&input, 1)?;
+        if matches!(left_ty, Ty::Real) || matches!(right_ty, Ty::Real) {
+            let left = self.to_real(left, left_ty)?;
+            let right = self.to_real(right, right_ty)?;
+            let result = match name {
+                "add" => self.builder.build_float_add(left, right, "add"),
+                "sub" => self.builder.build_float_sub(left, right, "sub"),
+                "mul" => self.builder.build_float_mul(left, right, "mul"),
+                "div" => self.builder.build_float_div(left, right, "div"),
+                "rem" => self.builder.build_float_rem(left, right, "rem"),
+                "min" => {
+                    let cmp = self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::OLT, left, right, "min")
+                        .map_err(|error| format!("LLVM backend failed to compare min: {error}"))?;
+                    return self
+                        .builder
+                        .build_select(cmp, left, right, "min")
+                        .map_err(|error| format!("LLVM backend failed to select min: {error}"));
+                }
+                "max" => {
+                    let cmp = self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::OGT, left, right, "max")
+                        .map_err(|error| format!("LLVM backend failed to compare max: {error}"))?;
+                    return self
+                        .builder
+                        .build_select(cmp, left, right, "max")
+                        .map_err(|error| format!("LLVM backend failed to select max: {error}"));
+                }
+                _ => unreachable!(),
+            }
+            .map_err(|error| format!("LLVM backend failed to build `{name}`: {error}"))?;
+            Ok(result.into())
+        } else {
+            let left = left.into_int_value();
+            let right = right.into_int_value();
+            let result = match name {
+                "add" => self.builder.build_int_add(left, right, "add"),
+                "sub" => self.builder.build_int_sub(left, right, "sub"),
+                "mul" => self.builder.build_int_mul(left, right, "mul"),
+                "div" => self.builder.build_int_signed_div(left, right, "div"),
+                "rem" => self.builder.build_int_signed_rem(left, right, "rem"),
+                "min" => {
+                    let cmp = self
+                        .builder
+                        .build_int_compare(IntPredicate::SLT, left, right, "min")
+                        .map_err(|error| format!("LLVM backend failed to compare min: {error}"))?;
+                    return self
+                        .builder
+                        .build_select(cmp, left, right, "min")
+                        .map_err(|error| format!("LLVM backend failed to select min: {error}"));
+                }
+                "max" => {
+                    let cmp = self
+                        .builder
+                        .build_int_compare(IntPredicate::SGT, left, right, "max")
+                        .map_err(|error| format!("LLVM backend failed to compare max: {error}"))?;
+                    return self
+                        .builder
+                        .build_select(cmp, left, right, "max")
+                        .map_err(|error| format!("LLVM backend failed to select max: {error}"));
+                }
+                _ => unreachable!(),
+            }
+            .map_err(|error| format!("LLVM backend failed to build `{name}`: {error}"))?;
+            Ok(result.into())
+        }
+    }
+
+    fn emit_from_int(&mut self, input: LlvmValue<'ctx>) -> Result<BasicValueEnum<'ctx>, String> {
+        if input.ty != Ty::Int {
+            return Err(format!("from_int expected Int, found `{}`", input.ty));
+        }
+        Ok(self
+            .builder
+            .build_signed_int_to_float(
+                input.value.into_int_value(),
+                self.context.f64_type(),
+                "from_int",
+            )
+            .map_err(|error| format!("LLVM backend failed to build from_int: {error}"))?
+            .into())
+    }
+
+    fn emit_numeric_unary(
+        &mut self,
+        name: &str,
+        input: LlvmValue<'ctx>,
+        output_ty: &Ty,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match name {
+            "neg" => match input.ty {
+                Ty::Int => Ok(self
+                    .builder
+                    .build_int_neg(input.value.into_int_value(), "neg")
+                    .map_err(|error| format!("LLVM backend failed to build neg: {error}"))?
+                    .into()),
+                Ty::Real => Ok(self
+                    .builder
+                    .build_float_neg(input.value.into_float_value(), "neg")
+                    .map_err(|error| format!("LLVM backend failed to build neg: {error}"))?
+                    .into()),
+                ref other => Err(format!("neg expected numeric input, found `{other}`")),
+            },
+            "abs" => match input.ty {
+                Ty::Int => {
+                    let value = input.value.into_int_value();
+                    let negative = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::SLT,
+                            value,
+                            self.context.i64_type().const_zero(),
+                            "abs.negative",
+                        )
+                        .map_err(|error| format!("LLVM backend failed to compare abs: {error}"))?;
+                    let negated = self
+                        .builder
+                        .build_int_neg(value, "abs.neg")
+                        .map_err(|error| format!("LLVM backend failed to negate abs: {error}"))?;
+                    self.builder
+                        .build_select(negative, negated, value, "abs")
+                        .map_err(|error| format!("LLVM backend failed to select abs: {error}"))
+                }
+                Ty::Real => {
+                    let value = input.value.into_float_value();
+                    let negative = self
+                        .builder
+                        .build_float_compare(
+                            inkwell::FloatPredicate::OLT,
+                            value,
+                            self.context.f64_type().const_float(0.0),
+                            "abs.negative",
+                        )
+                        .map_err(|error| format!("LLVM backend failed to compare abs: {error}"))?;
+                    let negated = self
+                        .builder
+                        .build_float_neg(value, "abs.neg")
+                        .map_err(|error| format!("LLVM backend failed to negate abs: {error}"))?;
+                    self.builder
+                        .build_select(negative, negated, value, "abs")
+                        .map_err(|error| format!("LLVM backend failed to select abs: {error}"))
+                }
+                ref other => Err(format!("abs expected numeric input, found `{other}`")),
+            },
+            "sqrt" | "exp" | "sin" | "cos" => {
+                if output_ty != &Ty::Real {
+                    return Err(format!("{name} expected Real output, found `{output_ty}`"));
+                }
+                let value = self.to_real(input.value, &input.ty)?;
+                let fn_value = self.runtime_function(
+                    name,
+                    Some(self.context.f64_type().into()),
+                    &[self.context.f64_type().into()],
+                )?;
+                self.builder
+                    .build_call(fn_value, &[value.into()], name)
+                    .map_err(|error| format!("LLVM backend failed to call `{name}`: {error}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| format!("runtime function `{name}` did not return a value"))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn emit_int_binary(
+        &mut self,
+        name: &str,
+        input: LlvmValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Ty::Tuple(items) = &input.ty else {
+            return Err(format!("`{name}` expected tuple input"));
+        };
+        let [left_ty, right_ty] = items.as_slice() else {
+            return Err(format!("`{name}` expected pair input"));
+        };
+        if left_ty != &Ty::Int || right_ty != &Ty::Int {
+            return Err(format!("`{name}` expected Int operands"));
+        }
+        let left = self.extract_tuple_field(&input, 0)?.into_int_value();
+        let right = self.extract_tuple_field(&input, 1)?.into_int_value();
+        let result = match name {
+            "bit_and" => self.builder.build_and(left, right, "bit_and"),
+            "bit_or" => self.builder.build_or(left, right, "bit_or"),
+            "bit_xor" => self.builder.build_xor(left, right, "bit_xor"),
+            "bit_shl" => self.builder.build_left_shift(left, right, "bit_shl"),
+            "bit_shr" => self
+                .builder
+                .build_right_shift(left, right, false, "bit_shr"),
+            _ => unreachable!(),
+        }
+        .map_err(|error| format!("LLVM backend failed to build `{name}`: {error}"))?;
+        Ok(result.into())
+    }
+
+    fn emit_compare(
+        &mut self,
+        name: &str,
+        input: LlvmValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Ty::Tuple(items) = &input.ty else {
+            return Err(format!("`{name}` expected tuple input"));
+        };
+        let [left_ty, right_ty] = items.as_slice() else {
+            return Err(format!("`{name}` expected pair input"));
+        };
+        let left = self.extract_tuple_field(&input, 0)?;
+        let right = self.extract_tuple_field(&input, 1)?;
+        let bit = if matches!(left_ty, Ty::Real) || matches!(right_ty, Ty::Real) {
+            let left = self.to_real(left, left_ty)?;
+            let right = self.to_real(right, right_ty)?;
+            let pred = match name {
+                "eq" => inkwell::FloatPredicate::OEQ,
+                "lt" => inkwell::FloatPredicate::OLT,
+                "gt" => inkwell::FloatPredicate::OGT,
+                "le" => inkwell::FloatPredicate::OLE,
+                "ge" => inkwell::FloatPredicate::OGE,
+                _ => unreachable!(),
+            };
+            self.builder
+                .build_float_compare(pred, left, right, "cmp")
+                .map_err(|error| format!("LLVM backend failed to build `{name}`: {error}"))?
+        } else {
+            let pred = match name {
+                "eq" => IntPredicate::EQ,
+                "lt" => IntPredicate::SLT,
+                "gt" => IntPredicate::SGT,
+                "le" => IntPredicate::SLE,
+                "ge" => IntPredicate::SGE,
+                _ => unreachable!(),
+            };
+            self.builder
+                .build_int_compare(pred, left.into_int_value(), right.into_int_value(), "cmp")
+                .map_err(|error| format!("LLVM backend failed to build `{name}`: {error}"))?
+        };
+        Ok(self
+            .builder
+            .build_int_z_extend(bit, self.context.i8_type(), "bool")
+            .map_err(|error| format!("LLVM backend failed to extend bool: {error}"))?
+            .into())
+    }
+
+    fn emit_bool_binary(
+        &mut self,
+        name: &str,
+        input: LlvmValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let left = self.extract_tuple_field(&input, 0)?.into_int_value();
+        let right = self.extract_tuple_field(&input, 1)?.into_int_value();
+        let result = match name {
+            "and" => self.builder.build_and(left, right, "and"),
+            "or" => self.builder.build_or(left, right, "or"),
+            "xor" => self.builder.build_xor(left, right, "xor"),
+            _ => unreachable!(),
+        }
+        .map_err(|error| format!("LLVM backend failed to build `{name}`: {error}"))?;
+        Ok(result.into())
+    }
+
+    fn emit_select(&mut self, input: LlvmValue<'ctx>) -> Result<BasicValueEnum<'ctx>, String> {
+        let cond = self.extract_tuple_field(&input, 0)?.into_int_value();
+        let then_value = self.extract_tuple_field(&input, 1)?;
+        let else_value = self.extract_tuple_field(&input, 2)?;
+        let bit = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                cond,
+                self.context.i8_type().const_zero(),
+                "cond",
+            )
+            .map_err(|error| format!("LLVM backend failed to build select condition: {error}"))?;
+        self.builder
+            .build_select(bit, then_value, else_value, "select")
+            .map_err(|error| format!("LLVM backend failed to build select: {error}"))
+    }
+
+    fn emit_tuple_project(
+        &mut self,
+        input: LlvmValue<'ctx>,
+        index: usize,
+        output_ty: &Ty,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if let Some(plain_input_ty) = unwrap_faultable_tuple(&input.ty) {
+            let wrapped = self.coerce_faultable_tuple_to_faultable(input, &plain_input_ty)?;
+            return self.emit_tuple_project(wrapped, index, output_ty);
+        }
+        if let Ty::Faultable(inner) = input.ty.clone() {
+            let Ty::Tuple(items) = inner.as_ref() else {
+                return Err("tuple projection expected tuple input".to_string());
+            };
+            let field_ty = items
+                .get(index)
+                .ok_or_else(|| "tuple projection index out of bounds".to_string())?;
+            let Ty::Faultable(output_inner) = output_ty else {
+                return Err(format!(
+                    "faultable tuple projection expected faultable output, found `{output_ty}`"
+                ));
+            };
+            if output_inner.as_ref() != field_ty {
+                return Err(format!(
+                    "tuple projection expected `{}` output, found `{output_ty}`",
+                    Ty::Faultable(Box::new(field_ty.clone()))
+                ));
+            }
+            let faultable = input.value.into_struct_value();
+            let flag = self
+                .builder
+                .build_extract_value(faultable, 0, "is_fault")
+                .map_err(|error| {
+                    format!("LLVM backend failed to extract tuple projection fault flag: {error}")
+                })?
+                .into_int_value();
+            let fault = self
+                .builder
+                .build_extract_value(faultable, 1, "fault")
+                .map_err(|error| {
+                    format!("LLVM backend failed to extract tuple projection fault: {error}")
+                })?;
+            let inner_value = self
+                .builder
+                .build_extract_value(faultable, 2, "value")
+                .map_err(|error| {
+                    format!("LLVM backend failed to extract tuple projection value: {error}")
+                })?;
+            let field = self
+                .builder
+                .build_extract_value(inner_value.into_struct_value(), index as u32, "field")
+                .map_err(|error| {
+                    format!("LLVM backend failed to extract tuple projection field: {error}")
+                })?;
+            return self.faultable_value_with_flag(field_ty, flag, fault, field);
+        }
+        self.extract_tuple_field(&input, index as u32)
+    }
+
+    fn emit_add_values(
+        &mut self,
+        left: BasicValueEnum<'ctx>,
+        right: BasicValueEnum<'ctx>,
+        ty: &Ty,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match ty {
+            Ty::Real => Ok(self
+                .builder
+                .build_float_add(left.into_float_value(), right.into_float_value(), "add")
+                .map_err(|error| format!("LLVM backend failed to build real add: {error}"))?
+                .into()),
+            Ty::Int => Ok(self
+                .builder
+                .build_int_add(left.into_int_value(), right.into_int_value(), "add")
+                .map_err(|error| format!("LLVM backend failed to build int add: {error}"))?
+                .into()),
+            other => Err(format!("add expected numeric value, found `{other}`")),
+        }
+    }
+
+    fn emit_min_max_values(
+        &mut self,
+        op: &str,
+        left: BasicValueEnum<'ctx>,
+        right: BasicValueEnum<'ctx>,
+        ty: &Ty,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match ty {
+            Ty::Real => {
+                let pred = if op == "min" {
+                    inkwell::FloatPredicate::OLT
+                } else {
+                    inkwell::FloatPredicate::OGT
+                };
+                let left = left.into_float_value();
+                let right = right.into_float_value();
+                let cmp = self
+                    .builder
+                    .build_float_compare(pred, left, right, op)
+                    .map_err(|error| format!("LLVM backend failed to compare {op}: {error}"))?;
+                self.builder
+                    .build_select(cmp, left, right, op)
+                    .map_err(|error| format!("LLVM backend failed to select {op}: {error}"))
+            }
+            Ty::Int => {
+                let pred = if op == "min" {
+                    IntPredicate::SLT
+                } else {
+                    IntPredicate::SGT
+                };
+                let left = left.into_int_value();
+                let right = right.into_int_value();
+                let cmp = self
+                    .builder
+                    .build_int_compare(pred, left, right, op)
+                    .map_err(|error| format!("LLVM backend failed to compare {op}: {error}"))?;
+                self.builder
+                    .build_select(cmp, left, right, op)
+                    .map_err(|error| format!("LLVM backend failed to select {op}: {error}"))
+            }
+            other => Err(format!("{op} expected numeric value, found `{other}`")),
+        }
+    }
+
+    fn coerce_value_to_ty(
+        &mut self,
+        value: LlvmValue<'ctx>,
+        expected_ty: &Ty,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        if &value.ty == expected_ty {
+            return Ok(value);
+        }
+
+        match (expected_ty, value.ty.clone()) {
+            (Ty::Real, Ty::Int) => {
+                let real = self
+                    .builder
+                    .build_signed_int_to_float(
+                        value.value.into_int_value(),
+                        self.context.f64_type(),
+                        "int_to_real",
+                    )
+                    .map_err(|error| {
+                        format!("LLVM backend failed to coerce Int to Real: {error}")
+                    })?;
+                Ok(LlvmValue {
+                    value: real.into(),
+                    ty: Ty::Real,
+                })
+            }
+            (Ty::Faultable(inner), actual)
+                if unwrap_faultable_tuple(&actual)
+                    .as_ref()
+                    .is_some_and(|unwrapped| unwrapped == inner.as_ref()) =>
+            {
+                return self.coerce_faultable_tuple_to_faultable(value, inner);
+            }
+            (Ty::Faultable(inner), actual)
+                if inner.as_ref() == &actual
+                    || (inner.as_ref() == &Ty::Real && actual == Ty::Int) =>
+            {
+                let plain = self.coerce_value_to_ty(value, inner)?;
+                let wrapped = self.faultable_value(inner, false, None, Some(plain.value))?;
+                Ok(LlvmValue {
+                    value: wrapped,
+                    ty: expected_ty.clone(),
+                })
+            }
+            (Ty::Tuple(expected_items), Ty::Tuple(actual_items))
+                if expected_items.len() == actual_items.len() =>
+            {
+                let mut out = self
+                    .types
+                    .basic_type(expected_ty)?
+                    .into_struct_type()
+                    .const_zero();
+                for (index, (expected_item, actual_item)) in
+                    expected_items.iter().zip(actual_items.iter()).enumerate()
+                {
+                    let field = self
+                        .builder
+                        .build_extract_value(value.value.into_struct_value(), index as u32, "field")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to extract value for coercion: {error}")
+                        })?;
+                    let field = self.coerce_value_to_ty(
+                        LlvmValue {
+                            value: field,
+                            ty: actual_item.clone(),
+                        },
+                        expected_item,
+                    )?;
+                    out = self
+                        .builder
+                        .build_insert_value(out, field.value, index as u32, "field")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to insert coerced tuple field: {error}")
+                        })?
+                        .into_struct_value();
+                }
+                Ok(LlvmValue {
+                    value: out.into(),
+                    ty: expected_ty.clone(),
+                })
+            }
+            (Ty::Seq(expected_item), Ty::Seq(actual_item))
+                if expected_item.as_ref() == actual_item.as_ref() =>
+            {
+                Ok(LlvmValue {
+                    value: value.value,
+                    ty: expected_ty.clone(),
+                })
+            }
+            _ => Err(format!(
+                "direct LLVM backend cannot coerce `{}` to `{expected_ty}`",
+                value.ty
+            )),
+        }
+    }
+
+    fn coerce_faultable_tuple_to_faultable(
+        &mut self,
+        value: LlvmValue<'ctx>,
+        inner_ty: &Ty,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let Ty::Tuple(actual_items) = value.ty.clone() else {
+            return Err(format!(
+                "expected tuple with faultable fields, found `{}`",
+                value.ty
+            ));
+        };
+        let Ty::Tuple(inner_items) = inner_ty else {
+            return Err(format!("expected tuple inner type, found `{inner_ty}`"));
+        };
+        if actual_items.len() != inner_items.len() {
+            return Err("faultable tuple arity mismatch".to_string());
+        }
+        let output_ty = Ty::Faultable(Box::new(inner_ty.clone()));
+        let output_llvm_ty = self.types.basic_type(&output_ty)?;
+        let out_ptr = self
+            .builder
+            .build_alloca(output_llvm_ty, "faultable.tuple")
+            .map_err(|error| format!("LLVM backend failed to allocate faultable tuple: {error}"))?;
+        let function = self.current_function()?;
+        let fault_block = self.context.append_basic_block(function, "tuple.fault");
+        let ok_block = self.context.append_basic_block(function, "tuple.ok");
+        let after_block = self.context.append_basic_block(function, "tuple.after");
+        let mut fault_cond = self.context.bool_type().const_zero();
+        let mut first_fault = None;
+        for (index, actual_item) in actual_items.iter().enumerate() {
+            let field = self
+                .builder
+                .build_extract_value(value.value.into_struct_value(), index as u32, "field")
+                .map_err(|error| format!("LLVM backend failed to extract tuple field: {error}"))?;
+            self.collect_nested_fault_state(field, actual_item, &mut fault_cond, &mut first_fault)?;
+        }
+        self.builder
+            .build_conditional_branch(fault_cond, fault_block, ok_block)
+            .map_err(|error| format!("LLVM backend failed to branch on tuple faults: {error}"))?;
+        self.builder.position_at_end(fault_block);
+        let fault =
+            first_fault.ok_or_else(|| "faultable tuple had no faultable fields".to_string())?;
+        let faulted = self.faultable_value(inner_ty, true, Some(fault), None)?;
+        self.builder
+            .build_store(out_ptr, faulted)
+            .map_err(|error| format!("LLVM backend failed to store tuple fault: {error}"))?;
+        self.builder
+            .build_unconditional_branch(after_block)
+            .map_err(|error| format!("LLVM backend failed to leave tuple fault: {error}"))?;
+        self.builder.position_at_end(ok_block);
+        let mut inner = self
+            .types
+            .basic_type(inner_ty)?
+            .into_struct_type()
+            .const_zero();
+        for (index, (actual_item, inner_item)) in
+            actual_items.iter().zip(inner_items.iter()).enumerate()
+        {
+            let field = self
+                .builder
+                .build_extract_value(value.value.into_struct_value(), index as u32, "field")
+                .map_err(|error| format!("LLVM backend failed to extract tuple field: {error}"))?;
+            let field = self.strip_nested_faultable_value(field, actual_item)?;
+            let field = self.coerce_value_to_ty(field, inner_item)?;
+            inner = self
+                .builder
+                .build_insert_value(inner, field.value, index as u32, "field")
+                .map_err(|error| format!("LLVM backend failed to build tuple value: {error}"))?
+                .into_struct_value();
+        }
+        let ok = self.faultable_value(inner_ty, false, None, Some(inner.into()))?;
+        self.builder
+            .build_store(out_ptr, ok)
+            .map_err(|error| format!("LLVM backend failed to store tuple value: {error}"))?;
+        self.builder
+            .build_unconditional_branch(after_block)
+            .map_err(|error| format!("LLVM backend failed to leave tuple ok: {error}"))?;
+        self.builder.position_at_end(after_block);
+        let result = self
+            .builder
+            .build_load(output_llvm_ty, out_ptr, "faultable.tuple")
+            .map_err(|error| format!("LLVM backend failed to load tuple value: {error}"))?;
+        Ok(LlvmValue {
+            value: result,
+            ty: output_ty,
+        })
+    }
+
+    pub(super) fn collect_nested_fault_state(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        ty: &Ty,
+        fault_cond: &mut IntValue<'ctx>,
+        selected_fault: &mut Option<BasicValueEnum<'ctx>>,
+    ) -> Result<(), String> {
+        match ty {
+            Ty::Faultable(_) => {
+                let is_fault = self.extract_faultable_is_fault(value)?;
+                let fault = self.extract_faultable_fault(value)?;
+                let prior_fault_cond = *fault_cond;
+                *fault_cond = self
+                    .builder
+                    .build_or(*fault_cond, is_fault, "nested.fault")
+                    .map_err(|error| {
+                        format!("LLVM backend failed to combine nested faults: {error}")
+                    })?;
+                *selected_fault = Some(if let Some(previous) = selected_fault.take() {
+                    self.builder
+                        .build_select(prior_fault_cond, previous, fault, "nested.fault_value")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to select nested fault value: {error}")
+                        })?
+                } else {
+                    fault
+                });
+                Ok(())
+            }
+            Ty::Tuple(items) => {
+                let tuple = value.into_struct_value();
+                for (index, item) in items.iter().enumerate() {
+                    let field = self
+                        .builder
+                        .build_extract_value(tuple, index as u32, "nested.field")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to extract nested tuple field: {error}")
+                        })?;
+                    self.collect_nested_fault_state(field, item, fault_cond, selected_fault)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub(super) fn strip_nested_faultable_value(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        ty: &Ty,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        match ty {
+            Ty::Faultable(inner) => Ok(LlvmValue {
+                value: self.extract_faultable_value(value)?,
+                ty: inner.as_ref().clone(),
+            }),
+            Ty::Tuple(items) => {
+                let tuple = value.into_struct_value();
+                let mut fields = Vec::with_capacity(items.len());
+                let mut field_tys = Vec::with_capacity(items.len());
+                for (index, item) in items.iter().enumerate() {
+                    let field = self
+                        .builder
+                        .build_extract_value(tuple, index as u32, "nested.field")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to extract nested tuple field: {error}")
+                        })?;
+                    let field = self.strip_nested_faultable_value(field, item)?;
+                    field_tys.push(field.ty);
+                    fields.push(field.value);
+                }
+                let plain_ty = Ty::Tuple(field_tys);
+                let mut plain = self
+                    .types
+                    .basic_type(&plain_ty)?
+                    .into_struct_type()
+                    .const_zero();
+                for (index, field) in fields.into_iter().enumerate() {
+                    plain = self
+                        .builder
+                        .build_insert_value(plain, field, index as u32, "nested.tuple")
+                        .map_err(|error| {
+                            format!("LLVM backend failed to build nested plain tuple: {error}")
+                        })?
+                        .into_struct_value();
+                }
+                Ok(LlvmValue {
+                    value: plain.into(),
+                    ty: plain_ty,
+                })
+            }
+            _ => Ok(LlvmValue {
+                value,
+                ty: ty.clone(),
+            }),
+        }
+    }
+
+    fn faultable_value(
+        &mut self,
+        inner_ty: &Ty,
+        is_fault: bool,
+        fault: Option<BasicValueEnum<'ctx>>,
+        value: Option<BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let faultable_ty = Ty::Faultable(Box::new(inner_ty.clone()));
+        let mut out = self
+            .types
+            .basic_type(&faultable_ty)?
+            .into_struct_type()
+            .const_zero();
+        let flag = self
+            .context
+            .i8_type()
+            .const_int(if is_fault { 1 } else { 0 }, false);
+        out = self
+            .builder
+            .build_insert_value(out, flag, 0, "faultable")
+            .map_err(|error| format!("LLVM backend failed to build faultable flag: {error}"))?
+            .into_struct_value();
+        if let Some(fault) = fault {
+            out = self
+                .builder
+                .build_insert_value(out, fault, 1, "faultable")
+                .map_err(|error| format!("LLVM backend failed to build faultable fault: {error}"))?
+                .into_struct_value();
+        }
+        if let Some(value) = value {
+            out = self
+                .builder
+                .build_insert_value(out, value, 2, "faultable")
+                .map_err(|error| format!("LLVM backend failed to build faultable value: {error}"))?
+                .into_struct_value();
+        }
+        Ok(out.into())
+    }
+
+    fn faultable_value_with_flag(
+        &mut self,
+        inner_ty: &Ty,
+        flag: IntValue<'ctx>,
+        fault: BasicValueEnum<'ctx>,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let faultable_ty = Ty::Faultable(Box::new(inner_ty.clone()));
+        let mut out = self
+            .types
+            .basic_type(&faultable_ty)?
+            .into_struct_type()
+            .const_zero();
+        out = self
+            .builder
+            .build_insert_value(out, flag, 0, "faultable")
+            .map_err(|error| format!("LLVM backend failed to build faultable flag: {error}"))?
+            .into_struct_value();
+        out = self
+            .builder
+            .build_insert_value(out, fault, 1, "faultable")
+            .map_err(|error| format!("LLVM backend failed to build faultable fault: {error}"))?
+            .into_struct_value();
+        out = self
+            .builder
+            .build_insert_value(out, value, 2, "faultable")
+            .map_err(|error| format!("LLVM backend failed to build faultable value: {error}"))?
+            .into_struct_value();
+        Ok(out.into())
+    }
+
+    fn extract_faultable_is_fault(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let flag = self
+            .builder
+            .build_extract_value(value.into_struct_value(), 0, "is_fault")
+            .map_err(|error| format!("LLVM backend failed to extract fault flag: {error}"))?
+            .into_int_value();
+        self.builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.context.i8_type().const_zero(),
+                "fault",
+            )
+            .map_err(|error| format!("LLVM backend failed to compare fault flag: {error}"))
+    }
+
+    fn extract_faultable_fault(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.builder
+            .build_extract_value(value.into_struct_value(), 1, "fault")
+            .map_err(|error| format!("LLVM backend failed to extract fault: {error}"))
+    }
+
+    fn extract_faultable_value(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.builder
+            .build_extract_value(value.into_struct_value(), 2, "value")
+            .map_err(|error| format!("LLVM backend failed to extract faultable value: {error}"))
+    }
+
+    fn extract_tuple_field(
+        &mut self,
+        input: &LlvmValue<'ctx>,
+        index: u32,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.builder
+            .build_extract_value(input.value.into_struct_value(), index, "field")
+            .map_err(|error| format!("LLVM backend failed to extract tuple field: {error}"))
+    }
+
+    fn to_real(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        ty: &Ty,
+    ) -> Result<inkwell::values::FloatValue<'ctx>, String> {
+        match ty {
+            Ty::Real => Ok(value.into_float_value()),
+            Ty::Int => self
+                .builder
+                .build_signed_int_to_float(
+                    value.into_int_value(),
+                    self.context.f64_type(),
+                    "sitofp",
+                )
+                .map_err(|error| format!("LLVM backend failed to cast Int to Real: {error}")),
+            other => Err(format!("expected numeric value, found `{other}`")),
+        }
+    }
+
+    fn current_function(&self) -> Result<FunctionValue<'ctx>, String> {
+        self.builder
+            .get_insert_block()
+            .and_then(|block| block.get_parent())
+            .ok_or_else(|| "LLVM backend has no current function".to_string())
+    }
+
+    fn runtime_function(
+        &mut self,
+        name: &str,
+        ret: Option<BasicTypeEnum<'ctx>>,
+        args: &[BasicTypeEnum<'ctx>],
+    ) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(function) = self.module.get_function(name) {
+            return Ok(function);
+        }
+        let arg_types = args
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect::<Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>>>();
+        let function_ty = match ret {
+            Some(ret) => ret.fn_type(&arg_types, false),
+            None => self.context.void_type().fn_type(&arg_types, false),
+        };
+        Ok(self.module.add_function(name, function_ty, None))
+    }
+
+    fn calloc_function(&mut self) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function("calloc") {
+            return function;
+        }
+        let i64_ty = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        self.module.add_function(
+            "calloc",
+            ptr_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false),
+            None,
+        )
+    }
+
+    fn emit_seq_new(
+        &mut self,
+        seq_ty: &Ty,
+        count: IntValue<'ctx>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let Ty::Seq(item_ty) = seq_ty else {
+            return Err(format!("expected sequence type, found `{seq_ty}`"));
+        };
+        let item_llvm_ty = self.types.basic_type(item_ty)?;
+        let elem_size = item_llvm_ty
+            .size_of()
+            .ok_or_else(|| format!("cannot compute size of `{item_ty}`"))?;
+        let nonzero_count = self
+            .builder
+            .build_select(
+                self.builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        count,
+                        self.context.i64_type().const_zero(),
+                        "empty",
+                    )
+                    .map_err(|error| {
+                        format!("LLVM backend failed to compare sequence count: {error}")
+                    })?,
+                self.context.i64_type().const_int(1, false),
+                count,
+                "alloc.count",
+            )
+            .map_err(|error| format!("LLVM backend failed to select allocation count: {error}"))?
+            .into_int_value();
+        let calloc = self.calloc_function();
+        let items = self
+            .builder
+            .build_call(calloc, &[nonzero_count.into(), elem_size.into()], "items")
+            .map_err(|error| format!("LLVM backend failed to call calloc: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "calloc did not return a value".to_string())?;
+        let mut seq = self
+            .types
+            .basic_type(seq_ty)?
+            .into_struct_type()
+            .const_zero();
+        seq = self
+            .builder
+            .build_insert_value(seq, count, 0, "seq")
+            .map_err(|error| format!("LLVM backend failed to set sequence count: {error}"))?
+            .into_struct_value();
+        seq = self
+            .builder
+            .build_insert_value(seq, items, 1, "seq")
+            .map_err(|error| format!("LLVM backend failed to set sequence items: {error}"))?
+            .into_struct_value();
+        Ok(LlvmValue {
+            value: seq.into(),
+            ty: seq_ty.clone(),
+        })
+    }
+
+    fn seq_count(&mut self, seq: BasicValueEnum<'ctx>) -> Result<IntValue<'ctx>, String> {
+        Ok(self
+            .builder
+            .build_extract_value(seq.into_struct_value(), 0, "count")
+            .map_err(|error| format!("LLVM backend failed to extract sequence count: {error}"))?
+            .into_int_value())
+    }
+
+    fn seq_items(&mut self, seq: BasicValueEnum<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        Ok(self
+            .builder
+            .build_extract_value(seq.into_struct_value(), 1, "items")
+            .map_err(|error| format!("LLVM backend failed to extract sequence items: {error}"))?
+            .into_pointer_value())
+    }
+
+    fn load_seq_item(
+        &mut self,
+        seq: BasicValueEnum<'ctx>,
+        seq_ty: &Ty,
+        index: IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Ty::Seq(item_ty) = seq_ty else {
+            return Err(format!("expected sequence type, found `{seq_ty}`"));
+        };
+        let item_llvm_ty = self.types.basic_type(item_ty)?;
+        let items = self.seq_items(seq)?;
+        let ptr = unsafe {
+            self.builder
+                .build_gep(item_llvm_ty, items, &[index], "item.ptr")
+                .map_err(|error| {
+                    format!("LLVM backend failed to compute sequence item ptr: {error}")
+                })?
+        };
+        self.builder
+            .build_load(item_llvm_ty, ptr, "item")
+            .map_err(|error| format!("LLVM backend failed to load sequence item: {error}"))
+    }
+
+    fn store_seq_item(
+        &mut self,
+        seq: BasicValueEnum<'ctx>,
+        seq_ty: &Ty,
+        index: IntValue<'ctx>,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let Ty::Seq(item_ty) = seq_ty else {
+            return Err(format!("expected sequence type, found `{seq_ty}`"));
+        };
+        let item_llvm_ty = self.types.basic_type(item_ty)?;
+        let items = self.seq_items(seq)?;
+        let ptr = unsafe {
+            self.builder
+                .build_gep(item_llvm_ty, items, &[index], "item.ptr")
+                .map_err(|error| {
+                    format!("LLVM backend failed to compute sequence item ptr: {error}")
+                })?
+        };
+        self.builder
+            .build_store(ptr, value)
+            .map_err(|error| format!("LLVM backend failed to store sequence item: {error}"))?;
+        Ok(())
+    }
+
+    fn emit_entrypoint(&mut self) -> Result<(), String> {
+        let Some(program) = self.codegen.module.declarations.iter().find_map(|decl| {
+            if let Decl::Program(callable) = decl {
+                Some(callable)
+            } else {
+                None
+            }
+        }) else {
+            return Ok(());
+        };
+        let program_fn = *self
+            .functions
+            .get(&program.name)
+            .ok_or_else(|| "missing program function".to_string())?;
+        let i32_ty = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let main_ty = i32_ty.fn_type(&[i32_ty.into(), ptr_ty.into()], false);
+        let flow_main = self.module.add_function("flow_unboxed_main", main_ty, None);
+        let block = self.context.append_basic_block(flow_main, "entry");
+        self.builder.position_at_end(block);
+        let argc = flow_main
+            .get_nth_param(0)
+            .ok_or_else(|| "missing argc".to_string())?;
+        let argv = flow_main
+            .get_nth_param(1)
+            .ok_or_else(|| "missing argv".to_string())?;
+        let args_ty = self.types.basic_type(&Ty::Args)?;
+        let mut args = args_ty.into_struct_type().const_zero();
+        args = self
+            .builder
+            .build_insert_value(args, argc, 0, "argc")
+            .map_err(|error| format!("LLVM backend failed to build Args.argc: {error}"))?
+            .into_struct_value();
+        args = self
+            .builder
+            .build_insert_value(args, argv, 1, "argv")
+            .map_err(|error| format!("LLVM backend failed to build Args.argv: {error}"))?
+            .into_struct_value();
+        let result = self
+            .builder
+            .build_call(program_fn, &[args.into()], "program")
+            .map_err(|error| format!("LLVM backend failed to call program main: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "program main did not return a value".to_string())?;
+        let exit = match self
+            .codegen
+            .signatures
+            .get(&program.name)
+            .map(|sig| sig.output.clone())
+        {
+            Some(Ty::Int) => self
+                .builder
+                .build_int_truncate(result.into_int_value(), i32_ty, "exit")
+                .map_err(|error| format!("LLVM backend failed to truncate exit code: {error}"))?,
+            Some(Ty::Faultable(inner)) if inner.as_ref() == &Ty::Int => {
+                let fault_block = self.context.append_basic_block(flow_main, "fault");
+                let ok_block = self.context.append_basic_block(flow_main, "ok");
+                let is_fault = self.extract_faultable_is_fault(result)?;
+                self.builder
+                    .build_conditional_branch(is_fault, fault_block, ok_block)
+                    .map_err(|error| {
+                        format!("LLVM backend failed to branch on program fault: {error}")
+                    })?;
+                self.builder.position_at_end(fault_block);
+                let fault = self.extract_faultable_fault(result)?;
+                let fault = self.value_to_runtime_arg(fault, &Ty::Fault)?;
+                let exit_fault = self.runtime_function(
+                    "fa_exit_fault",
+                    None,
+                    &[self.runtime_pair_type().into()],
+                )?;
+                self.builder
+                    .build_call(exit_fault, &[fault.into()], "exit_fault")
+                    .map_err(|error| {
+                        format!("LLVM backend failed to call fa_exit_fault: {error}")
+                    })?;
+                self.builder.build_unreachable().map_err(|error| {
+                    format!("LLVM backend failed to build unreachable: {error}")
+                })?;
+                self.builder.position_at_end(ok_block);
+                let exit_value = self.extract_faultable_value(result)?.into_int_value();
+                self.builder
+                    .build_int_truncate(exit_value, i32_ty, "exit")
+                    .map_err(|error| {
+                        format!("LLVM backend failed to truncate exit code: {error}")
+                    })?
+            }
+            other => {
+                return Err(format!(
+                    "unsupported program output for direct LLVM: {other:?}"
+                ));
+            }
+        };
+        self.builder
+            .build_return(Some(&exit))
+            .map_err(|error| format!("LLVM backend failed to return entrypoint: {error}"))?;
+
+        let c_main = self.module.add_function("main", main_ty, None);
+        let c_main_block = self.context.append_basic_block(c_main, "entry");
+        self.builder.position_at_end(c_main_block);
+        let c_argc = c_main
+            .get_nth_param(0)
+            .ok_or_else(|| "missing main argc".to_string())?;
+        let c_argv = c_main
+            .get_nth_param(1)
+            .ok_or_else(|| "missing main argv".to_string())?;
+        let c_exit = self
+            .builder
+            .build_call(flow_main, &[c_argc.into(), c_argv.into()], "exit")
+            .map_err(|error| format!("LLVM backend failed to call flow_unboxed_main: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "flow_unboxed_main did not return a value".to_string())?;
+        self.builder
+            .build_return(Some(&c_exit))
+            .map_err(|error| format!("LLVM backend failed to return main: {error}"))?;
+        Ok(())
+    }
+}
+
+struct LlvmTypeRegistry<'ctx> {
+    context: &'ctx Context,
+    structs: HashMap<String, StructType<'ctx>>,
+}
+
+impl<'ctx> LlvmTypeRegistry<'ctx> {
+    fn new(context: &'ctx Context) -> Self {
+        Self {
+            context,
+            structs: HashMap::new(),
+        }
+    }
+
+    fn basic_type(&mut self, ty: &Ty) -> Result<BasicTypeEnum<'ctx>, String> {
+        match ty {
+            Ty::Unit => Ok(self
+                .struct_type(ty, &[self.context.i32_type().into()])?
+                .into()),
+            Ty::Int => Ok(self.context.i64_type().into()),
+            Ty::Real | Ty::OneOf(_) => Ok(self.context.f64_type().into()),
+            Ty::Bool => Ok(self.context.i8_type().into()),
+            Ty::Bytes => Ok(self
+                .struct_type(
+                    ty,
+                    &[
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                        self.context.i64_type().into(),
+                    ],
+                )?
+                .into()),
+            Ty::Args => Ok(self
+                .struct_type(
+                    ty,
+                    &[
+                        self.context.i32_type().into(),
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                    ],
+                )?
+                .into()),
+            Ty::Fault => {
+                let bytes = self.basic_type(&Ty::Bytes)?;
+                Ok(self.struct_type(ty, &[bytes])?.into())
+            }
+            Ty::Seq(item) => {
+                self.basic_type(item)?;
+                Ok(self
+                    .struct_type(
+                        ty,
+                        &[
+                            self.context.i64_type().into(),
+                            self.context.ptr_type(AddressSpace::default()).into(),
+                        ],
+                    )?
+                    .into())
+            }
+            Ty::Tuple(items) => {
+                let fields = items
+                    .iter()
+                    .map(|item| self.basic_type(item))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.struct_type(ty, &fields)?.into())
+            }
+            Ty::Faultable(inner) => {
+                let fault = self.basic_type(&Ty::Fault)?;
+                let inner = self.basic_type(inner)?;
+                Ok(self
+                    .struct_type(ty, &[self.context.i8_type().into(), fault, inner])?
+                    .into())
+            }
+            Ty::Stream(_) => {
+                let bytes = self.basic_type(&Ty::Bytes)?;
+                let ptr = self.context.ptr_type(AddressSpace::default()).into();
+                Ok(self
+                    .struct_type(
+                        ty,
+                        &[
+                            ptr,
+                            self.context.i32_type().into(),
+                            bytes,
+                            ptr,
+                            ptr,
+                            ptr,
+                            ptr,
+                            self.context.i64_type().into(),
+                            self.context.i8_type().into(),
+                        ],
+                    )?
+                    .into())
+            }
+            Ty::SqliteConnection => Ok(self
+                .struct_type(ty, &[self.context.ptr_type(AddressSpace::default()).into()])?
+                .into()),
+            Ty::SqliteValue => {
+                let bytes = self.basic_type(&Ty::Bytes)?;
+                Ok(self
+                    .struct_type(
+                        ty,
+                        &[
+                            self.context.i32_type().into(),
+                            self.context.i64_type().into(),
+                            self.context.f64_type().into(),
+                            bytes,
+                        ],
+                    )?
+                    .into())
+            }
+            Ty::SqliteRow => Ok(self
+                .struct_type(
+                    ty,
+                    &[
+                        self.context.i64_type().into(),
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                    ],
+                )?
+                .into()),
+            Ty::HttpServerConfig => {
+                let bytes = self.basic_type(&Ty::Bytes)?;
+                Ok(self
+                    .struct_type(
+                        ty,
+                        &[
+                            bytes,
+                            self.context.i64_type().into(),
+                            self.context.i8_type().into(),
+                            bytes,
+                            bytes,
+                            self.context.i8_type().into(),
+                            self.context.i8_type().into(),
+                        ],
+                    )?
+                    .into())
+            }
+            Ty::HttpListener => {
+                let config = self.basic_type(&Ty::HttpServerConfig)?;
+                Ok(self
+                    .struct_type(
+                        ty,
+                        &[
+                            config,
+                            self.context.ptr_type(AddressSpace::default()).into(),
+                        ],
+                    )?
+                    .into())
+            }
+            Ty::HttpRequest => {
+                let bytes = self.basic_type(&Ty::Bytes)?;
+                Ok(self
+                    .struct_type(
+                        ty,
+                        &[
+                            bytes,
+                            bytes,
+                            bytes,
+                            self.context.ptr_type(AddressSpace::default()).into(),
+                        ],
+                    )?
+                    .into())
+            }
+            Ty::HttpResponse => {
+                let request = self.basic_type(&Ty::HttpRequest)?;
+                let bytes = self.basic_type(&Ty::Bytes)?;
+                let seq_bytes = self.basic_type(&Ty::Seq(Box::new(Ty::Bytes)))?;
+                Ok(self
+                    .struct_type(
+                        ty,
+                        &[
+                            request,
+                            self.context.i64_type().into(),
+                            seq_bytes,
+                            seq_bytes,
+                            bytes,
+                            bytes,
+                        ],
+                    )?
+                    .into())
+            }
+            Ty::Var(_) | Ty::EmptySeq => {
+                Err(format!("direct LLVM cannot lower unresolved type `{ty}`"))
+            }
+        }
+    }
+
+    fn struct_type(
+        &mut self,
+        ty: &Ty,
+        fields: &[BasicTypeEnum<'ctx>],
+    ) -> Result<StructType<'ctx>, String> {
+        let name = type_name(ty);
+        if let Some(existing) = self.structs.get(&name) {
+            return Ok(*existing);
+        }
+        let field_types = fields.to_vec();
+        let struct_ty = self.context.struct_type(&field_types, false);
+        self.structs.insert(name, struct_ty);
+        Ok(struct_ty)
     }
 }
 
@@ -5269,6 +9392,26 @@ fn contains_empty_seq(input: &Ty) -> bool {
     }
 }
 
+fn input_context_ty(expected: &Ty, actual: &Ty) -> Ty {
+    match (expected, actual) {
+        (_, Ty::EmptySeq) => expected.clone(),
+        (expected, Ty::Faultable(actual)) => {
+            Ty::Faultable(Box::new(input_context_ty(expected, actual)))
+        }
+        (Ty::Seq(expected), Ty::Seq(actual)) => {
+            Ty::Seq(Box::new(input_context_ty(expected, actual)))
+        }
+        (Ty::Tuple(expected), Ty::Tuple(actual)) if expected.len() == actual.len() => Ty::Tuple(
+            expected
+                .iter()
+                .zip(actual.iter())
+                .map(|(expected, actual)| input_context_ty(expected, actual))
+                .collect(),
+        ),
+        _ => actual.clone(),
+    }
+}
+
 fn unwrap_faultable_tuple(input: &Ty) -> Option<Ty> {
     let Ty::Tuple(items) = input else {
         return None;
@@ -5308,6 +9451,14 @@ fn contains_faultable_ty(input: &Ty) -> bool {
         Ty::Seq(item) | Ty::Stream(item) => contains_faultable_ty(item),
         Ty::Tuple(items) => items.iter().any(contains_faultable_ty),
         Ty::OneOf(items) => items.iter().any(contains_faultable_ty),
+        _ => false,
+    }
+}
+
+fn contains_tuple_faultable_ty(input: &Ty) -> bool {
+    match input {
+        Ty::Faultable(_) => true,
+        Ty::Tuple(items) => items.iter().any(contains_tuple_faultable_ty),
         _ => false,
     }
 }
@@ -6021,14 +10172,10 @@ mod tests {
 
         let llvm = emit_module(&module).expect("llvm");
 
-        assert_eq!(
-            llvm,
-            "declare i32 @flow_unboxed_main(i32, ptr)\n\n\
-define i32 @main(i32 %argc, ptr %argv) {\n\
-  %exit = call i32 @flow_unboxed_main(i32 %argc, ptr %argv)\n\
-  ret i32 %exit\n\
-}\n"
-        );
+        assert!(llvm.contains("declare i32 @flow_unboxed_main(i32, ptr)"));
+        assert!(llvm.contains("define i32 @main(i32"));
+        assert!(llvm.contains("call i32 @flow_unboxed_main(i32"));
+        assert!(llvm.contains("ret i32"));
     }
 
     #[test]

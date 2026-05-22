@@ -116,7 +116,7 @@ directory:
 examples/<name>/build/<host-target>/
 ```
 
-The generated LLVM and C runtime are cached in:
+The generated LLVM modules are cached in:
 
 ```text
 examples/<name>/build/<host-target>/.cache/
