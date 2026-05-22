@@ -32,6 +32,7 @@ use std::path::Path;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod llvm_stdlib;
+mod oxc_postprocess;
 mod typescript;
 
 #[allow(dead_code)]
@@ -123,11 +124,32 @@ pub fn emit_typescript(module: &Module) -> Result<String, String> {
     typescript::emit_module(TypedCodegen::new(&expanded)?)
 }
 
+pub fn emit_typescript_artifacts(
+    module: &Module,
+) -> Result<oxc_postprocess::TypeScriptArtifacts, String> {
+    let expanded = module_resolver::expand_stdlib_sources(module)?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
+    oxc_postprocess::emit_typescript_artifacts(&source)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-pub fn emit_typescript_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
+pub fn emit_typescript_artifacts_with_base(
+    module: &Module,
+    base_dir: &Path,
+) -> Result<oxc_postprocess::TypeScriptArtifacts, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let expanded = monomorphize::expand_module(&expanded)?;
-    typescript::emit_module(TypedCodegen::new(&expanded)?)
+    let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
+    oxc_postprocess::emit_typescript_artifacts(&source)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn emit_javascript_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
+    oxc_postprocess::emit_javascript(&source)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

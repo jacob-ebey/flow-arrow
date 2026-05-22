@@ -139,6 +139,7 @@ pub enum BuildTarget {
     Native(NativeTarget),
     Wasm(WasmTarget),
     Typescript,
+    Javascript,
 }
 
 impl BuildTarget {
@@ -151,6 +152,7 @@ impl BuildTarget {
             Self::Native(target) => target.triple(),
             Self::Wasm(target) => target.triple(),
             Self::Typescript => "typescript",
+            Self::Javascript => "javascript",
         }
     }
 
@@ -162,6 +164,7 @@ impl BuildTarget {
         let mut targets = Vec::from(NATIVE_TARGETS);
         targets.extend(WasmTarget::SUPPORTED.iter().map(|target| target.triple()));
         targets.push("typescript");
+        targets.push("javascript");
         targets
     }
 }
@@ -181,6 +184,7 @@ impl FromStr for BuildTarget {
             "wasm32-unknown-unknown" => Ok(Self::Wasm(WasmTarget::UnknownUnknown)),
             "wasm32-wasi" => Ok(Self::Wasm(WasmTarget::Wasi)),
             "typescript" | "ts" => Ok(Self::Typescript),
+            "javascript" | "js" => Ok(Self::Javascript),
             target if NATIVE_TARGETS.contains(&target) => Ok(Self::Native(NativeTarget {
                 triple: target.to_string(),
             })),
@@ -272,6 +276,7 @@ pub fn build_file_with_options(path: &Path, options: &BuildOptions) -> Result<Bu
         BuildTarget::Native(target) => build_native(path, base_dir, &module, target, options),
         BuildTarget::Wasm(target) => build_wasm(path, base_dir, &module, *target, options),
         BuildTarget::Typescript => build_typescript(path, base_dir, &module, options),
+        BuildTarget::Javascript => build_javascript(path, base_dir, &module, options),
     }
 }
 
@@ -283,7 +288,7 @@ fn build_typescript(
 ) -> Result<BuildOutput, String> {
     if !options.compiler_flags.is_empty() || !options.linker_flags.is_empty() {
         return Err(
-            "TypeScript builds emit source directly and do not accept compiler or linker flags"
+            "TypeScript builds emit JavaScript and declarations directly and do not accept compiler or linker flags"
                 .to_string(),
         );
     }
@@ -291,12 +296,46 @@ fn build_typescript(
         return Err("TypeScript builds do not support `--emit-llvm`".to_string());
     }
 
-    let source = codegen::emit_typescript_with_base(module, base_dir)?;
+    let artifacts = codegen::emit_typescript_artifacts_with_base(module, base_dir)?;
     let target = BuildTarget::Typescript;
     let build_dir = build_dir(path, &target);
     fs::create_dir_all(&build_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", build_dir.display()))?;
-    let artifact = build_dir.join(format!("{}.ts", executable_name(path)?));
+    let executable_name = executable_name(path)?;
+    let artifact = build_dir.join(format!("{executable_name}.js"));
+    let declarations = build_dir.join(format!("{executable_name}.d.ts"));
+    fs::write(&artifact, artifacts.javascript)
+        .map_err(|error| format!("failed to write `{}`: {error}", artifact.display()))?;
+    fs::write(&declarations, artifacts.declarations)
+        .map_err(|error| format!("failed to write `{}`: {error}", declarations.display()))?;
+    Ok(BuildOutput {
+        build_dir,
+        executable: artifact,
+    })
+}
+
+fn build_javascript(
+    path: &Path,
+    base_dir: &Path,
+    module: &Module,
+    options: &BuildOptions,
+) -> Result<BuildOutput, String> {
+    if !options.compiler_flags.is_empty() || !options.linker_flags.is_empty() {
+        return Err(
+            "JavaScript builds emit source directly and do not accept compiler or linker flags"
+                .to_string(),
+        );
+    }
+    if options.emit_llvm.is_some() {
+        return Err("JavaScript builds do not support `--emit-llvm`".to_string());
+    }
+
+    let source = codegen::emit_javascript_with_base(module, base_dir)?;
+    let target = BuildTarget::Javascript;
+    let build_dir = build_dir(path, &target);
+    fs::create_dir_all(&build_dir)
+        .map_err(|error| format!("failed to create `{}`: {error}", build_dir.display()))?;
+    let artifact = build_dir.join(format!("{}.js", executable_name(path)?));
     fs::write(&artifact, source)
         .map_err(|error| format!("failed to write `{}`: {error}", artifact.display()))?;
     Ok(BuildOutput {
@@ -445,7 +484,8 @@ impl BuildPlan {
                 build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX))
             }
             BuildTarget::Wasm(_) => build_dir.join(format!("{executable_name}.wasm")),
-            BuildTarget::Typescript => build_dir.join(format!("{executable_name}.ts")),
+            BuildTarget::Typescript => build_dir.join(format!("{executable_name}.js")),
+            BuildTarget::Javascript => build_dir.join(format!("{executable_name}.js")),
         };
         Ok(Self {
             build_dir,
@@ -924,6 +964,11 @@ mod tests {
             Ok(BuildTarget::Typescript)
         );
         assert_eq!(BuildTarget::from_str("ts"), Ok(BuildTarget::Typescript));
+        assert_eq!(
+            BuildTarget::from_str("javascript"),
+            Ok(BuildTarget::Javascript)
+        );
+        assert_eq!(BuildTarget::from_str("js"), Ok(BuildTarget::Javascript));
     }
 
     #[test]

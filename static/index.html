@@ -155,7 +155,7 @@
 
       .workspace {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-columns: minmax(260px, 0.9fr) minmax(0, 0.8fr) minmax(0, 1fr);
         min-height: min(680px, calc(100vh - 128px));
         border: 1px solid var(--line);
         border-top: 0;
@@ -263,16 +263,20 @@
             <div class="pane-title">FlowArrow</div>
             <textarea id="source" spellcheck="false"></textarea>
           </section>
-          <section class="pane" aria-label="TypeScript output">
-            <div class="pane-title">TypeScript</div>
-            <pre id="output" aria-live="polite"></pre>
+          <section class="pane" aria-label="TypeScript declarations output">
+            <div class="pane-title">fib.d.ts</div>
+            <pre id="types-output" aria-live="polite"></pre>
+          </section>
+          <section class="pane" aria-label="JavaScript output">
+            <div class="pane-title">fib.js</div>
+            <pre id="js-output" aria-live="polite"></pre>
           </section>
         </div>
       </section>
     </main>
 
     <script type="module">
-      const fibExample = `# Exports a pure Fibonacci node for the TypeScript source target.
+      const fibExample = `# Exports a pure Fibonacci node for the browser TypeScript demo.
 import std.math { add }
 
 extern node fib(depth: Int) -> result: Int {
@@ -289,7 +293,8 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
       const encoder = new TextEncoder();
       const status = document.querySelector("#status");
       const source = document.querySelector("#source");
-      const output = document.querySelector("#output");
+      const typesOutput = document.querySelector("#types-output");
+      const jsOutput = document.querySelector("#js-output");
       const compileButton = document.querySelector("#compile");
       const resetButton = document.querySelector("#reset");
 
@@ -325,8 +330,11 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
         const ptr = wasm.flowarrow_alloc(bytes.length);
         new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
         try {
-          const ok = wasm.flowarrow_compile_typescript(ptr, bytes.length, 1);
-          output.textContent = readResult();
+          const ok = wasm.flowarrow_compile_typescript_artifacts(ptr, bytes.length, 1);
+          const result = readResult();
+          const separator = result.indexOf("\0");
+          typesOutput.textContent = ok ? result.slice(0, separator) : result;
+          jsOutput.textContent = ok ? result.slice(separator + 1) : "";
           setStatus(ok ? "Compiled" : "Compile error", ok ? "ok" : "error");
         } finally {
           wasm.flowarrow_dealloc(ptr, bytes.length);
@@ -346,7 +354,8 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
         compile();
       } catch (error) {
         setStatus("Compiler failed to load", "error");
-        output.textContent = error instanceof Error ? error.message : String(error);
+        typesOutput.textContent = error instanceof Error ? error.message : String(error);
+        jsOutput.textContent = "";
       }
     </script>
   </body>

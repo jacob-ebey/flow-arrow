@@ -121,8 +121,8 @@ values or nominally distinct types.
 `extern node` marks a node as part of the module's public callable
 surface. Local FlowArrow imports may import type aliases and extern
 nodes; non-extern nodes remain private implementation details. The
-TypeScript and WebAssembly library backends only expose extern nodes as
-host-callable functions.
+TypeScript, JavaScript, and WebAssembly library backends only expose
+extern nodes as host-callable functions.
 
 Static node parameters make a `node` a compile-time graph template:
 

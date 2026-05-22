@@ -53,8 +53,9 @@ impl<'a> TypeScriptCodegen<'a> {
 
         if has_program_main {
             out.push_str(
-                "\nconst __flowarrow_main_url = typeof process !== \"undefined\" && process.argv?.[1]\n  ? new URL(process.argv[1], \"file:\").href\n  : \"\";\n\
-if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = main({ argv: process.argv.slice(2) });\n  const __flowarrow_exit = faExitCode(__flowarrow_result);\n  process.exit(Number(__flowarrow_exit));\n}\n",
+                "\nconst __flowarrow_process = (globalThis as any).process;\n\
+const __flowarrow_main_url = __flowarrow_process?.argv?.[1]\n  ? new URL(__flowarrow_process.argv[1], \"file:\").href\n  : \"\";\n\
+if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = main({ argv: __flowarrow_process.argv.slice(2) });\n  const __flowarrow_exit = faExitCode(__flowarrow_result);\n  __flowarrow_process.exit(Number(__flowarrow_exit));\n}\n",
             );
         }
 

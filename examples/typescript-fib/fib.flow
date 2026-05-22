@@ -1,4 +1,4 @@
-# Exports a pure Fibonacci node for the TypeScript source target.
+# Exports a pure Fibonacci node for the TypeScript and JavaScript targets.
 import std.math { add }
 
 extern node fib(depth: Int) -> result: Int {

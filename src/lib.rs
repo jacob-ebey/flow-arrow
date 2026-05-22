@@ -78,6 +78,19 @@ pub fn compile_typescript_source_with_options(
     codegen::emit_typescript(&module)
 }
 
+pub fn compile_typescript_artifacts_source_with_options(
+    source: &str,
+    options: TypeScriptCompileOptions,
+) -> Result<(String, String), String> {
+    let module = parser::parse(source)?;
+    match options.mode {
+        TypeScriptCompileMode::Program => typecheck::check_module(&module)?,
+        TypeScriptCompileMode::Library => typecheck::check_library_module(&module)?,
+    }
+    let artifacts = codegen::emit_typescript_artifacts(&module)?;
+    Ok((artifacts.declarations, artifacts.javascript))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_lsp_server() -> Result<u8, String> {
     lsp::run_server()

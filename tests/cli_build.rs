@@ -140,10 +140,15 @@ fn build_typescript_fib_example_and_run_node_script() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let generated = fs::read_to_string("examples/typescript-fib/build/typescript/fib.ts")
-        .expect("read generated TypeScript");
-    assert!(generated.contains("export function fib(depth: bigint): bigint"));
-    assert!(generated.contains("for (let"));
+    let generated_js = fs::read_to_string("examples/typescript-fib/build/typescript/fib.js")
+        .expect("read generated TypeScript JavaScript");
+    let generated_dts = fs::read_to_string("examples/typescript-fib/build/typescript/fib.d.ts")
+        .expect("read generated TypeScript declarations");
+    assert!(generated_js.contains("export function fib(depth)"));
+    assert!(generated_js.contains("for (let"));
+    assert!(!generated_js.contains(": bigint"));
+    assert!(!generated_js.contains("faParseReal"));
+    assert!(generated_dts.contains("export declare function fib(depth: bigint): bigint"));
 
     if Command::new("tsc").arg("--version").output().is_ok() {
         let output = Command::new("tsc")
@@ -155,9 +160,8 @@ fn build_typescript_fib_example_and_run_node_script() {
                 "NodeNext",
                 "--moduleResolution",
                 "NodeNext",
-                "--allowImportingTsExtensions",
                 "examples/typescript-fib/run.ts",
-                "examples/typescript-fib/build/typescript/fib.ts",
+                "examples/typescript-fib/build/typescript/fib.d.ts",
             ])
             .output()
             .expect("run tsc");
@@ -190,6 +194,56 @@ fn build_typescript_fib_example_and_run_node_script() {
 }
 
 #[test]
+fn build_javascript_fib_example_and_run_node_script() {
+    let output = Command::new(flowarrow())
+        .args([
+            "build",
+            "--target",
+            "javascript",
+            "--crate-type",
+            "cdylib",
+            "examples/typescript-fib/fib.flow",
+        ])
+        .output()
+        .expect("run flowarrow build");
+    assert!(
+        output.status.success(),
+        "flowarrow build failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let generated = fs::read_to_string("examples/typescript-fib/build/javascript/fib.js")
+        .expect("read generated JavaScript");
+    assert!(generated.contains("export function fib(depth)"));
+    assert!(!generated.contains(": bigint"));
+    assert!(!generated.contains("faParseReal"));
+
+    if Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipping JavaScript example runtime test: node is not installed");
+        return;
+    }
+
+    let script = r#"
+        const fs = require("node:fs");
+        const source = fs.readFileSync("examples/typescript-fib/build/javascript/fib.js", "utf8");
+        import("data:text/javascript," + encodeURIComponent(source))
+          .then((mod) => console.log(mod.fib(10n).toString()));
+    "#;
+    let output = Command::new("node")
+        .args(["-e", script])
+        .output()
+        .expect("run node JavaScript example");
+    assert!(
+        output.status.success(),
+        "node JavaScript example failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "55");
+}
+
+#[test]
 fn build_typescript_program_with_core_stdlib_and_run_node() {
     let output = Command::new(flowarrow())
         .args([
@@ -215,8 +269,7 @@ fn build_typescript_program_with_core_stdlib_and_run_node() {
                 "ES2022",
                 "--module",
                 "ES2022",
-                "--allowImportingTsExtensions",
-                "examples/add-numbers-from-args/build/typescript/main.ts",
+                "examples/add-numbers-from-args/build/typescript/main.d.ts",
             ])
             .output()
             .expect("run tsc");
@@ -237,7 +290,7 @@ fn build_typescript_program_with_core_stdlib_and_run_node() {
 
     let output = Command::new("node")
         .args([
-            "examples/add-numbers-from-args/build/typescript/main.ts",
+            "examples/add-numbers-from-args/build/typescript/main.js",
             "1.5",
             "2.5",
             "3",

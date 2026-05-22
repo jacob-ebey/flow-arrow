@@ -130,7 +130,9 @@ Current implementation status: `flowarrow build` defaults to the host
 native target and accepts `--target native`, `--target host`, or the host
 target triple for that backend. `wasm32-unknown-unknown` supports an
 initial `--crate-type cdylib` reactor-module path for pure scalar node
-exports. `typescript` emits TypeScript source under `build/typescript/`.
+exports. `typescript` emits JavaScript plus TypeScript declarations under
+`build/typescript/`, and `javascript` emits JavaScript source under
+`build/javascript/`.
 `wasm32-wasi` is parsed but not implemented yet.
 
 Build optimization defaults to `-O3`. Users can select a clang-style
@@ -167,16 +169,23 @@ x86_64-pc-windows-msvc
 wasm32-unknown-unknown
 wasm32-wasi
 typescript
+javascript
 ```
 
-The `typescript` target emits standalone `.ts` source instead of invoking
-a native compiler or linker. It supports the core language lowering and
-core stdlib nodes for CLI arguments, text/bytes, integer/real conversion,
-math, predicates, faults, tuples, and sequences. Native-backed modules
-such as `std.cv`, `std.http`, and `std.sqlite` are intentionally rejected
-by this backend until they have target-specific runtime support.
+The `typescript` target emits standalone `.js` runtime source plus a
+`.d.ts` declaration file instead of invoking a native compiler or linker.
+The `javascript` target runs the same TypeScript lowering through OXC's
+TypeScript transform and emits standalone `.js` source. Both source
+targets run OXC dead code elimination before writing JavaScript
+artifacts. The TypeScript target uses OXC isolated declarations for
+`.d.ts` generation. They support the core language lowering and core
+stdlib nodes for CLI arguments, text/bytes,
+integer/real conversion, math, predicates, faults, tuples, and sequences.
+Native-backed modules such as `std.cv`, `std.http`, and `std.sqlite` are
+intentionally rejected by these backends until they have target-specific
+runtime support.
 Only nodes declared with `extern node` are emitted as exported
-TypeScript functions; ordinary nodes are generated as internal helpers.
+host-callable functions; ordinary nodes are generated as internal helpers.
 
 ### 2.5 WASM-hosted TypeScript compiler
 

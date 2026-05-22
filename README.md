@@ -113,7 +113,9 @@ cargo bench
 `flowarrow build` defaults to the host native target. `--target native`,
 `--target host`, and the host target triple select the same native backend.
 `wasm32-unknown-unknown` supports library-style WASM builds for exportable
-scalar nodes, and `typescript` emits generated TypeScript source.
+scalar nodes, `typescript` emits generated JavaScript plus TypeScript
+declarations, and `javascript` emits generated JavaScript transpiled from the
+TypeScript backend with OXC.
 
 Native outputs are written under the source file's local build directory:
 
@@ -136,10 +138,17 @@ FlowArrow Fibonacci example to TypeScript in the browser. Rebuild the WASM
 compiler artifact before serving or publishing `static/`:
 
 ```sh
-rustup target add wasm32-unknown-unknown
-cargo build --lib --target wasm32-unknown-unknown --release
-cp target/wasm32-unknown-unknown/release/flowarrow.wasm static/flowarrow.wasm
+source ~/.zshrc
+rtk rustup target add wasm32-unknown-unknown
+rtk cargo build --lib --target wasm32-unknown-unknown --release
+rtk cp target/wasm32-unknown-unknown/release/flowarrow.wasm static/flowarrow.wasm
 ```
+
+If `cargo` or `rustc` resolves to a non-rustup toolchain, such as Homebrew
+Rust on macOS, the build can still report that `std` for
+`wasm32-unknown-unknown` is missing after `rustup target add` succeeds. Sourcing
+the shell config first ensures rustup's shims are ahead of that toolchain on
+`PATH`.
 
 ## Optional Dependency Checks
 
