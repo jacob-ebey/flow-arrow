@@ -482,11 +482,17 @@ foreign js module "node:os" {
 foreign js global "console" {
     io node log(message: Bytes) -> done: Unit = log
 }
+
+foreign c header "./native_math.h" source "./native_math.c" {
+    pure node native_score(value: Int) -> score: Int = fa_native_score
+}
 ```
 
 The `platform` node is pure because it is modeled as a stable host query.
 The `log` node is `io`, so calls to it remain graph-visible boundary
-operations.
+operations. The C declaration imports a native ABI symbol into LLVM-backed
+builds and can name a local source file that is compiled and linked with the
+generated output.
 
 Effectful nodes may be used with `map` and `fault map`. Pure maps may run in
 parallel; effectful maps run in deterministic input order so filesystem,

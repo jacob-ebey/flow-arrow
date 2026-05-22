@@ -440,7 +440,44 @@ mod tests {
             }
         "#;
         let error = compile_llvm_ir_source(source).expect_err("llvm should reject foreign js");
-        assert!(error.contains("foreign declarations are currently supported only"));
+        assert!(error.contains("foreign js declarations are supported only"));
+    }
+
+    #[test]
+    fn llvm_preview_declares_foreign_c() {
+        let source = r#"
+            import std.cli { Args }
+
+            foreign c header "native_math.h" {
+                pure node native_score(value: Int) -> score: Int = fa_native_score
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                6 -> native_score -> $score
+                0 -> $exit_code
+            }
+        "#;
+        let llvm = compile_llvm_ir_source(source).expect("llvm");
+        assert!(llvm.contains("declare i64 @fa_native_score(i64)"));
+        assert!(llvm.contains("call i64 @fa_native_score"));
+    }
+
+    #[test]
+    fn typescript_rejects_foreign_c() {
+        let source = r#"
+            import std.cli { Args }
+
+            foreign c header "native_math.h" {
+                pure node native_score(value: Int) -> score: Int = fa_native_score
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                6 -> native_score -> $score
+                0 -> $exit_code
+            }
+        "#;
+        let error = compile_typescript_source(source).expect_err("typescript should reject c");
+        assert!(error.contains("foreign c declarations are supported only"));
     }
 
     #[test]

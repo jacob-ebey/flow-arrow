@@ -28,7 +28,7 @@ use inkwell::types::{AnyType, BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod llvm_stdlib;
@@ -52,6 +52,20 @@ pub fn emit_module(_module: &Module) -> Result<String, String> {
 pub fn emit_direct_llvm_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let expanded = monomorphize::expand_module(&expanded)?;
+    if expanded.declarations.iter().any(|decl| {
+        matches!(
+            decl,
+            Decl::Foreign(ForeignBlock {
+                target: ForeignTarget::Js,
+                ..
+            })
+        )
+    }) {
+        return Err(
+            "foreign js declarations are supported only by the TypeScript and JavaScript backends"
+                .to_string(),
+        );
+    }
     let codegen = TypedCodegen::new(&expanded)?;
     DirectLlvm::emit(codegen)
 }
@@ -72,6 +86,13 @@ pub(crate) fn emit_wasm_cdylib_llvm_with_base(
 ) -> Result<WasmCdylibOutput, String> {
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let expanded = monomorphize::expand_module(&expanded)?;
+    if expanded
+        .declarations
+        .iter()
+        .any(|decl| matches!(decl, Decl::Foreign(_)))
+    {
+        return Err("foreign declarations are not supported by WASM builds yet".to_string());
+    }
     let codegen = TypedCodegen::new(&expanded)?;
     let emitted = DirectLlvm::emit_with_options(
         codegen,
@@ -117,6 +138,63 @@ pub fn emit_runtime_support_c_with_base(
     let expanded = monomorphize::expand_module(&expanded)?;
     let mut codegen = TypedCodegen::new(&expanded)?;
     codegen.emit_runtime_support_c()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn foreign_c_source_paths_with_base(
+    module: &Module,
+    base_dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    let codegen = TypedCodegen::new(&expanded)?;
+    let mut paths = codegen
+        .foreign_c
+        .values()
+        .filter_map(|binding| binding.source.as_deref())
+        .map(|path| {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                base_dir.join(path)
+            }
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn foreign_c_dependency_paths_with_base(
+    module: &Module,
+    base_dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    let codegen = TypedCodegen::new(&expanded)?;
+    let mut paths = Vec::new();
+    for binding in codegen.foreign_c.values() {
+        paths.push(binding.header.clone());
+        if let Some(source) = &binding.source {
+            paths.push(source.clone());
+        }
+    }
+    let mut paths = paths
+        .into_iter()
+        .map(|path| {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                base_dir.join(path)
+            }
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 pub fn emit_typescript(module: &Module) -> Result<String, String> {
@@ -262,13 +340,17 @@ pub fn emit_javascript_artifacts_with_options(
 pub fn emit_llvm_ir_preview(module: &Module) -> Result<String, String> {
     let expanded = module_resolver::expand_stdlib_sources(module)?;
     let expanded = monomorphize::expand_module(&expanded)?;
-    if expanded
-        .declarations
-        .iter()
-        .any(|decl| matches!(decl, Decl::Foreign(_)))
-    {
+    if expanded.declarations.iter().any(|decl| {
+        matches!(
+            decl,
+            Decl::Foreign(ForeignBlock {
+                target: ForeignTarget::Js,
+                ..
+            })
+        )
+    }) {
         return Err(
-            "foreign declarations are currently supported only by the TypeScript and JavaScript backends"
+            "foreign js declarations are supported only by the TypeScript and JavaScript backends"
                 .to_string(),
         );
     }
@@ -482,10 +564,18 @@ struct TypedCodegen<'a> {
     parallel_helpers: String,
     callables: HashMap<String, &'a Callable>,
     foreign_js: HashSet<String>,
+    foreign_c: HashMap<String, ForeignCBinding>,
     signatures: HashMap<String, Signature>,
     stdlib_names: HashMap<String, String>,
     aliases: HashMap<String, Ty>,
     types: TypeRegistry,
+}
+
+#[derive(Debug, Clone)]
+struct ForeignCBinding {
+    symbol: String,
+    header: String,
+    source: Option<String>,
 }
 
 impl<'a> TypedCodegen<'a> {
@@ -498,6 +588,7 @@ impl<'a> TypedCodegen<'a> {
             parallel_helpers: String::new(),
             callables: HashMap::new(),
             foreign_js: HashSet::new(),
+            foreign_c: HashMap::new(),
             signatures: HashMap::new(),
             stdlib_names: HashMap::new(),
             aliases: HashMap::new(),
@@ -511,14 +602,17 @@ impl<'a> TypedCodegen<'a> {
     }
 
     fn emit(mut self) -> Result<String, String> {
-        if self
-            .module
-            .declarations
-            .iter()
-            .any(|decl| matches!(decl, Decl::Foreign(_)))
-        {
+        if self.module.declarations.iter().any(|decl| {
+            matches!(
+                decl,
+                Decl::Foreign(ForeignBlock {
+                    target: ForeignTarget::Js,
+                    ..
+                })
+            )
+        }) {
             return Err(
-                "foreign declarations are currently supported only by the TypeScript and JavaScript backends"
+                "foreign js declarations are supported only by the TypeScript and JavaScript backends"
                     .to_string(),
             );
         }
@@ -530,6 +624,16 @@ impl<'a> TypedCodegen<'a> {
         let uses_sqlite_runtime = self.uses_sqlite_runtime();
 
         for name in &names {
+            let sig = self
+                .signatures
+                .get(name)
+                .ok_or_else(|| format!("missing signature for `{name}`"))?;
+            self.types.c_type(&sig.input);
+            self.types.c_type(&sig.output);
+        }
+        let mut foreign_names = self.foreign_c.keys().cloned().collect::<Vec<_>>();
+        foreign_names.sort();
+        for name in &foreign_names {
             let sig = self
                 .signatures
                 .get(name)
@@ -585,6 +689,13 @@ impl<'a> TypedCodegen<'a> {
                 "static inline {output} {}({input} input);\n",
                 user_fn_name(name)
             ));
+        }
+        for name in &foreign_names {
+            let sig = self.signatures.get(name).expect("signature");
+            let input = self.types.c_type(&sig.input);
+            let output = self.types.c_type(&sig.output);
+            let symbol = &self.foreign_c.get(name).expect("foreign c binding").symbol;
+            out.push_str(&format!("extern {output} {symbol}({input} input);\n"));
         }
         out.push('\n');
         out.push_str(&self.parallel_helpers);
@@ -1135,16 +1246,48 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 continue;
             };
             for node in &foreign.nodes {
-                if !self.foreign_js.insert(node.name.clone()) {
+                match (&foreign.target, &foreign.source) {
+                    (ForeignTarget::Js, ForeignSource::Module(_) | ForeignSource::Global(_)) => {
+                        if !self.foreign_js.insert(node.name.clone()) {
+                            return Err(format!("duplicate declaration `{}`", node.name));
+                        }
+                    }
+                    (ForeignTarget::C, ForeignSource::CHeader { header, source }) => {
+                        if self
+                            .foreign_c
+                            .insert(
+                                node.name.clone(),
+                                ForeignCBinding {
+                                    symbol: node.symbol.clone(),
+                                    header: header.clone(),
+                                    source: source.clone(),
+                                },
+                            )
+                            .is_some()
+                        {
+                            return Err(format!("duplicate declaration `{}`", node.name));
+                        }
+                    }
+                    _ => {
+                        return Err(format!(
+                            "foreign declaration `{}` has an incompatible target/source",
+                            node.name
+                        ));
+                    }
+                }
+                if self
+                    .signatures
+                    .insert(
+                        node.name.clone(),
+                        Signature {
+                            input: self.port_types(&node.inputs)?,
+                            output: self.port_types(&node.outputs)?,
+                        },
+                    )
+                    .is_some()
+                {
                     return Err(format!("duplicate declaration `{}`", node.name));
                 }
-                self.signatures.insert(
-                    node.name.clone(),
-                    Signature {
-                        input: self.port_types(&node.inputs)?,
-                        output: self.port_types(&node.outputs)?,
-                    },
-                );
             }
         }
         Ok(())
@@ -2499,6 +2642,10 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 return Ok(());
             }
             out.push_str(&format!("  {target} = {}({input});\n", user_fn_name(name)));
+            return Ok(());
+        }
+        if let Some(binding) = self.foreign_c.get(name) {
+            out.push_str(&format!("  {target} = {}({input});\n", binding.symbol));
             return Ok(());
         }
         let canonical = self.canonical_name(name);
@@ -5363,6 +5510,27 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             let function = self
                 .module
                 .add_function(&user_fn_name(&name), function_ty, None);
+            self.functions.insert(name, function);
+        }
+        let foreign_names = self.codegen.foreign_c.keys().cloned().collect::<Vec<_>>();
+        for name in foreign_names {
+            let sig = self
+                .codegen
+                .signatures
+                .get(&name)
+                .ok_or_else(|| format!("missing signature for `{name}`"))?
+                .clone();
+            let output_ty = self.types.basic_type(&sig.output)?;
+            let input_ty = self.types.basic_type(&sig.input)?;
+            let function_ty = output_ty.fn_type(&[input_ty.into()], false);
+            let symbol = self
+                .codegen
+                .foreign_c
+                .get(&name)
+                .ok_or_else(|| format!("missing foreign c binding for `{name}`"))?
+                .symbol
+                .clone();
+            let function = self.module.add_function(&symbol, function_ty, None);
             self.functions.insert(name, function);
         }
         Ok(())

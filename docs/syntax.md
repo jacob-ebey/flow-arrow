@@ -58,6 +58,7 @@ extern    scan      repeat    select    match     identity  grid      cell
 stencil2d range     range_between        range_step
 filter    length    fault     ok        struct    field
 foreign   pure      io        module    global
+header    source    c         js
 ```
 
 ### 1.3 Literals
@@ -117,10 +118,11 @@ foreign_decl   ::= "foreign" foreign_target foreign_source "{"
                    foreign_node+
                    "}"
 
-foreign_target ::= "js"
+foreign_target ::= "js" | "c"
 
 foreign_source ::= "module" STRING
                  | "global" STRING
+                 | "header" STRING ("source" STRING)?
 
 foreign_node   ::= foreign_effect "node" IDENT "(" port_list? ")" "->" port_or_list "=" IDENT ("." IDENT)*
 
@@ -149,9 +151,8 @@ TypeScript, JavaScript, and WebAssembly library backends only expose
 extern nodes as host-callable functions.
 
 `foreign` declarations import host-provided callable nodes into the
-FlowArrow graph. The first implemented target is `foreign js`, which
-supports ESM module imports and global host objects for the TypeScript
-and JavaScript backends:
+FlowArrow graph. `foreign js` supports ESM module imports and global
+host objects for the TypeScript and JavaScript backends:
 
 ```flow
 foreign js module "node:os" {
@@ -166,8 +167,21 @@ foreign js global "console" {
 Foreign nodes must declare their effect. `pure` foreign nodes may be
 scheduled like ordinary pure nodes; `io` foreign nodes are boundary
 nodes and follow the same effect-ordering rules as `std.io` and
-`std.fs`. `foreign js` declarations are rejected by non-JS backends
-until those backends define their own foreign ABI lowering.
+`std.fs`.
+
+`foreign c` imports C ABI symbols for native LLVM builds. The `header`
+path documents the ABI surface; an optional `source` path names a local C
+source file that the native build compiles and links with the generated
+LLVM output:
+
+```flow
+foreign c header "./native_math.h" source "./native_math.c" {
+    pure node native_score(value: Int) -> score: Int = fa_native_score
+}
+```
+
+Without `source`, the symbol is declared in generated LLVM and must be
+provided by normal linker inputs.
 
 Static node parameters make a `node` a compile-time graph template:
 
@@ -589,8 +603,9 @@ take_while         find_first
 A FlowArrow source containing any of these tokens (outside of comments
 or string literals) is **ill-formed**.
 
-The `=` token is legal only in a top-level `type_alias_decl`; it is not
-an assignment operator and may not appear in value-flow chains.
+The `=` token is legal only in a top-level `type_alias_decl` or
+`foreign_node`; it is not an assignment operator and may not appear in
+value-flow chains.
 
 The permitted forms of conditional choice are the pure eager `select`
 combinator and the static-alternative `match` combinator (§6).
@@ -619,8 +634,8 @@ struct_decl    ::= "struct" IDENT "{" port ("," port)* ","? "}"
 foreign_decl   ::= "foreign" foreign_target foreign_source "{"
                    foreign_node+
                    "}"
-foreign_target ::= "js"
-foreign_source ::= "module" STRING | "global" STRING
+foreign_target ::= "js" | "c"
+foreign_source ::= "module" STRING | "global" STRING | "header" STRING ("source" STRING)?
 foreign_node   ::= foreign_effect "node" IDENT "(" port_list? ")" "->" port_or_list "=" IDENT ("." IDENT)*
 foreign_effect ::= "pure" | "io"
 

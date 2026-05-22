@@ -547,6 +547,9 @@
             <button class="tab" type="button" role="tab" data-example="concurrency" aria-selected="false">
               concurrency.flow
             </button>
+            <button class="tab" type="button" role="tab" data-example="jsGlobal" aria-selected="false">
+              js-global.flow
+            </button>
           </div>
           <div class="actions">
             <div class="target-toggle" role="group" aria-label="Output target">
@@ -651,6 +654,26 @@ node weight_job(n: Int) -> weight: Int {
 }
 `;
 
+      const jsGlobalExample = `# Shows foreign JS global API lowering for browser-native globals.
+import std.bytes { concat_bytes }
+import std.real { format_real }
+
+foreign js global "performance" {
+    io node now() -> value: Real = now
+}
+
+foreign js global "crypto" {
+    io node random_uuid() -> value: Bytes = randomUUID
+}
+
+extern node browser_sample() -> message: Bytes {
+    () -> now         -> format_real -> $timestamp
+    () -> random_uuid -> $uuid
+
+    ["sampled at ", $timestamp, "ms with id ", $uuid] -> concat_bytes -> $message
+}
+`;
+
       const examples = {
         fib: {
           filename: "fib",
@@ -659,6 +682,10 @@ node weight_job(n: Int) -> weight: Int {
         concurrency: {
           filename: "concurrency",
           source: concurrencyExample,
+        },
+        jsGlobal: {
+          filename: "js-global",
+          source: jsGlobalExample,
         },
       };
 
@@ -727,7 +754,7 @@ node weight_job(n: Int) -> weight: Int {
           },
           variable: /\$[A-Za-z_][\w]*/,
           keyword:
-            /\b(?:as|extern|filter|fault|import|map|match|node|program|reduce|repeat|scan|type)\b/,
+            /\b(?:as|c|extern|field|filter|fault|foreign|global|header|import|io|js|map|match|module|node|program|pure|reduce|repeat|scan|source|struct|type)\b/,
           builtin:
             /\b(?:Args|Bool|Bytes|Faultable|HttpListener|HttpRequest|HttpResponse|HttpServerConfig|Int|Real|Seq|SqliteConnection|SqliteRow|SqliteValue|Stream|Unit)\b/,
           function: /\b[A-Za-z_]\w*(?=\s*(?:\(|\{|->))/,

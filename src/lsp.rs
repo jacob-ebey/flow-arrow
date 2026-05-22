@@ -1419,9 +1419,9 @@ impl Analysis {
     fn completion_symbols(&self) -> Vec<Completion> {
         let mut completions = Vec::new();
         for keyword in [
-            "import", "type", "struct", "foreign", "pure", "io", "module", "global", "extern",
-            "node", "program", "map", "filter", "field", "repeat", "reduce", "scan", "match",
-            "fault", "ok", "identity", "true", "false",
+            "import", "type", "struct", "foreign", "pure", "io", "module", "global", "header",
+            "source", "c", "js", "extern", "node", "program", "map", "filter", "field", "repeat",
+            "reduce", "scan", "match", "fault", "ok", "identity", "true", "false",
         ] {
             completions.push(Completion {
                 label: keyword.to_string(),

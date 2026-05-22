@@ -230,10 +230,19 @@ impl Formatter {
     fn format_foreign(&mut self, foreign: &ForeignBlock) {
         let target = match foreign.target {
             ForeignTarget::Js => "js",
+            ForeignTarget::C => "c",
         };
         let source = match &foreign.source {
             ForeignSource::Module(specifier) => format!("module {}", format_string(specifier)),
             ForeignSource::Global(name) => format!("global {}", format_string(name)),
+            ForeignSource::CHeader { header, source } => {
+                let mut out = format!("header {}", format_string(header));
+                if let Some(source) = source {
+                    out.push_str(" source ");
+                    out.push_str(&format_string(source));
+                }
+                out
+            }
         };
         self.line(format!("foreign {target} {source} {{"));
         for node in &foreign.nodes {

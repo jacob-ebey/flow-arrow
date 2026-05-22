@@ -178,6 +178,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 Decl::Foreign(foreign) => match &foreign.source {
                     ForeignSource::Module(specifier) => Some(specifier.as_str()),
                     ForeignSource::Global(_) => None,
+                    ForeignSource::CHeader { .. } => None,
                 },
                 _ => None,
             })
@@ -234,6 +235,12 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                         format!("{}.{}", foreign_module_alias(specifier), node.symbol)
                     }
                     ForeignSource::Global(name) => format!("{name}.{}", node.symbol),
+                    ForeignSource::CHeader { .. } => {
+                        return Err(
+                            "foreign c declarations are supported only by native LLVM builds"
+                                .to_string(),
+                        );
+                    }
                 };
                 let call = format!("{callee}({args})");
                 if matches!(signature.output, Ty::Unit) {

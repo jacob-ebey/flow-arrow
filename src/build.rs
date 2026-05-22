@@ -406,12 +406,16 @@ fn build_native(
 
     let llvm = codegen::emit_direct_llvm_with_base(module, base_dir)?;
     let runtime_c = codegen::emit_runtime_support_c_with_base(module, base_dir)?;
+    let foreign_c_sources = codegen::foreign_c_source_paths_with_base(module, base_dir)?;
+    let foreign_c_dependencies = codegen::foreign_c_dependency_paths_with_base(module, base_dir)?;
+    let foreign_c_hash = foreign_c_hash_input(&foreign_c_dependencies)?;
     let plan = BuildPlan::new(
         path,
         &BuildTarget::Native(target.clone()),
         options,
         &llvm,
         &runtime_c,
+        &foreign_c_hash,
     )?;
     fs::create_dir_all(&plan.cache_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", plan.cache_dir.display()))?;
@@ -427,9 +431,11 @@ fn build_native(
     fs::write(&plan.llvm_path, llvm)
         .map_err(|error| format!("failed to write `{}`: {error}", plan.llvm_path.display()))?;
     emit_native_runtime_llvm(&runtime_c, &plan.runtime_llvm_path, options)?;
+    let foreign_c_objects =
+        compile_foreign_c_sources(&foreign_c_sources, &plan.cache_dir, options)?;
     copy_emitted_llvm(&plan.llvm_path, options.emit_llvm.as_deref())?;
     remove_stale_runtime_c(&plan.stale_runtime_c_path)?;
-    link_native_executable(&plan, &runtime_c, options)?;
+    link_native_executable(&plan, &runtime_c, &foreign_c_objects, options)?;
     fs::write(&plan.hash_path, plan.build_hash)
         .map_err(|error| format!("failed to write `{}`: {error}", plan.hash_path.display()))?;
 
@@ -483,6 +489,7 @@ fn build_wasm(
         options,
         &emitted.llvm,
         &export_hash,
+        "",
     )?;
     fs::create_dir_all(&plan.cache_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", plan.cache_dir.display()))?;
@@ -517,6 +524,7 @@ impl BuildPlan {
         options: &BuildOptions,
         llvm: &str,
         runtime_c: &str,
+        foreign_c_hash: &str,
     ) -> Result<Self, String> {
         let build_dir = build_dir(path, target);
         let cache_dir = build_dir.join(".cache");
@@ -538,7 +546,10 @@ impl BuildPlan {
             runtime_llvm_path: cache_dir.join("runtime.ll"),
             stale_runtime_c_path: cache_dir.join("runtime.c"),
             hash_path: cache_dir.join("build.hash"),
-            build_hash: format!("{:016x}", build_hash(target, options, llvm, runtime_c)),
+            build_hash: format!(
+                "{:016x}",
+                build_hash(target, options, llvm, runtime_c, foreign_c_hash)
+            ),
         })
     }
 
@@ -589,6 +600,7 @@ fn remove_stale_runtime_c(stale_runtime_c_path: &Path) -> Result<(), String> {
 fn link_native_executable(
     plan: &BuildPlan,
     runtime_c: &str,
+    foreign_c_objects: &[PathBuf],
     options: &BuildOptions,
 ) -> Result<(), String> {
     let mut clang = Command::new("clang");
@@ -598,6 +610,7 @@ fn link_native_executable(
         .args(&options.compiler_flags)
         .arg(&plan.llvm_path)
         .arg(&plan.runtime_llvm_path);
+    clang.args(foreign_c_objects);
     add_native_compiler_flags(&mut clang, runtime_c)?;
     clang.args(&options.linker_flags);
     let output = clang
@@ -615,6 +628,47 @@ fn link_native_executable(
         ));
     }
     Ok(())
+}
+
+fn compile_foreign_c_sources(
+    sources: &[PathBuf],
+    cache_dir: &Path,
+    options: &BuildOptions,
+) -> Result<Vec<PathBuf>, String> {
+    let mut objects = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        let object = cache_dir.join(format!("foreign-{index}.o"));
+        let mut clang = Command::new("clang");
+        clang
+            .arg(options.optimization.clang_flag())
+            .arg("-pthread")
+            .args(&options.compiler_flags);
+        if let Some(parent) = source.parent() {
+            clang.arg("-I").arg(parent);
+        }
+        let output = clang
+            .arg("-c")
+            .arg(source)
+            .arg("-o")
+            .arg(&object)
+            .output()
+            .map_err(|error| {
+                format!(
+                    "failed to invoke clang for foreign C source `{}`: {error}",
+                    source.display()
+                )
+            })?;
+        if !output.status.success() {
+            return Err(format!(
+                "foreign C compilation failed for `{}`:\n{}{}",
+                source.display(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        objects.push(object);
+    }
+    Ok(objects)
 }
 
 fn link_wasm_cdylib(
@@ -851,7 +905,32 @@ pub(crate) fn host_target() -> String {
     format!("{arch}-{os}")
 }
 
-fn build_hash(target: &BuildTarget, options: &BuildOptions, source: &str, runtime_c: &str) -> u64 {
+fn foreign_c_hash_input(sources: &[PathBuf]) -> Result<String, String> {
+    let mut input = String::new();
+    for source in sources {
+        input.push_str(&source.to_string_lossy());
+        input.push('\0');
+        let bytes = fs::read(source).map_err(|error| {
+            format!(
+                "failed to read foreign C source `{}`: {error}",
+                source.display()
+            )
+        })?;
+        input.push_str(&format!("{:x}", bytes.len()));
+        input.push('\0');
+        input.push_str(&String::from_utf8_lossy(&bytes));
+        input.push('\0');
+    }
+    Ok(input)
+}
+
+fn build_hash(
+    target: &BuildTarget,
+    options: &BuildOptions,
+    source: &str,
+    runtime_c: &str,
+    foreign_c: &str,
+) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
 
@@ -870,6 +949,7 @@ fn build_hash(target: &BuildTarget, options: &BuildOptions, source: &str, runtim
         .chain(b":")
         .chain(source.as_bytes())
         .chain(runtime_c.as_bytes())
+        .chain(foreign_c.as_bytes())
     {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(FNV_PRIME);

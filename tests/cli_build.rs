@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 fn flowarrow() -> &'static str {
@@ -521,6 +522,45 @@ fn build_javascript_ts_interop_example_and_run_node() {
         .expect("read generated TypeScript");
     assert!(generated_ts.contains("import * as __fa_foreign_node_os from \"node:os\";"));
     assert!(generated_ts.contains("function log(message: string): undefined"));
+}
+
+#[test]
+fn build_native_c_interop_example_and_run() {
+    let output = Command::new(flowarrow())
+        .args(["build", "examples/c-interop/main.flow"])
+        .output()
+        .expect("run flowarrow build");
+    assert!(
+        output.status.success(),
+        "flowarrow build failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let build_dir = fs::read_dir(Path::new("examples/c-interop/build"))
+        .expect("read c interop build dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.join(".cache/main.ll").exists())
+        .expect("find c interop native build dir");
+    let llvm = fs::read_to_string(build_dir.join(".cache/main.ll")).expect("read generated LLVM");
+    assert!(llvm.contains("declare i64 @fa_native_score(i64)"));
+    assert!(llvm.contains("declare { ptr, i64 } @fa_native_label(i64)"));
+
+    let executable = build_dir.join(format!("main{}", std::env::consts::EXE_SUFFIX));
+    let output = Command::new(executable)
+        .output()
+        .expect("run C interop example");
+    assert!(
+        output.status.success(),
+        "C interop example failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "score: 45\nlabel: native-score:45\n"
+    );
 }
 
 #[test]

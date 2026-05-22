@@ -392,6 +392,21 @@ impl<'a> LlvmText<'a> {
                 ty: output_ty,
             });
         }
+        if let Some(binding) = self.codegen.foreign_c.get(name).cloned() {
+            let temp = self.next_temp();
+            let symbol = format!("@{}", binding.symbol);
+            self.declare(&symbol, &output_ty, &[input.ty.clone()]);
+            out.push_str(&format!(
+                "  {temp} = call {} {symbol}({} {})\n",
+                llvm_ty(&output_ty),
+                llvm_ty(&input.ty),
+                input.operand
+            ));
+            return Ok(TextValue {
+                operand: temp,
+                ty: output_ty,
+            });
+        }
         self.emit_builtin_call(out, name, input, output_ty)
     }
 

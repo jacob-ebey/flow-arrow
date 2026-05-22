@@ -477,6 +477,17 @@ fn rewrite_foreign_block(
     references: &HashMap<String, String>,
     module_id: Option<&str>,
 ) -> ForeignBlock {
+    if let (Some(module_id), ForeignSource::CHeader { header, source }) =
+        (module_id, &mut foreign.source)
+    {
+        let module_dir = Path::new(module_id)
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        *header = resolve_foreign_c_path(module_dir, header);
+        if let Some(source) = source {
+            *source = resolve_foreign_c_path(module_dir, source);
+        }
+    }
     for node in &mut foreign.nodes {
         if let Some(module_id) = module_id {
             node.name = internal_name(module_id, &node.name);
@@ -489,6 +500,15 @@ fn rewrite_foreign_block(
         }
     }
     foreign
+}
+
+fn resolve_foreign_c_path(module_dir: &Path, path: &str) -> String {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_string_lossy().to_string()
+    } else {
+        module_dir.join(path).to_string_lossy().to_string()
+    }
 }
 
 fn rewrite_endpoint(endpoint: &mut Endpoint, references: &HashMap<String, String>) {

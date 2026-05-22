@@ -59,12 +59,17 @@ pub struct ForeignBlock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForeignTarget {
     Js,
+    C,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForeignSource {
     Module(String),
     Global(String),
+    CHeader {
+        header: String,
+        source: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

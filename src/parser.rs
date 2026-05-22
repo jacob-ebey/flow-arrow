@@ -141,20 +141,40 @@ impl Parser {
     fn parse_foreign(&mut self) -> Result<ForeignBlock, SourceDiagnostic> {
         let target = match self.expect_ident()?.as_str() {
             "js" => ForeignTarget::Js,
+            "c" => ForeignTarget::C,
             other => {
                 return Err(self.error_here(format!(
-                    "unsupported foreign target `{other}`; expected `js`"
+                    "unsupported foreign target `{other}`; expected `js` or `c`"
                 )));
             }
         };
-        let source = match self.expect_ident()?.as_str() {
-            "module" => ForeignSource::Module(self.expect_string()?),
-            "global" => ForeignSource::Global(self.expect_string()?),
-            other => {
-                return Err(self.error_here(format!(
-                    "expected foreign source kind `module` or `global`, found `{other}`"
-                )));
-            }
+        let source = match target {
+            ForeignTarget::Js => match self.expect_ident()?.as_str() {
+                "module" => ForeignSource::Module(self.expect_string()?),
+                "global" => ForeignSource::Global(self.expect_string()?),
+                other => {
+                    return Err(self.error_here(format!(
+                        "expected foreign js source kind `module` or `global`, found `{other}`"
+                    )));
+                }
+            },
+            ForeignTarget::C => match self.expect_ident()?.as_str() {
+                "header" => {
+                    let header = self.expect_string()?;
+                    let source = if self.peek_ident() == Some("source") {
+                        self.bump();
+                        Some(self.expect_string()?)
+                    } else {
+                        None
+                    };
+                    ForeignSource::CHeader { header, source }
+                }
+                other => {
+                    return Err(self.error_here(format!(
+                        "expected foreign c source kind `header`, found `{other}`"
+                    )));
+                }
+            },
         };
         self.expect(Token::LBrace)?;
         let mut nodes = Vec::new();

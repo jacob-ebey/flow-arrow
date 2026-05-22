@@ -1,0 +1,20 @@
+# c-interop
+#
+# Native foreign C imports linked into an LLVM-backed FlowArrow build.
+import std.bytes { concat_bytes }
+import std.cli { Args }
+import std.int { format_int }
+import std.io { write_stdout }
+
+foreign c header "./native_math.h" source "./native_math.c" {
+    pure node native_score(value: Int) -> score: Int = fa_native_score
+    pure node native_label(score: Int) -> label: Bytes = fa_native_label
+}
+
+program main(args: Args) -> exit_code: Int {
+    6      -> native_score -> $score
+    $score -> native_label -> $label
+    $score -> format_int   -> $score_bytes
+
+    ["score: ", $score_bytes, "\nlabel: ", $label, "\n"] -> concat_bytes -> write_stdout -> $exit_code
+}

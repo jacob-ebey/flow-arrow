@@ -219,9 +219,21 @@ function log(message: string): undefined {
 }
 ```
 
-Non-JS backends reject foreign declarations until they define a target-specific
-foreign ABI lowering. The planned native path is a `foreign c` form that emits
-LLVM declarations and links against C ABI symbols.
+Native LLVM builds support `foreign c` declarations. The backend emits an
+external LLVM declaration for each imported C symbol and the native build
+compiles any local `source` files as additional clang objects before linking:
+
+```flow
+foreign c header "./native_math.h" source "./native_math.c" {
+    pure node native_score(value: Int) -> score: Int = fa_native_score
+}
+```
+
+The C function must use FlowArrow's C ABI lowering for the declared input and
+output types. For example, `Int` lowers to `int64_t`, `Real` to `double`, and
+`Bytes` to `FaBytes` (`char *bytes; size_t len`). If a `foreign c` declaration
+omits `source`, the symbol must be supplied through normal linker inputs.
+WASM builds reject foreign declarations for now.
 
 Worker-backed concurrency is opt-in for JavaScript and TypeScript builds:
 
