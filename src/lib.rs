@@ -70,10 +70,13 @@ pub fn compile_typescript_source_with_options(
     source: &str,
     options: TypeScriptCompileOptions,
 ) -> Result<String, String> {
-    let module = parser::parse(source)?;
+    let module = parser::parse_diagnostic(source)
+        .map_err(|error| diagnostic::format_source_diagnostic(&error))?;
     match options.mode {
-        TypeScriptCompileMode::Program => typecheck::check_module(&module)?,
-        TypeScriptCompileMode::Library => typecheck::check_library_module(&module)?,
+        TypeScriptCompileMode::Program => typecheck::check_module(&module)
+            .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
+        TypeScriptCompileMode::Library => typecheck::check_library_module(&module)
+            .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
     }
     codegen::emit_typescript(&module)
 }
@@ -82,10 +85,13 @@ pub fn compile_javascript_artifacts_source_with_options(
     source: &str,
     options: TypeScriptCompileOptions,
 ) -> Result<(String, String), String> {
-    let module = parser::parse(source)?;
+    let module = parser::parse_diagnostic(source)
+        .map_err(|error| diagnostic::format_source_diagnostic(&error))?;
     match options.mode {
-        TypeScriptCompileMode::Program => typecheck::check_module(&module)?,
-        TypeScriptCompileMode::Library => typecheck::check_library_module(&module)?,
+        TypeScriptCompileMode::Program => typecheck::check_module(&module)
+            .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
+        TypeScriptCompileMode::Library => typecheck::check_library_module(&module)
+            .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
     }
     let artifacts = codegen::emit_javascript_artifacts(&module)?;
     Ok((artifacts.declarations, artifacts.javascript))
@@ -312,6 +318,37 @@ mod tests {
         "#;
         let error = compile_typescript_library_source(source).expect_err("local import");
         assert!(error.contains("local imports require a source file path"));
+    }
+
+    #[test]
+    fn in_memory_typescript_compile_reports_parse_line_numbers() {
+        let source = "extern node broken(value: Int) -> out: Int {\n    @\n}\n";
+
+        let error = compile_typescript_library_source(source).expect_err("parse error");
+
+        assert!(error.contains("line 2, column 5"), "{error}");
+        assert!(error.contains("unexpected character `@`"), "{error}");
+    }
+
+    #[test]
+    fn in_memory_javascript_artifact_compile_reports_typecheck_line_numbers() {
+        let source = r#"import std.bytes { missing }
+
+extern node demo(value: Int) -> out: Int {
+    $value -> missing -> $out
+}
+"#;
+
+        let error = compile_javascript_artifacts_source_with_options(
+            source,
+            TypeScriptCompileOptions {
+                mode: TypeScriptCompileMode::Library,
+            },
+        )
+        .expect_err("typecheck error");
+
+        assert!(error.contains("line 1, column 20"), "{error}");
+        assert!(error.contains("does not export `missing`"), "{error}");
     }
 
     #[test]
