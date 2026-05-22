@@ -16,6 +16,7 @@ pub(super) fn emit_module(codegen: TypedCodegen<'_>) -> Result<String, String> {
 struct TsValue {
     code: String,
     ty: Ty,
+    tuple_items: Option<Vec<TsValue>>,
 }
 
 struct TypeScriptCodegen<'a> {
@@ -88,51 +89,33 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         };
         let return_ty = ts_type(&signature.output);
 
-        match callable.inputs.as_slice() {
-            [] => out.push_str(&format!("\n{export}function {fn_name}(): {return_ty} {{\n")),
-            [port] => out.push_str(&format!(
-                "\n{export}function {fn_name}({}: {}): {return_ty} {{\n",
-                ts_ident(&port.name),
-                ts_type(&self.codegen.parse_declared_type(&port.ty)?)
-            )),
-            _ => out.push_str(&format!(
-                "\n{export}function {fn_name}(input: {}): {return_ty} {{\n",
-                ts_type(&signature.input)
-            )),
-        }
+        let params = callable
+            .inputs
+            .iter()
+            .map(|port| {
+                Ok(format!(
+                    "{}: {}",
+                    ts_ident(&port.name),
+                    ts_type(&self.codegen.parse_declared_type(&port.ty)?)
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?
+            .join(", ");
+        out.push_str(&format!(
+            "\n{export}function {fn_name}({params}): {return_ty} {{\n"
+        ));
 
         let mut env = HashMap::new();
-        match callable.inputs.as_slice() {
-            [] => {}
-            [port] => {
-                let ty = self.codegen.parse_declared_type(&port.ty)?;
-                env.insert(
-                    port.name.clone(),
-                    TsValue {
-                        code: ts_ident(&port.name),
-                        ty,
-                    },
-                );
-            }
-            ports => {
-                for (index, port) in ports.iter().enumerate() {
-                    let ty = self.codegen.parse_declared_type(&port.ty)?;
-                    env.insert(
-                        port.name.clone(),
-                        TsValue {
-                            code: format!("input.f{index}"),
-                            ty,
-                        },
-                    );
-                }
-            }
+        for port in &callable.inputs {
+            let ty = self.codegen.parse_declared_type(&port.ty)?;
+            env.insert(port.name.clone(), ts_value(ts_ident(&port.name), ty));
         }
 
         for chain in &callable.chains {
             self.emit_chain(out, chain, &mut env, "  ")?;
         }
 
-        let result = self.emit_outputs(out, callable, &env, "  ")?;
+        let result = self.emit_outputs(callable, &env)?;
         let result = self.coerce_value(out, result, &signature.output, "  ")?;
         out.push_str(&format!("  return {};\n}}\n", result.code));
         Ok(())
@@ -140,27 +123,21 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
 
     fn emit_outputs(
         &mut self,
-        out: &mut String,
         callable: &Callable,
         env: &HashMap<String, TsValue>,
-        indent: &str,
     ) -> Result<TsValue, String> {
         match callable.outputs.as_slice() {
-            [] => Ok(TsValue {
-                code: "undefined".to_string(),
-                ty: Ty::Unit,
-            }),
+            [] => Ok(ts_value("undefined", Ty::Unit)),
             [output] => env
                 .get(&output.name)
                 .cloned()
                 .ok_or_else(|| format!("output `{}` is never bound", output.name)),
             outputs => {
-                let fields = outputs
+                let values = outputs
                     .iter()
-                    .enumerate()
-                    .map(|(index, output)| {
+                    .map(|output| {
                         env.get(&output.name)
-                            .map(|value| format!("f{index}: {}", value.code))
+                            .cloned()
                             .ok_or_else(|| format!("output `{}` is never bound", output.name))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -170,13 +147,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                         .map(|output| self.codegen.parse_declared_type(&output.ty))
                         .collect::<Result<Vec<_>, _>>()?,
                 );
-                let tmp = self.next_temp();
-                out.push_str(&format!(
-                    "{indent}const {tmp}: {} = {{ {} }};\n",
-                    ts_type(&ty),
-                    fields.join(", ")
-                ));
-                Ok(TsValue { code: tmp, ty })
+                Ok(ts_tuple_value(values, ty))
             }
         }
     }
@@ -278,26 +249,11 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                 .cloned()
                 .ok_or_else(|| format!("unknown value `{name}`")),
             Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
-            Endpoint::Int(value) => Ok(TsValue {
-                code: format!("{value}n"),
-                ty: Ty::Int,
-            }),
-            Endpoint::Real(value) => Ok(TsValue {
-                code: format!("{value:.17e}"),
-                ty: Ty::Real,
-            }),
-            Endpoint::Bool(value) => Ok(TsValue {
-                code: value.to_string(),
-                ty: Ty::Bool,
-            }),
-            Endpoint::String(value) => Ok(TsValue {
-                code: ts_string(value),
-                ty: Ty::Bytes,
-            }),
-            Endpoint::Unit => Ok(TsValue {
-                code: "undefined".to_string(),
-                ty: Ty::Unit,
-            }),
+            Endpoint::Int(value) => Ok(ts_value(format!("{value}n"), Ty::Int)),
+            Endpoint::Real(value) => Ok(ts_value(format!("{value:.17e}"), Ty::Real)),
+            Endpoint::Bool(value) => Ok(ts_value(value.to_string(), Ty::Bool)),
+            Endpoint::String(value) => Ok(ts_value(ts_string(value), Ty::Bytes)),
+            Endpoint::Unit => Ok(ts_value("undefined", Ty::Unit)),
             Endpoint::Tuple(items) => {
                 let expected_items = match expected {
                     Some(Ty::Tuple(expected_items)) if expected_items.len() == items.len() => {
@@ -318,28 +274,14 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                 let ty = expected.cloned().unwrap_or_else(|| {
                     Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect())
                 });
-                let tmp = self.next_temp();
-                let fields = values
-                    .iter()
-                    .enumerate()
-                    .map(|(index, value)| format!("f{index}: {}", value.code))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                out.push_str(&format!(
-                    "{indent}const {tmp}: {} = {{ {fields} }};\n",
-                    ts_type(&ty)
-                ));
-                Ok(TsValue { code: tmp, ty })
+                Ok(ts_tuple_value(values, ty))
             }
             Endpoint::Seq(items) => {
                 if items.is_empty() {
                     let Some(seq_ty @ Ty::Seq(_)) = expected else {
                         return Err("empty sequence literals need a type context".to_string());
                     };
-                    return Ok(TsValue {
-                        code: "[]".to_string(),
-                        ty: seq_ty.clone(),
-                    });
+                    return Ok(ts_value("[]", seq_ty.clone()));
                 }
                 let expected_item = match expected {
                     Some(Ty::Seq(item)) => Some(item.as_ref()),
@@ -381,7 +323,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
-                Ok(TsValue { code, ty })
+                Ok(ts_value(code, ty))
             }
             Endpoint::Eval { source, stages } => {
                 let mut value = self.emit_endpoint(out, source, env, indent)?;
@@ -444,66 +386,85 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                 }
                 Ok(())
             }
-            BindingTarget::Tuple(targets) => match value.ty.clone() {
-                Ty::Tuple(items) if items.len() == targets.len() => {
-                    for (index, (target, ty)) in targets.iter().zip(items.iter()).enumerate() {
-                        if binding_target_is_discard(target) {
-                            continue;
+            BindingTarget::Tuple(targets) => {
+                let value = self.stabilize_tuple_value(out, value, indent)?;
+                match value.ty.clone() {
+                    Ty::Tuple(items) if items.len() == targets.len() => {
+                        for (index, (target, ty)) in targets.iter().zip(items.iter()).enumerate() {
+                            if binding_target_is_discard(target) {
+                                continue;
+                            }
+                            self.bind_target(
+                                out,
+                                target,
+                                ts_value(tuple_field(&value, index), ty.clone()),
+                                env,
+                                indent,
+                            )?;
                         }
-                        self.bind_target(
-                            out,
-                            target,
-                            TsValue {
-                                code: format!("{}.f{index}", value.code),
-                                ty: ty.clone(),
-                            },
-                            env,
-                            indent,
-                        )?;
+                        Ok(())
                     }
-                    Ok(())
-                }
-                Ty::Faultable(inner) => {
-                    let Ty::Tuple(items) = inner.as_ref() else {
-                        return Err("tuple binding expected tuple value".to_string());
-                    };
-                    for (index, (target, ty)) in targets.iter().zip(items.iter()).enumerate() {
-                        if binding_target_is_discard(target) {
-                            continue;
+                    Ty::Faultable(inner) => {
+                        let Ty::Tuple(items) = inner.as_ref() else {
+                            return Err("tuple binding expected tuple value".to_string());
+                        };
+                        for (index, (target, ty)) in targets.iter().zip(items.iter()).enumerate() {
+                            if binding_target_is_discard(target) {
+                                continue;
+                            }
+                            let projected_ty = Ty::Faultable(Box::new(ty.clone()));
+                            let tmp = self.next_temp();
+                            out.push_str(&format!(
+                                "{indent}const {tmp}: {} = {}.is_fault ? faFault({}.fault) : faOk({});\n",
+                                ts_type(&projected_ty),
+                                value.code,
+                                value.code,
+                                ts_index(&format!("{}.value", value.code), index)
+                            ));
+                            self.bind_target(
+                                out,
+                                target,
+                                ts_value(tmp, projected_ty),
+                                env,
+                                indent,
+                            )?;
                         }
-                        let projected_ty = Ty::Faultable(Box::new(ty.clone()));
-                        let tmp = self.next_temp();
-                        out.push_str(&format!(
-                            "{indent}const {tmp}: {} = {}.is_fault ? faFault({}.fault) : faOk({}.value.f{index});\n",
-                            ts_type(&projected_ty),
-                            value.code,
-                            value.code,
-                            value.code
-                        ));
-                        self.bind_target(
-                            out,
-                            target,
-                            TsValue {
-                                code: tmp,
-                                ty: projected_ty,
-                            },
-                            env,
-                            indent,
-                        )?;
+                        Ok(())
                     }
-                    Ok(())
+                    Ty::Tuple(items) => Err(format!(
+                        "binding target `{}` expected {} tuple fields, found {}",
+                        format_binding_target_for_error(target),
+                        targets.len(),
+                        items.len()
+                    )),
+                    other => Err(format!(
+                        "binding target `{}` expected tuple input, found `{other}`",
+                        format_binding_target_for_error(target)
+                    )),
                 }
-                Ty::Tuple(items) => Err(format!(
-                    "binding target `{}` expected {} tuple fields, found {}",
-                    format_binding_target_for_error(target),
-                    targets.len(),
-                    items.len()
-                )),
-                other => Err(format!(
-                    "binding target `{}` expected tuple input, found `{other}`",
-                    format_binding_target_for_error(target)
-                )),
-            },
+            }
+        }
+    }
+
+    fn stabilize_tuple_value(
+        &mut self,
+        out: &mut String,
+        value: TsValue,
+        indent: &str,
+    ) -> Result<TsValue, String> {
+        if value.tuple_items.is_some() || ts_value_code_is_stable(&value.code) {
+            return Ok(value);
+        }
+        if matches!(value.ty, Ty::Tuple(_) | Ty::Faultable(_)) {
+            let tmp = self.next_temp();
+            out.push_str(&format!(
+                "{indent}const {tmp}: {} = {};\n",
+                ts_type(&value.ty),
+                value.code
+            ));
+            Ok(ts_value(tmp, value.ty))
+        } else {
+            Ok(value)
         }
     }
 
@@ -538,10 +499,10 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                 input.code
             ));
             out.push_str(&format!("{indent}}} else {{\n"));
-            let plain_input = TsValue {
-                code: format!("{}.value", input.code),
-                ty: input_inner.as_ref().clone(),
-            };
+            let plain_input = ts_value(
+                format!("{}.value", input.code),
+                input_inner.as_ref().clone(),
+            );
             let called = self.emit_plain_call(
                 out,
                 name,
@@ -559,10 +520,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                 ));
             }
             out.push_str(&format!("{indent}}}\n"));
-            return Ok(TsValue {
-                code: tmp,
-                ty: output_ty,
-            });
+            return Ok(ts_value(tmp, output_ty));
         }
 
         if let Ty::Faultable(output_inner) = &output_ty {
@@ -572,10 +530,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                 return Ok(called);
             }
             if &plain_output == output_inner.as_ref() {
-                return Ok(TsValue {
-                    code: format!("faOk({})", called.code),
-                    ty: output_ty,
-                });
+                return Ok(ts_value(format!("faOk({})", called.code), output_ty));
             }
         }
 
@@ -590,26 +545,26 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         output_ty: &Ty,
         indent: &str,
     ) -> Result<TsValue, String> {
-        let expr = if self.codegen.callables.contains_key(name) {
-            format!("{}({})", ts_ident(name), input.code)
+        let expr = if self.codegen.signatures.contains_key(name) {
+            let arity = self
+                .codegen
+                .callables
+                .get(name)
+                .map(|callable| callable.inputs.len())
+                .ok_or_else(|| format!("missing callable `{name}`"))?;
+            format!("{}({})", ts_ident(name), call_args(&input, arity)?)
         } else {
             self.emit_builtin_expr(&self.codegen.canonical_name(name), &input, output_ty)?
         };
         if expression_is_simple(&expr) {
-            Ok(TsValue {
-                code: expr,
-                ty: output_ty.clone(),
-            })
+            Ok(ts_value(expr, output_ty.clone()))
         } else {
             let tmp = self.next_temp();
             out.push_str(&format!(
                 "{indent}const {tmp}: {} = {expr};\n",
                 ts_type(output_ty)
             ));
-            Ok(TsValue {
-                code: tmp,
-                ty: output_ty.clone(),
-            })
+            Ok(ts_value(tmp, output_ty.clone()))
         }
     }
 
@@ -628,34 +583,70 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             "write_stderr" => format!("faWriteStderr({})", input.code),
             "split_lines" => format!("faSplitLines({})", input.code),
             "trim" => format!("{}.trim()", input.code),
-            "contains" => format!("{}.f0.includes({}.f1)", input.code, input.code),
-            "starts_with" => format!("{}.f0.startsWith({}.f1)", input.code, input.code),
-            "ends_with" => format!("{}.f0.endsWith({}.f1)", input.code, input.code),
-            "index_of" => format!("BigInt({}.f0.indexOf({}.f1))", input.code, input.code),
-            "last_index_of" => format!("BigInt({}.f0.lastIndexOf({}.f1))", input.code, input.code),
+            "contains" => format!(
+                "{}.includes({})",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            ),
+            "starts_with" => format!(
+                "{}.startsWith({})",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            ),
+            "ends_with" => format!(
+                "{}.endsWith({})",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            ),
+            "index_of" => format!(
+                "BigInt({}.indexOf({}))",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            ),
+            "last_index_of" => format!(
+                "BigInt({}.lastIndexOf({}))",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            ),
             "slice" if matches!(&input.ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int, Ty::Int])) =>
             {
                 format!(
-                    "{}.f0.slice(Number({}.f1), Number({}.f2))",
-                    input.code, input.code, input.code
+                    "{}.slice(Number({}), Number({}))",
+                    tuple_field(input, 0),
+                    tuple_field(input, 1),
+                    tuple_field(input, 2)
                 )
             }
             "take" if matches!(&input.ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) =>
             {
-                format!("{}.f0.slice(0, Number({}.f1))", input.code, input.code)
+                format!(
+                    "{}.slice(0, Number({}))",
+                    tuple_field(input, 0),
+                    tuple_field(input, 1)
+                )
             }
             "drop" if matches!(&input.ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) =>
             {
-                format!("{}.f0.slice(Number({}.f1))", input.code, input.code)
+                format!(
+                    "{}.slice(Number({}))",
+                    tuple_field(input, 0),
+                    tuple_field(input, 1)
+                )
             }
             "replace" => format!(
-                "{}.f0.split({}.f1).join({}.f2)",
-                input.code, input.code, input.code
+                "{}.split({}).join({})",
+                tuple_field(input, 0),
+                tuple_field(input, 1),
+                tuple_field(input, 2)
             ),
-            "repeat_bytes" => format!("{}.f0.repeat(Number({}.f1))", input.code, input.code),
+            "repeat_bytes" => format!(
+                "{}.repeat(Number({}))",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            ),
             "ascii_lower" => format!("{}.toLowerCase()", input.code),
             "ascii_upper" => format!("{}.toUpperCase()", input.code),
-            "split_on" => format!("{}.f0.split({}.f1)", input.code, input.code),
+            "split_on" => format!("{}.split({})", tuple_field(input, 0), tuple_field(input, 1)),
             "strip_prefix" => format!("faStripPrefix({})", input.code),
             "strip_suffix" => format!("faStripSuffix({})", input.code),
             "bytes_to_codes" => {
@@ -664,13 +655,13 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             "codes_to_bytes" => format!("String.fromCharCode(...{}.map(Number))", input.code),
             "byte_length" => format!("BigInt({}.length)", input.code),
             "concat_bytes" => format!("faConcatBytes({})", input.code),
-            "join_bytes" => format!("{}.f1.join({}.f0)", input.code, input.code),
+            "join_bytes" => format!("{}.join({})", tuple_field(input, 1), tuple_field(input, 0)),
             "parse_int" => format!("faParseInt({})", input.code),
             "parse_real" => format!("faParseReal({})", input.code),
             "from_int" => format!("Number({})", input.code),
             "format_int" | "format_real" => format!("{}.toString()", input.code),
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
-                ts_numeric_binary_expr(name, &input.code, output_ty)
+                ts_numeric_binary_expr(name, input, output_ty)
             }
             "neg" => format!("(-{})", input.code),
             "abs" => format!("({0} < 0 ? -{0} : {0})", input.code),
@@ -678,20 +669,20 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             "exp" => format!("Math.exp({})", input.code),
             "sin" => format!("Math.sin({})", input.code),
             "cos" => format!("Math.cos({})", input.code),
-            "eq" => format!("({}.f0 === {}.f1)", input.code, input.code),
-            "lt" => format!("({}.f0 < {}.f1)", input.code, input.code),
-            "gt" => format!("({}.f0 > {}.f1)", input.code, input.code),
-            "le" => format!("({}.f0 <= {}.f1)", input.code, input.code),
-            "ge" => format!("({}.f0 >= {}.f1)", input.code, input.code),
+            "eq" => format!("({} === {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "lt" => format!("({} < {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "gt" => format!("({} > {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "le" => format!("({} <= {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "ge" => format!("({} >= {})", tuple_field(input, 0), tuple_field(input, 1)),
             "not_empty" => format!("({}.length > 0)", input.code),
             "is_empty" => match input.ty {
                 Ty::Bytes => format!("({}.length === 0)", input.code),
                 Ty::Seq(_) => format!("({}.length === 0)", input.code),
                 _ => return Err("is_empty expected Bytes or Seq input".to_string()),
             },
-            "and" => format!("({}.f0 && {}.f1)", input.code, input.code),
-            "or" => format!("({}.f0 || {}.f1)", input.code, input.code),
-            "xor" => format!("({}.f0 !== {}.f1)", input.code, input.code),
+            "and" => format!("({} && {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "or" => format!("({} || {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "xor" => format!("({} !== {})", tuple_field(input, 0), tuple_field(input, 1)),
             "not" => format!("(!{})", input.code),
             "all" => format!("{}.every(Boolean)", input.code),
             "any" => format!("{}.some(Boolean)", input.code),
@@ -700,14 +691,16 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             "expect" => format!("faExpect({})", input.code),
             "collect" => format!("faCollect({})", input.code),
             "select" => format!(
-                "({}.f0 ? {}.f1 : {}.f2)",
-                input.code, input.code, input.code
+                "({} ? {} : {})",
+                tuple_field(input, 0),
+                tuple_field(input, 1),
+                tuple_field(input, 2)
             ),
             "length" => format!("BigInt({}.length)", input.code),
             "inner_length" => format!("BigInt({}[0]?.length ?? 0)", input.code),
-            "first" => format!("{}.f0", input.code),
-            "second" => format!("{}.f1", input.code),
-            "swap" => format!("{{ f0: {}.f1, f1: {}.f0 }}", input.code, input.code),
+            "first" => tuple_field(input, 0),
+            "second" => tuple_field(input, 1),
+            "swap" => format!("[{}, {}]", tuple_field(input, 1), tuple_field(input, 0)),
             "zip" => format!("faZip({})", input.code),
             "broadcast_left" => format!("faBroadcastLeft({})", input.code),
             "broadcast_right" => format!("faBroadcastRight({})", input.code),
@@ -719,26 +712,40 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             "head" => format!("faHead({})", input.code),
             "tail" => format!("{}.slice(1)", input.code),
             "reverse" => format!("[...{}].reverse()", input.code),
-            "take" => format!("{}.f0.slice(0, Number({}.f1))", input.code, input.code),
-            "drop" => format!("{}.f0.slice(Number({}.f1))", input.code, input.code),
+            "take" => format!(
+                "{}.slice(0, Number({}))",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            ),
+            "drop" => format!(
+                "{}.slice(Number({}))",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            ),
             "fill" => format!("faFill({})", input.code),
             "slice" => format!(
-                "{}.f0.slice(Number({}.f1), Number({}.f2))",
-                input.code, input.code, input.code
+                "{}.slice(Number({}), Number({}))",
+                tuple_field(input, 0),
+                tuple_field(input, 1),
+                tuple_field(input, 2)
             ),
             "last" => format!("faLast({})", input.code),
             "get" => format!("faGet({})", input.code),
             "get_or" => format!("faGetOr({})", input.code),
             "at" => format!("faAt({})", input.code),
-            "append" => format!("[...{}.f0, {}.f1]", input.code, input.code),
+            "append" => format!("[...{}, {}]", tuple_field(input, 0), tuple_field(input, 1)),
             "set" => format!("faSet({})", input.code),
-            "concat" => format!("[...{}.f0, ...{}.f1]", input.code, input.code),
+            "concat" => format!(
+                "[...{}, ...{}]",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            ),
             "range_step" => format!("faRangeStep({})", input.code),
-            "bit_and" => format!("({}.f0 & {}.f1)", input.code, input.code),
-            "bit_or" => format!("({}.f0 | {}.f1)", input.code, input.code),
-            "bit_xor" => format!("({}.f0 ^ {}.f1)", input.code, input.code),
-            "bit_shl" => format!("({}.f0 << {}.f1)", input.code, input.code),
-            "bit_shr" => format!("({}.f0 >> {}.f1)", input.code, input.code),
+            "bit_and" => format!("({} & {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "bit_or" => format!("({} | {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "bit_xor" => format!("({} ^ {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "bit_shl" => format!("({} << {})", tuple_field(input, 0), tuple_field(input, 1)),
+            "bit_shr" => format!("({} >> {})", tuple_field(input, 0), tuple_field(input, 1)),
             "read_file" | "write_file" | "exists" | "is_file" | "is_dir" | "file_size"
             | "list_dir" | "walk_files" | "read_files" | "open_file" | "size" | "read_at"
             | "copy_to_file" | "close" | "to_seq" | "drain" => {
@@ -809,10 +816,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         let mapped = self.emit_call(
             out,
             name,
-            TsValue {
-                code: item.clone(),
-                ty: item_ty.as_ref().clone(),
-            },
+            ts_value(item.clone(), item_ty.as_ref().clone()),
             &(body_indent.clone() + "  "),
         )?;
         out.push_str(&format!(
@@ -826,10 +830,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         } else {
             out.push_str(&format!("{body_indent}{tmp} = {seq_tmp};\n"));
         }
-        Ok(TsValue {
-            code: tmp,
-            ty: output_ty,
-        })
+        Ok(ts_value(tmp, output_ty))
     }
 
     fn emit_filter(
@@ -855,10 +856,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         let keep = self.emit_call(
             out,
             name,
-            TsValue {
-                code: item.clone(),
-                ty: item_ty.as_ref().clone(),
-            },
+            ts_value(item.clone(), item_ty.as_ref().clone()),
             &(indent.to_string() + "  "),
         )?;
         out.push_str(&format!(
@@ -866,10 +864,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             keep.code
         ));
         out.push_str(&format!("{indent}}}\n"));
-        Ok(TsValue {
-            code: tmp,
-            ty: input.ty,
-        })
+        Ok(ts_value(tmp, input.ty))
     }
 
     fn emit_reduce(
@@ -938,10 +933,13 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
                 "{body_indent}  if ({item}.is_fault === true) {{ {fault} = {item}.fault; break; }}\n"
             ));
             let pair_ty = Ty::Tuple(vec![plain_item_ty.clone(), plain_item_ty.clone()]);
-            let pair = TsValue {
-                code: format!("{{ f0: {acc}, f1: {item}.value }}"),
-                ty: pair_ty,
-            };
+            let pair = ts_tuple_value(
+                vec![
+                    ts_value(acc.clone(), plain_item_ty.clone()),
+                    ts_value(format!("{item}.value"), plain_item_ty.clone()),
+                ],
+                pair_ty,
+            );
             let reduced = self.emit_call(out, op, pair, &(body_indent.clone() + "  "))?;
             out.push_str(&format!("{body_indent}  {acc} = {};\n", reduced.code));
             out.push_str(&format!("{body_indent}}}\n"));
@@ -951,10 +949,13 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         } else {
             out.push_str(&format!("{body_indent}for (const {item} of {source}) {{\n"));
             let pair_ty = Ty::Tuple(vec![plain_item_ty.clone(), plain_item_ty.clone()]);
-            let pair = TsValue {
-                code: format!("{{ f0: {acc}, f1: {item} }}"),
-                ty: pair_ty,
-            };
+            let pair = ts_tuple_value(
+                vec![
+                    ts_value(acc.clone(), plain_item_ty.clone()),
+                    ts_value(item.clone(), plain_item_ty.clone()),
+                ],
+                pair_ty,
+            );
             let reduced = self.emit_call(out, op, pair, &(body_indent.clone() + "  "))?;
             out.push_str(&format!("{body_indent}  {acc} = {};\n", reduced.code));
             out.push_str(&format!("{body_indent}}}\n"));
@@ -967,10 +968,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         if input_faultable {
             out.push_str(&format!("{indent}}}\n"));
         }
-        Ok(TsValue {
-            code: tmp,
-            ty: output_ty,
-        })
+        Ok(ts_value(tmp, output_ty))
     }
 
     fn emit_scan(
@@ -1001,18 +999,19 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             "{indent}for (const {item} of {}) {{\n",
             input.code
         ));
-        let pair = TsValue {
-            code: format!("{{ f0: {acc}, f1: {item} }}"),
-            ty: Ty::Tuple(vec![item_ty.as_ref().clone(), item_ty.as_ref().clone()]),
-        };
+        let pair_ty = Ty::Tuple(vec![item_ty.as_ref().clone(), item_ty.as_ref().clone()]);
+        let pair = ts_tuple_value(
+            vec![
+                ts_value(acc.clone(), item_ty.as_ref().clone()),
+                ts_value(item.clone(), item_ty.as_ref().clone()),
+            ],
+            pair_ty,
+        );
         let scanned = self.emit_call(out, op, pair, &(indent.to_string() + "  "))?;
         out.push_str(&format!("{indent}  {acc} = {};\n", scanned.code));
         out.push_str(&format!("{indent}  {tmp}.push({acc});\n"));
         out.push_str(&format!("{indent}}}\n"));
-        Ok(TsValue {
-            code: tmp,
-            ty: output_ty,
-        })
+        Ok(ts_value(tmp, output_ty))
     }
 
     fn emit_repeat(
@@ -1037,18 +1036,12 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         let next = self.emit_call(
             out,
             node,
-            TsValue {
-                code: tmp.clone(),
-                ty: input.ty.clone(),
-            },
+            ts_value(tmp.clone(), input.ty.clone()),
             &(indent.to_string() + "  "),
         )?;
         out.push_str(&format!("{indent}  {tmp} = {};\n", next.code));
         out.push_str(&format!("{indent}}}\n"));
-        Ok(TsValue {
-            code: tmp,
-            ty: input.ty,
-        })
+        Ok(ts_value(tmp, input.ty))
     }
 
     fn emit_match(
@@ -1111,10 +1104,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         {
             out.push_str(&format!("{indent}}}\n"));
         }
-        Ok(TsValue {
-            code: tmp,
-            ty: output_ty,
-        })
+        Ok(ts_value(tmp, output_ty))
     }
 
     fn emit_match_target(
@@ -1148,16 +1138,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             values.push(self.emit_endpoint(out, arg, env, indent)?);
         }
         let ty = Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect());
-        let code = format!(
-            "{{ {} }}",
-            values
-                .iter()
-                .enumerate()
-                .map(|(index, value)| format!("f{index}: {}", value.code))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        Ok(TsValue { code, ty })
+        Ok(ts_tuple_value(values, ty))
     }
 
     fn emit_fault_map(
@@ -1198,24 +1179,15 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         let mapped = self.emit_call(
             out,
             node,
-            TsValue {
-                code: format!("{item}.value"),
-                ty: ok_ty.as_ref().clone(),
-            },
+            ts_value(format!("{item}.value"), ok_ty.as_ref().clone()),
             &(indent.to_string() + "    "),
         )?;
         out.push_str(&format!("{indent}    {ok_tmp}.push({});\n", mapped.code));
         out.push_str(&format!("{indent}  }}\n"));
         out.push_str(&format!("{indent}}}\n"));
         Ok((
-            TsValue {
-                code: ok_tmp,
-                ty: ok_seq_ty,
-            },
-            TsValue {
-                code: fault_tmp,
-                ty: fault_seq_ty,
-            },
+            ts_value(ok_tmp, ok_seq_ty),
+            ts_value(fault_tmp, fault_seq_ty),
         ))
     }
 
@@ -1347,10 +1319,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         if let Ty::Faultable(inner) = expected
             && inner.as_ref() == &value.ty
         {
-            return Ok(TsValue {
-                code: format!("faOk({})", value.code),
-                ty: expected.clone(),
-            });
+            return Ok(ts_value(format!("faOk({})", value.code), expected.clone()));
         }
         let tmp = self.next_temp();
         out.push_str(&format!(
@@ -1358,10 +1327,7 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
             ts_type(expected),
             value.code
         ));
-        Ok(TsValue {
-            code: tmp,
-            ty: expected.clone(),
-        })
+        Ok(ts_value(tmp, expected.clone()))
     }
 
     fn plain_output_type(&self, name: &str, input_ty: &Ty) -> Result<Ty, String> {
@@ -1377,6 +1343,73 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         self.temp += 1;
         tmp
     }
+}
+
+fn ts_value(code: impl Into<String>, ty: Ty) -> TsValue {
+    TsValue {
+        code: code.into(),
+        ty,
+        tuple_items: None,
+    }
+}
+
+fn ts_tuple_value(values: Vec<TsValue>, ty: Ty) -> TsValue {
+    let code = format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| value.code.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    TsValue {
+        code,
+        ty,
+        tuple_items: Some(values),
+    }
+}
+
+fn call_args(input: &TsValue, arity: usize) -> Result<String, String> {
+    match arity {
+        0 => Ok(String::new()),
+        1 => Ok(input.code.clone()),
+        _ => {
+            let Ty::Tuple(items) = &input.ty else {
+                return Err("multi-input call expected tuple input".to_string());
+            };
+            if items.len() != arity {
+                return Err(format!(
+                    "multi-input call expected {arity} tuple fields, found {}",
+                    items.len()
+                ));
+            }
+            if let Some(values) = &input.tuple_items {
+                Ok(values
+                    .iter()
+                    .map(|value| value.code.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "))
+            } else {
+                Ok((0..arity)
+                    .map(|index| ts_index(&input.code, index))
+                    .collect::<Vec<_>>()
+                    .join(", "))
+            }
+        }
+    }
+}
+
+fn tuple_field(input: &TsValue, index: usize) -> String {
+    input
+        .tuple_items
+        .as_ref()
+        .and_then(|items| items.get(index))
+        .map(|value| value.code.clone())
+        .unwrap_or_else(|| ts_index(&input.code, index))
+}
+
+fn ts_index(code: &str, index: usize) -> String {
+    format!("{code}[{index}]")
 }
 
 fn ts_type(ty: &Ty) -> String {
@@ -1400,16 +1433,16 @@ fn ts_type(ty: &Ty) -> String {
         Ty::Seq(item) => format!("Array<{}>", ts_type(item)),
         Ty::Tuple(items) => {
             if items.is_empty() {
-                "{}".to_string()
+                "[]".to_string()
             } else {
                 format!(
-                    "{{ {} }}",
+                    "[{}]",
                     items
                         .iter()
                         .enumerate()
                         .map(|(index, item)| format!("f{index}: {}", ts_type(item)))
                         .collect::<Vec<_>>()
-                        .join("; ")
+                        .join(", ")
                 )
             }
         }
@@ -1448,15 +1481,17 @@ fn ts_value_code_is_stable(code: &str) -> bool {
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
 }
 
-fn ts_numeric_binary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
+fn ts_numeric_binary_expr(name: &str, input: &TsValue, output_ty: &Ty) -> String {
+    let left = tuple_field(input, 0);
+    let right = tuple_field(input, 1);
     match name {
-        "add" => format!("({input}.f0 + {input}.f1)"),
-        "sub" => format!("({input}.f0 - {input}.f1)"),
-        "mul" => format!("({input}.f0 * {input}.f1)"),
-        "div" => format!("({input}.f0 / {input}.f1)"),
-        "rem" => format!("({input}.f0 % {input}.f1)"),
-        "min" => format!("({input}.f0 <= {input}.f1 ? {input}.f0 : {input}.f1)"),
-        "max" => format!("({input}.f0 >= {input}.f1 ? {input}.f0 : {input}.f1)"),
+        "add" => format!("({left} + {right})"),
+        "sub" => format!("({left} - {right})"),
+        "mul" => format!("({left} * {right})"),
+        "div" => format!("({left} / {right})"),
+        "rem" => format!("({left} % {right})"),
+        "min" => format!("({left} <= {right} ? {left} : {right})"),
+        "max" => format!("({left} >= {right} ? {left} : {right})"),
         _ if matches!(output_ty, Ty::Real) => "Number.NaN".to_string(),
         _ => "0n".to_string(),
     }
@@ -1597,22 +1632,22 @@ function faParseReal(bytes: string): FaFaultable<number> {
   return faOk(value);
 }
 
-function faFlagPresent(input: { f0: string[]; f1: string }): boolean {
-  return input.f0.includes(input.f1);
+function faFlagPresent(input: [f0: string[], f1: string]): boolean {
+  return input[0].includes(input[1]);
 }
 
-function faFlagValue(input: { f0: string[]; f1: string }): FaFaultable<string> {
-  const index = input.f0.indexOf(input.f1);
-  if (index < 0 || index + 1 >= input.f0.length) return faFaultMessage(`flag_value: missing value for ${input.f1}`);
-  return faOk(input.f0[index + 1]);
+function faFlagValue(input: [f0: string[], f1: string]): FaFaultable<string> {
+  const index = input[0].indexOf(input[1]);
+  if (index < 0 || index + 1 >= input[0].length) return faFaultMessage(`flag_value: missing value for ${input[1]}`);
+  return faOk(input[0][index + 1]);
 }
 
-function faStripPrefix(input: { f0: string; f1: string }): FaFaultable<string> {
-  return input.f0.startsWith(input.f1) ? faOk(input.f0.slice(input.f1.length)) : faFaultMessage("strip_prefix: prefix not found");
+function faStripPrefix(input: [f0: string, f1: string]): FaFaultable<string> {
+  return input[0].startsWith(input[1]) ? faOk(input[0].slice(input[1].length)) : faFaultMessage("strip_prefix: prefix not found");
 }
 
-function faStripSuffix(input: { f0: string; f1: string }): FaFaultable<string> {
-  return input.f0.endsWith(input.f1) ? faOk(input.f0.slice(0, -input.f1.length)) : faFaultMessage("strip_suffix: suffix not found");
+function faStripSuffix(input: [f0: string, f1: string]): FaFaultable<string> {
+  return input[0].endsWith(input[1]) ? faOk(input[0].slice(0, -input[1].length)) : faFaultMessage("strip_suffix: suffix not found");
 }
 
 function faCollect<T>(items: Array<FaFaultable<T>>): FaFaultable<T[]> {
@@ -1624,17 +1659,17 @@ function faCollect<T>(items: Array<FaFaultable<T>>): FaFaultable<T[]> {
   return faOk(out);
 }
 
-function faZip<A, B>(input: { f0: A[]; f1: B[] }): Array<{ f0: A; f1: B }> {
-  if (input.f0.length !== input.f1.length) throw new Error("zip: sequences must have the same length");
-  return input.f0.map((left, index) => ({ f0: left, f1: input.f1[index] }));
+function faZip<A, B>(input: [f0: A[], f1: B[]]): Array<[f0: A, f1: B]> {
+  if (input[0].length !== input[1].length) throw new Error("zip: sequences must have the same length");
+  return input[0].map((left, index) => [left, input[1][index]]);
 }
 
-function faBroadcastLeft<A, B>(input: { f0: A; f1: B[] }): Array<{ f0: A; f1: B }> {
-  return input.f1.map((item) => ({ f0: input.f0, f1: item }));
+function faBroadcastLeft<A, B>(input: [f0: A, f1: B[]]): Array<[f0: A, f1: B]> {
+  return input[1].map((item) => [input[0], item]);
 }
 
-function faBroadcastRight<A, B>(input: { f0: A[]; f1: B }): Array<{ f0: A; f1: B }> {
-  return input.f0.map((item) => ({ f0: item, f1: input.f1 }));
+function faBroadcastRight<A, B>(input: [f0: A[], f1: B]): Array<[f0: A, f1: B]> {
+  return input[0].map((item) => [item, input[1]]);
 }
 
 function faTranspose<T>(rows: T[][]): T[][] {
@@ -1644,23 +1679,23 @@ function faTranspose<T>(rows: T[][]): T[][] {
   return Array.from({ length: width }, (_, column) => rows.map((row) => row[column]));
 }
 
-function faGroupById<T>(items: Array<{ f0: bigint; f1: T }>): T[][] {
+function faGroupById<T>(items: Array<[f0: bigint, f1: T]>): T[][] {
   const groups = new Map<string, T[]>();
   for (const item of items) {
-    const key = item.f0.toString();
+    const key = item[0].toString();
     const group = groups.get(key) ?? [];
-    group.push(item.f1);
+    group.push(item[1]);
     groups.set(key, group);
   }
   return [...groups.keys()].sort((a, b) => Number(BigInt(a) - BigInt(b))).map((key) => groups.get(key)!);
 }
 
-function faShiftRight<T>(input: { f0: T[]; f1: T }): T[] {
-  return [input.f1, ...input.f0.slice(0, Math.max(0, input.f0.length - 1))];
+function faShiftRight<T>(input: [f0: T[], f1: T]): T[] {
+  return [input[1], ...input[0].slice(0, Math.max(0, input[0].length - 1))];
 }
 
-function faShiftLeft<T>(input: { f0: T[]; f1: T }): T[] {
-  return [...input.f0.slice(1), input.f1];
+function faShiftLeft<T>(input: [f0: T[], f1: T]): T[] {
+  return [...input[0].slice(1), input[1]];
 }
 
 function faHead<T>(items: T[]): FaFaultable<T> {
@@ -1671,41 +1706,41 @@ function faLast<T>(items: T[]): FaFaultable<T> {
   return items.length === 0 ? faFaultMessage("last: empty sequence") : faOk(items[items.length - 1]);
 }
 
-function faGet<T>(input: { f0: T[]; f1: bigint }): FaFaultable<T> {
-  const index = Number(input.f1);
-  return index < 0 || index >= input.f0.length ? faFaultMessage("get: index out of range") : faOk(input.f0[index]);
+function faGet<T>(input: [f0: T[], f1: bigint]): FaFaultable<T> {
+  const index = Number(input[1]);
+  return index < 0 || index >= input[0].length ? faFaultMessage("get: index out of range") : faOk(input[0][index]);
 }
 
-function faGetOr<T>(input: { f0: T[]; f1: bigint; f2: T }): T {
-  const index = Number(input.f1);
-  return index < 0 || index >= input.f0.length ? input.f2 : input.f0[index];
+function faGetOr<T>(input: [f0: T[], f1: bigint, f2: T]): T {
+  const index = Number(input[1]);
+  return index < 0 || index >= input[0].length ? input[2] : input[0][index];
 }
 
-function faAt<T>(input: { f0: T[]; f1: bigint }): T {
-  const index = Number(input.f1);
-  if (index < 0 || index >= input.f0.length) throw new Error("at: index out of range");
-  return input.f0[index];
+function faAt<T>(input: [f0: T[], f1: bigint]): T {
+  const index = Number(input[1]);
+  if (index < 0 || index >= input[0].length) throw new Error("at: index out of range");
+  return input[0][index];
 }
 
-function faFill<T>(input: { f0: bigint; f1: T }): T[] {
-  return Array.from({ length: Number(input.f0) }, () => input.f1);
+function faFill<T>(input: [f0: bigint, f1: T]): T[] {
+  return Array.from({ length: Number(input[0]) }, () => input[1]);
 }
 
-function faSet<T>(input: { f0: T[]; f1: bigint; f2: T }): FaFaultable<T[]> {
-  const index = Number(input.f1);
-  if (index < 0 || index >= input.f0.length) return faFaultMessage("set: index out of range");
-  const out = [...input.f0];
-  out[index] = input.f2;
+function faSet<T>(input: [f0: T[], f1: bigint, f2: T]): FaFaultable<T[]> {
+  const index = Number(input[1]);
+  if (index < 0 || index >= input[0].length) return faFaultMessage("set: index out of range");
+  const out = [...input[0]];
+  out[index] = input[2];
   return faOk(out);
 }
 
-function faRangeStep(input: { f0: bigint; f1: bigint; f2: bigint }): bigint[] {
-  if (input.f2 === 0n) throw new Error("range_step: step cannot be zero");
+function faRangeStep(input: [f0: bigint, f1: bigint, f2: bigint]): bigint[] {
+  if (input[2] === 0n) throw new Error("range_step: step cannot be zero");
   const out: bigint[] = [];
-  if (input.f2 > 0n) {
-    for (let value = input.f0; value < input.f1; value += input.f2) out.push(value);
+  if (input[2] > 0n) {
+    for (let value = input[0]; value < input[1]; value += input[2]) out.push(value);
   } else {
-    for (let value = input.f0; value > input.f1; value += input.f2) out.push(value);
+    for (let value = input[0]; value > input[1]; value += input[2]) out.push(value);
   }
   return out;
 }

@@ -143,6 +143,13 @@ fn build_typescript_fib_example_and_typecheck_output() {
     let generated_ts = fs::read_to_string("examples/typescript-fib/build/typescript/fib.ts")
         .expect("read generated TypeScript");
     assert!(generated_ts.contains("export function fib(depth: bigint): bigint"));
+    assert!(generated_ts.contains("function _fib_step(a: bigint, b: bigint)"));
+    assert!(generated_ts.contains("t0 = _fib_step(t0[0], t0[1])"));
+    assert!(generated_ts.contains("return [b, a + b];"));
+    assert!(!generated_ts.contains("arguments["));
+    assert!(!generated_ts.contains("...t0"));
+    assert!(!generated_ts.contains("input: {"));
+    assert!(!generated_ts.contains(".f0"));
     assert!(generated_ts.contains("for (let"));
     assert!(!generated_ts.contains("faParseReal"));
     assert!(!generated_ts.contains("FaArgs"));
@@ -198,6 +205,12 @@ fn build_javascript_fib_example_and_run_node_script() {
     let generated_dts = fs::read_to_string("examples/typescript-fib/build/javascript/fib.d.ts")
         .expect("read generated JavaScript declarations");
     assert!(generated.contains("export function fib(depth)"));
+    assert!(generated.contains("function _fib_step(a, b)"));
+    assert!(generated.contains("t0 = _fib_step(t0[0], t0[1])"));
+    assert!(generated.contains("return [b, a + b];"));
+    assert!(!generated.contains("arguments["));
+    assert!(!generated.contains("...t0"));
+    assert!(!generated.contains(".f0"));
     assert!(!generated.contains(": bigint"));
     assert!(!generated.contains("faParseReal"));
     assert!(generated_dts.contains("export declare function fib(depth: bigint): bigint"));
