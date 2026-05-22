@@ -8,6 +8,26 @@ pub const CONNECTION: StdSymbol = ty(MODULE, "Connection");
 pub const ROW: StdSymbol = ty(MODULE, "Row");
 pub const VALUE: StdSymbol = ty(MODULE, "Value");
 
+pub const HEADER_TYPES: &[&str] = &[
+    "FaSqliteConnection",
+    "FaSqliteRow",
+    "FaSqliteValue",
+    "FaSeq_SqliteValue",
+    "FaSeq_SqliteRow",
+    "FaFaultable_SqliteConnection",
+    "FaFaultable_SqliteValue",
+    "FaTuple_SqliteConnection_Bool",
+    "FaTuple_SqliteConnection_Int",
+    "FaTuple_SqliteConnection_Bytes_Seq_SqliteValue",
+    "FaTuple_SqliteConnection_Stream_SqliteRow",
+    "FaTuple_SqliteConnection_Seq_SqliteRow",
+    "FaTuple_SqliteRow_Int",
+    "FaTuple_SqliteRow_Bytes",
+    "FaFaultable_Tuple_SqliteConnection_Int",
+    "FaFaultable_Tuple_SqliteConnection_Stream_SqliteRow",
+    "FaFaultable_Tuple_SqliteConnection_Seq_SqliteRow",
+];
+
 pub const OPEN: StdSymbol = io_node(MODULE, "open", "Bytes", "Faultable[sqlite.Connection]");
 pub const OPEN_READONLY: StdSymbol = io_node(
     MODULE,

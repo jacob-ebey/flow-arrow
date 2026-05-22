@@ -17,9 +17,9 @@ static FaFaultable_Int fa_parse_int(FaBytes bytes) {
   if (errno == ERANGE || end == start || !end || *end != '\0') {
     char message[512];
     snprintf(message, sizeof(message), "expected Int, got \"%.*s\"", (int)bytes.len, bytes.bytes);
-    free(copy);
+    fa_free(copy);
     return FaFaultable_Int_fault(fa_fault_cstr(message));
   }
-  free(copy);
+  fa_free(copy);
   return FaFaultable_Int_ok((int64_t)value);
 }

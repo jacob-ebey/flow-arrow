@@ -185,64 +185,6 @@ impl<'a> TypedCodegen<'a> {
             self.types.c_type(&Ty::Faultable(Box::new(image)));
             self.types.c_type(&Ty::Faultable(Box::new(Ty::Bytes)));
         }
-        if uses_http_runtime {
-            self.types.c_type(&Ty::HttpServerConfig);
-            self.types.c_type(&Ty::HttpListener);
-            self.types.c_type(&Ty::HttpRequest);
-            self.types.c_type(&Ty::HttpResponse);
-            self.types.c_type(&Ty::Tuple(vec![
-                Ty::HttpListener,
-                Ty::Stream(Box::new(Ty::HttpResponse)),
-            ]));
-            self.types
-                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Int]));
-            self.types
-                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Bytes]));
-            self.types
-                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Bytes, Ty::Bytes]));
-            self.types
-                .c_type(&Ty::Faultable(Box::new(Ty::HttpListener)));
-            self.types.c_type(&Ty::Stream(Box::new(Ty::HttpRequest)));
-            self.types.c_type(&Ty::Stream(Box::new(Ty::HttpResponse)));
-        }
-        if uses_sqlite_runtime {
-            self.types.c_type(&Ty::SqliteConnection);
-            self.types.c_type(&Ty::SqliteRow);
-            self.types.c_type(&Ty::SqliteValue);
-            let seq_sqlite_value = Ty::Seq(Box::new(Ty::SqliteValue));
-            let seq_sqlite_row = Ty::Seq(Box::new(Ty::SqliteRow));
-            let stream_sqlite_row = Ty::Stream(Box::new(Ty::SqliteRow));
-            let tuple_conn_bool = Ty::Tuple(vec![Ty::SqliteConnection, Ty::Bool]);
-            let tuple_conn_int = Ty::Tuple(vec![Ty::SqliteConnection, Ty::Int]);
-            let tuple_conn_bytes_params = Ty::Tuple(vec![
-                Ty::SqliteConnection,
-                Ty::Bytes,
-                seq_sqlite_value.clone(),
-            ]);
-            let tuple_conn_stream_row =
-                Ty::Tuple(vec![Ty::SqliteConnection, stream_sqlite_row.clone()]);
-            let tuple_conn_seq_row = Ty::Tuple(vec![Ty::SqliteConnection, seq_sqlite_row.clone()]);
-            let tuple_row_int = Ty::Tuple(vec![Ty::SqliteRow, Ty::Int]);
-            let tuple_row_bytes = Ty::Tuple(vec![Ty::SqliteRow, Ty::Bytes]);
-            self.types.c_type(&tuple_conn_bool);
-            self.types.c_type(&tuple_conn_int);
-            self.types.c_type(&tuple_conn_bytes_params);
-            self.types.c_type(&tuple_conn_stream_row);
-            self.types.c_type(&tuple_conn_seq_row);
-            self.types.c_type(&tuple_row_int);
-            self.types.c_type(&tuple_row_bytes);
-            self.types
-                .c_type(&Ty::Faultable(Box::new(Ty::SqliteConnection)));
-            self.types.c_type(&Ty::Faultable(Box::new(Ty::SqliteValue)));
-            self.types.c_type(&Ty::Faultable(Box::new(tuple_conn_int)));
-            self.types
-                .c_type(&Ty::Faultable(Box::new(tuple_conn_stream_row)));
-            self.types
-                .c_type(&Ty::Faultable(Box::new(tuple_conn_seq_row)));
-            self.types.c_type(&seq_sqlite_value);
-            self.types.c_type(&seq_sqlite_row);
-            self.types.c_type(&stream_sqlite_row);
-        }
         self.types.set_use_cv_header(uses_cv_runtime);
 
         for decl in &self.module.declarations {
@@ -317,7 +259,7 @@ impl<'a> TypedCodegen<'a> {
         let uses_cv_runtime = self.uses_cv_runtime();
         let uses_http_runtime = self.uses_http_runtime();
         let uses_sqlite_runtime = self.uses_sqlite_runtime();
-        self.collect_runtime_support_types(uses_cv_runtime, uses_http_runtime, uses_sqlite_runtime);
+        self.collect_runtime_support_types(uses_cv_runtime);
         self.types.set_use_cv_header(uses_cv_runtime);
 
         emit_preamble(&mut out);
@@ -349,75 +291,12 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         Ok(out)
     }
 
-    fn collect_runtime_support_types(
-        &mut self,
-        uses_cv_runtime: bool,
-        uses_http_runtime: bool,
-        uses_sqlite_runtime: bool,
-    ) {
+    fn collect_runtime_support_types(&mut self, uses_cv_runtime: bool) {
         if uses_cv_runtime {
             let image = cv_image_ty();
             self.types.c_type(&image);
             self.types.c_type(&Ty::Faultable(Box::new(image)));
             self.types.c_type(&Ty::Faultable(Box::new(Ty::Bytes)));
-        }
-        if uses_http_runtime {
-            self.types.c_type(&Ty::HttpServerConfig);
-            self.types.c_type(&Ty::HttpListener);
-            self.types.c_type(&Ty::HttpRequest);
-            self.types.c_type(&Ty::HttpResponse);
-            self.types.c_type(&Ty::Tuple(vec![
-                Ty::HttpListener,
-                Ty::Stream(Box::new(Ty::HttpResponse)),
-            ]));
-            self.types
-                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Int]));
-            self.types
-                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Bytes]));
-            self.types
-                .c_type(&Ty::Tuple(vec![Ty::HttpResponse, Ty::Bytes, Ty::Bytes]));
-            self.types
-                .c_type(&Ty::Faultable(Box::new(Ty::HttpListener)));
-            self.types.c_type(&Ty::Stream(Box::new(Ty::HttpRequest)));
-            self.types.c_type(&Ty::Stream(Box::new(Ty::HttpResponse)));
-        }
-        if uses_sqlite_runtime {
-            self.types.c_type(&Ty::SqliteConnection);
-            self.types.c_type(&Ty::SqliteRow);
-            self.types.c_type(&Ty::SqliteValue);
-            let seq_sqlite_value = Ty::Seq(Box::new(Ty::SqliteValue));
-            let seq_sqlite_row = Ty::Seq(Box::new(Ty::SqliteRow));
-            let stream_sqlite_row = Ty::Stream(Box::new(Ty::SqliteRow));
-            let tuple_conn_bool = Ty::Tuple(vec![Ty::SqliteConnection, Ty::Bool]);
-            let tuple_conn_int = Ty::Tuple(vec![Ty::SqliteConnection, Ty::Int]);
-            let tuple_conn_bytes_params = Ty::Tuple(vec![
-                Ty::SqliteConnection,
-                Ty::Bytes,
-                seq_sqlite_value.clone(),
-            ]);
-            let tuple_conn_stream_row =
-                Ty::Tuple(vec![Ty::SqliteConnection, stream_sqlite_row.clone()]);
-            let tuple_conn_seq_row = Ty::Tuple(vec![Ty::SqliteConnection, seq_sqlite_row.clone()]);
-            let tuple_row_int = Ty::Tuple(vec![Ty::SqliteRow, Ty::Int]);
-            let tuple_row_bytes = Ty::Tuple(vec![Ty::SqliteRow, Ty::Bytes]);
-            self.types.c_type(&tuple_conn_bool);
-            self.types.c_type(&tuple_conn_int);
-            self.types.c_type(&tuple_conn_bytes_params);
-            self.types.c_type(&tuple_conn_stream_row);
-            self.types.c_type(&tuple_conn_seq_row);
-            self.types.c_type(&tuple_row_int);
-            self.types.c_type(&tuple_row_bytes);
-            self.types
-                .c_type(&Ty::Faultable(Box::new(Ty::SqliteConnection)));
-            self.types.c_type(&Ty::Faultable(Box::new(Ty::SqliteValue)));
-            self.types.c_type(&Ty::Faultable(Box::new(tuple_conn_int)));
-            self.types
-                .c_type(&Ty::Faultable(Box::new(tuple_conn_stream_row)));
-            self.types
-                .c_type(&Ty::Faultable(Box::new(tuple_conn_seq_row)));
-            self.types.c_type(&seq_sqlite_value);
-            self.types.c_type(&seq_sqlite_row);
-            self.types.c_type(&stream_sqlite_row);
         }
     }
 
@@ -1393,7 +1272,11 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 ty: Ty::Bool,
             }),
             Endpoint::String(value) => Ok(Value {
-                code: format!("fa_bytes_literal(\"{}\", {})", c_string(value), value.len()),
+                code: format!(
+                    "fa_bytes_borrowed(\"{}\", {})",
+                    c_string(value),
+                    value.len()
+                ),
                 ty: Ty::Bytes,
             }),
             Endpoint::Unit => Ok(Value {
@@ -2058,7 +1941,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             let ctx = self.next_temp();
             out.push_str(&format!("  if ({tmp}.next) {{\n"));
             out.push_str(&format!(
-                "    {ctx_ty} *{ctx} = ({ctx_ty} *)calloc(1, sizeof({ctx_ty}));\n"
+                "    {ctx_ty} *{ctx} = ({ctx_ty} *)fa_calloc(1, sizeof({ctx_ty}));\n"
             ));
             out.push_str(&format!("    if (!{ctx}) fa_die_alloc();\n"));
             out.push_str(&format!("    {ctx}->upstream = {};\n", input.code));
@@ -3239,7 +3122,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         out.push_str(&format!("  size_t {cap} = 8;\n"));
         out.push_str(&format!("  size_t {count} = 0;\n"));
         out.push_str(&format!(
-            "  {item_c_ty} *{items} = ({item_c_ty} *)calloc({cap}, sizeof({item_c_ty}));\n"
+            "  {item_c_ty} *{items} = ({item_c_ty} *)fa_calloc({cap}, sizeof({item_c_ty}));\n"
         ));
         out.push_str(&format!("  if (!{items}) fa_die_alloc();\n"));
         out.push_str(&format!("  if (!{input}.next) {{\n"));
@@ -3249,7 +3132,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         out.push_str("  } else {\n");
         out.push_str("    for (;;) {\n");
         out.push_str(&format!(
-            "      if ({count} == {cap}) {{ {cap} *= 2; {item_c_ty} *next_items = ({item_c_ty} *)realloc({items}, {cap} * sizeof({item_c_ty})); if (!next_items) fa_die_alloc(); {items} = next_items; }}\n"
+                "      if ({count} == {cap}) {{ {cap} *= 2; {item_c_ty} *next_items = ({item_c_ty} *)fa_realloc({items}, {cap} * sizeof({item_c_ty})); {items} = next_items; }}\n"
         ));
         out.push_str(&format!("      {item_c_ty} {item};\n"));
         out.push_str(&format!("      FaFault {fault};\n"));
@@ -3269,7 +3152,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             "    for (size_t {i} = 0; {i} < {count}; {i}++) {target}.value.items[{i}] = {items}[{i}];\n"
         ));
         out.push_str("  }\n");
-        out.push_str(&format!("  free({items});\n"));
+        out.push_str(&format!("  fa_free({items});\n"));
         Ok(())
     }
 
@@ -5151,7 +5034,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                         })?;
                 let pair_ty = self.runtime_pair_type();
                 let fn_value = self.runtime_function(
-                    "fa_bytes_literal",
+                    "fa_bytes_borrowed",
                     Some(pair_ty.into()),
                     &[
                         self.context.ptr_type(AddressSpace::default()).into(),
@@ -5167,11 +5050,11 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                         "bytes",
                     )
                     .map_err(|error| {
-                        format!("LLVM backend failed to call fa_bytes_literal: {error}")
+                        format!("LLVM backend failed to call fa_bytes_borrowed: {error}")
                     })?
                     .try_as_basic_value()
                     .basic()
-                    .ok_or_else(|| "fa_bytes_literal did not return a value".to_string())?;
+                    .ok_or_else(|| "fa_bytes_borrowed did not return a value".to_string())?;
                 let call = self.runtime_pair_to_value(call, &Ty::Bytes)?;
                 Ok(LlvmValue {
                     value: call,
@@ -5930,7 +5813,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 .size_of()
                 .ok_or_else(|| "LLVM backend cannot compute stream map context size".to_string())?;
             let calloc = self.runtime_function(
-                "calloc",
+                "fa_calloc",
                 Some(self.context.ptr_type(AddressSpace::default()).into()),
                 &[
                     self.context.i64_type().into(),
@@ -5952,7 +5835,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 })?
                 .try_as_basic_value()
                 .basic()
-                .ok_or_else(|| "calloc did not return a value".to_string())?
+                .ok_or_else(|| "fa_calloc did not return a value".to_string())?
                 .into_pointer_value();
             let upstream_ptr = self
                 .builder
@@ -8235,13 +8118,13 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     }
 
     fn calloc_function(&mut self) -> FunctionValue<'ctx> {
-        if let Some(function) = self.module.get_function("calloc") {
+        if let Some(function) = self.module.get_function("fa_calloc") {
             return function;
         }
         let i64_ty = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         self.module.add_function(
-            "calloc",
+            "fa_calloc",
             ptr_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false),
             None,
         )
@@ -8851,7 +8734,7 @@ impl TypeRegistry {
                 Ty::Seq(item) => {
                     let item_ty = self.c_type(&item);
                     out.push_str(&format!(
-                        "static {name} {name}_new(size_t count) {{\n  {name} seq;\n  seq.count = count;\n  seq.items = ({item_ty} *)calloc(count ? count : 1, sizeof({item_ty}));\n  if (!seq.items) fa_die_alloc();\n  return seq;\n}}\n\n"
+                        "static {name} {name}_new(size_t count) {{\n  {name} seq;\n  seq.count = count;\n  seq.items = ({item_ty} *)fa_calloc(count ? count : 1, sizeof({item_ty}));\n  return seq;\n}}\n\n"
                     ));
                 }
                 Ty::Faultable(inner) => {
@@ -9506,6 +9389,9 @@ fn emit_unwrap_faultable_value(
 }
 
 fn is_predefined_type_name(name: &str) -> bool {
+    if stdlib::is_runtime_header_type_name(name) {
+        return true;
+    }
     matches!(
         name,
         "FaSeq_Bytes"
@@ -9538,11 +9424,11 @@ fn is_cv_type_name(name: &str) -> bool {
 }
 
 fn is_http_runtime_type_name(name: &str) -> bool {
-    matches!(name, "FaTuple_HttpRequest_Bytes_Bytes")
+    stdlib::is_runtime_header_type_name(name)
 }
 
 fn is_sqlite_runtime_type_name(name: &str) -> bool {
-    matches!(name, "FaSqliteConnection" | "FaSqliteRow" | "FaSqliteValue")
+    stdlib::is_runtime_header_type_name(name)
 }
 
 fn numeric_binary_output(input: &Ty) -> Result<Ty, String> {

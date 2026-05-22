@@ -50,6 +50,8 @@ typedef struct { bool is_fault; FaFault fault; FaStream value; } FaFaultable_Str
 typedef struct { bool is_fault; FaFault fault; FaSeq_Real value; } FaFaultable_Seq_Real;
 typedef struct { size_t count; FaFault *items; } FaSeq_Fault;
 typedef void (*FaParallelForFn)(void *ctx, size_t start, size_t end);
+typedef void *(*FaScopedAllocFn)(void *ctx, size_t size);
+typedef struct { FaScopedAllocFn alloc; void *ctx; } FaScopedAllocator;
 
 #define FA_PARALLEL_FOR_GRAIN 64
 #define FA_PARALLEL_FOR_MAX_WORKERS 64
@@ -61,9 +63,16 @@ typedef void (*FaParallelForFn)(void *ctx, size_t start, size_t end);
 
 static void fa_die_usage(const char *message);
 static void fa_die_alloc(void);
+static FaScopedAllocator fa_scoped_allocator_enter(FaScopedAllocFn alloc, void *ctx);
+static void fa_scoped_allocator_restore(FaScopedAllocator previous);
+static void *fa_malloc(size_t size);
+static void *fa_calloc(size_t count, size_t size);
+static void *fa_realloc(void *ptr, size_t size);
+static void fa_free(void *ptr);
 static void fa_parallel_for(size_t start, size_t end, size_t grain, FaParallelForFn fn, void *ctx);
 static FaUnit fa_unit(void);
 static char *fa_copy_bytes(const char *bytes, size_t len);
+static FaBytes fa_bytes_borrowed(const char *bytes, size_t len);
 static FaBytes fa_bytes_owned(char *bytes, size_t len);
 static FaBytes fa_bytes_literal(const char *bytes, size_t len);
 static FaFault fa_fault_bytes(FaBytes message);

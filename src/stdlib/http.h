@@ -46,3 +46,44 @@ typedef struct {
   FaBytes f1;
   FaBytes f2;
 } FaTuple_HttpRequest_Bytes_Bytes;
+
+typedef struct {
+  bool is_fault;
+  FaFault fault;
+  FaHttpListener value;
+} FaFaultable_HttpListener;
+
+typedef struct {
+  FaHttpListener f0;
+  FaStream f1;
+} FaTuple_HttpListener_Stream_HttpResponse;
+
+typedef struct {
+  FaHttpResponse f0;
+  int64_t f1;
+} FaTuple_HttpResponse_Int;
+
+typedef struct {
+  FaHttpResponse f0;
+  FaBytes f1;
+} FaTuple_HttpResponse_Bytes;
+
+typedef struct {
+  FaHttpResponse f0;
+  FaBytes f1;
+  FaBytes f2;
+} FaTuple_HttpResponse_Bytes_Bytes;
+
+static FaFaultable_HttpListener FaFaultable_HttpListener_ok(FaHttpListener value) {
+  FaFaultable_HttpListener out;
+  out.is_fault = false;
+  out.value = value;
+  return out;
+}
+
+static FaFaultable_HttpListener FaFaultable_HttpListener_fault(FaFault fault) {
+  FaFaultable_HttpListener out;
+  out.is_fault = true;
+  out.fault = fault;
+  return out;
+}

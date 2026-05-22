@@ -4447,7 +4447,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             .build_alloca(i32_ty, "stream.status")
             .map_err(|error| format!("LLVM backend failed to allocate stream status: {error}"))?;
         let calloc = self.runtime_function(
-            "calloc",
+            "fa_calloc",
             Some(ptr_ty.into()),
             &[i64_ty.into(), i64_ty.into()],
         )?;
@@ -4458,7 +4458,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             .map_err(|error| format!("LLVM backend failed to allocate stream items: {error}"))?
             .try_as_basic_value()
             .basic()
-            .ok_or_else(|| "calloc did not return a value".to_string())?;
+            .ok_or_else(|| "fa_calloc did not return a value".to_string())?;
         self.builder
             .build_store(cap_ptr, cap)
             .map_err(|error| format!("LLVM backend failed to store stream cap: {error}"))?;
@@ -4503,7 +4503,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 format!("LLVM backend failed to compute stream byte length: {error}")
             })?;
         let realloc = self.runtime_function(
-            "realloc",
+            "fa_realloc",
             Some(ptr_ty.into()),
             &[ptr_ty.into(), i64_ty.into()],
         )?;
@@ -4517,7 +4517,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             .map_err(|error| format!("LLVM backend failed to reallocate stream items: {error}"))?
             .try_as_basic_value()
             .basic()
-            .ok_or_else(|| "realloc did not return a value".to_string())?;
+            .ok_or_else(|| "fa_realloc did not return a value".to_string())?;
         self.builder
             .build_store(cap_ptr, new_cap)
             .map_err(|error| format!("LLVM backend failed to store new stream cap: {error}"))?;

@@ -11,6 +11,65 @@ static void fa_die_alloc(void) {
   exit(70);
 }
 
+static _Thread_local FaScopedAllocator fa_current_allocator = { NULL, NULL };
+
+typedef struct {
+  size_t size;
+  bool scoped;
+} FaAllocHeader;
+
+static FaScopedAllocator fa_scoped_allocator_enter(FaScopedAllocFn alloc, void *ctx) {
+  FaScopedAllocator previous = fa_current_allocator;
+  fa_current_allocator.alloc = alloc;
+  fa_current_allocator.ctx = ctx;
+  return previous;
+}
+
+static void fa_scoped_allocator_restore(FaScopedAllocator previous) {
+  fa_current_allocator = previous;
+}
+
+static void *fa_malloc(size_t size) {
+  if (size == 0) size = 1;
+  size_t total = sizeof(FaAllocHeader) + size;
+  FaAllocHeader *header = fa_current_allocator.alloc
+      ? (FaAllocHeader *)fa_current_allocator.alloc(fa_current_allocator.ctx, total)
+      : (FaAllocHeader *)malloc(total);
+  if (!header) fa_die_alloc();
+  header->size = size;
+  header->scoped = fa_current_allocator.alloc != NULL;
+  return (void *)(header + 1);
+}
+
+static void *fa_calloc(size_t count, size_t size) {
+  size_t total = (count ? count : 1) * size;
+  void *ptr = fa_malloc(total);
+  memset(ptr, 0, total);
+  return ptr;
+}
+
+static void *fa_realloc(void *ptr, size_t size) {
+  if (!ptr) return fa_malloc(size);
+  if (size == 0) size = 1;
+  FaAllocHeader *header = ((FaAllocHeader *)ptr) - 1;
+  if (header->scoped || fa_current_allocator.alloc) {
+    void *next = fa_malloc(size);
+    memcpy(next, ptr, header->size < size ? header->size : size);
+    return next;
+  }
+  FaAllocHeader *next = (FaAllocHeader *)realloc(header, sizeof(FaAllocHeader) + size);
+  if (!next) fa_die_alloc();
+  next->size = size;
+  next->scoped = false;
+  return (void *)(next + 1);
+}
+
+static void fa_free(void *ptr) {
+  if (!ptr) return;
+  FaAllocHeader *header = ((FaAllocHeader *)ptr) - 1;
+  if (!header->scoped) free(header);
+}
+
 typedef struct {
   FaParallelForFn fn;
   void *ctx;
@@ -99,11 +158,17 @@ static FaUnit fa_unit(void) {
 }
 
 static char *fa_copy_bytes(const char *bytes, size_t len) {
-  char *copy = (char *)malloc(len + 1);
-  if (!copy) fa_die_alloc();
+  char *copy = (char *)fa_malloc(len + 1);
   memcpy(copy, bytes, len);
   copy[len] = '\0';
   return copy;
+}
+
+static FaBytes fa_bytes_borrowed(const char *bytes, size_t len) {
+  FaBytes out;
+  out.bytes = (char *)bytes;
+  out.len = len;
+  return out;
 }
 
 static FaBytes fa_bytes_owned(char *bytes, size_t len) {
@@ -142,40 +207,35 @@ static int fa_stream_close(FaStream *stream, FaFault *fault) {
 static FaSeq_Bytes FaSeq_Bytes_new(size_t count) {
   FaSeq_Bytes seq;
   seq.count = count;
-  seq.items = (FaBytes *)calloc(count ? count : 1, sizeof(FaBytes));
-  if (!seq.items) fa_die_alloc();
+  seq.items = (FaBytes *)fa_calloc(count ? count : 1, sizeof(FaBytes));
   return seq;
 }
 
 static FaSeq_Tuple_Bytes_Bytes FaSeq_Tuple_Bytes_Bytes_new(size_t count) {
   FaSeq_Tuple_Bytes_Bytes seq;
   seq.count = count;
-  seq.items = (FaTuple_Bytes_Bytes *)calloc(count ? count : 1, sizeof(FaTuple_Bytes_Bytes));
-  if (!seq.items) fa_die_alloc();
+  seq.items = (FaTuple_Bytes_Bytes *)fa_calloc(count ? count : 1, sizeof(FaTuple_Bytes_Bytes));
   return seq;
 }
 
 static FaSeq_Int FaSeq_Int_new(size_t count) {
   FaSeq_Int seq;
   seq.count = count;
-  seq.items = (int64_t *)calloc(count ? count : 1, sizeof(int64_t));
-  if (!seq.items) fa_die_alloc();
+  seq.items = (int64_t *)fa_calloc(count ? count : 1, sizeof(int64_t));
   return seq;
 }
 
 static FaSeq_Real FaSeq_Real_new(size_t count) {
   FaSeq_Real seq;
   seq.count = count;
-  seq.items = (double *)calloc(count ? count : 1, sizeof(double));
-  if (!seq.items) fa_die_alloc();
+  seq.items = (double *)fa_calloc(count ? count : 1, sizeof(double));
   return seq;
 }
 
 static FaSeq_Fault FaSeq_Fault_new(size_t count) {
   FaSeq_Fault seq;
   seq.count = count;
-  seq.items = (FaFault *)calloc(count ? count : 1, sizeof(FaFault));
-  if (!seq.items) fa_die_alloc();
+  seq.items = (FaFault *)fa_calloc(count ? count : 1, sizeof(FaFault));
   return seq;
 }
 
@@ -278,8 +338,7 @@ static FaFaultable_Seq_Real FaFaultable_Seq_Real_fault(FaFault fault) {
 }
 
 static FaBytes fa_concat_raw(FaBytes a, FaBytes b) {
-  char *bytes = (char *)malloc(a.len + b.len + 1);
-  if (!bytes) fa_die_alloc();
+  char *bytes = (char *)fa_malloc(a.len + b.len + 1);
   memcpy(bytes, a.bytes, a.len);
   memcpy(bytes + a.len, b.bytes, b.len);
   bytes[a.len + b.len] = '\0';

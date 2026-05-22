@@ -417,6 +417,10 @@ pub fn emit_http_runtime_c(out: &mut String) {
     out.push('\n');
 }
 
+pub fn is_runtime_header_type_name(name: &str) -> bool {
+    http::HEADER_TYPES.contains(&name) || sqlite::HEADER_TYPES.contains(&name)
+}
+
 pub fn emit_sqlite_runtime_h(out: &mut String) {
     let mut emitted_headers = Vec::new();
     push_c_headers(out, sqlite::H, &mut emitted_headers);

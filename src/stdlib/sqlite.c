@@ -79,7 +79,7 @@ static FaFaultable_SqliteConnection fa_sqlite_open_flags(FaBytes path, int flags
   char *path_c = fa_copy_bytes(path.bytes, path.len);
   sqlite3 *db = NULL;
   int rc = sqlite3_open_v2(path_c, &db, flags, NULL);
-  free(path_c);
+  fa_free(path_c);
   if (rc != SQLITE_OK) {
     FaFault fault = fa_sqlite_fault(db, operation, rc);
     if (db) sqlite3_close_v2(db);
@@ -230,12 +230,12 @@ static int fa_sqlite_prepare(sqlite3 *db, FaBytes sql, const char *operation, sq
   int rc = sqlite3_prepare_v2(db, sql_c, -1, stmt, &tail);
   if (rc != SQLITE_OK) {
     *fault = fa_sqlite_fault(db, operation, rc);
-    free(sql_c);
+    fa_free(sql_c);
     return -1;
   }
   if (!*stmt) {
     *fault = fa_sqlite_fault_cstr("std.sqlite: SQL did not contain a statement");
-    free(sql_c);
+    fa_free(sql_c);
     return -1;
   }
   while (tail && *tail && isspace((unsigned char)*tail)) tail++;
@@ -243,10 +243,10 @@ static int fa_sqlite_prepare(sqlite3 *db, FaBytes sql, const char *operation, sq
     sqlite3_finalize(*stmt);
     *stmt = NULL;
     *fault = fa_sqlite_fault_cstr("std.sqlite: SQL must contain exactly one statement");
-    free(sql_c);
+    fa_free(sql_c);
     return -1;
   }
-  free(sql_c);
+  fa_free(sql_c);
   return 0;
 }
 

@@ -9,6 +9,19 @@ pub const LISTENER: StdSymbol = ty(MODULE, "Listener");
 pub const REQUEST: StdSymbol = ty(MODULE, "Request");
 pub const RESPONSE: StdSymbol = ty(MODULE, "Response");
 
+pub const HEADER_TYPES: &[&str] = &[
+    "FaHttpServerConfig",
+    "FaHttpListener",
+    "FaHttpRequest",
+    "FaHttpResponse",
+    "FaFaultable_HttpListener",
+    "FaTuple_HttpListener_Stream_HttpResponse",
+    "FaTuple_HttpRequest_Bytes_Bytes",
+    "FaTuple_HttpResponse_Int",
+    "FaTuple_HttpResponse_Bytes",
+    "FaTuple_HttpResponse_Bytes_Bytes",
+];
+
 pub const DEFAULT_CONFIG: StdSymbol = io_node(MODULE, "default_config", "()", "http.ServerConfig");
 pub const WITH_TCP_LISTENER: StdSymbol = io_node(
     MODULE,

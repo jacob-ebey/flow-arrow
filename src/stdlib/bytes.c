@@ -85,8 +85,7 @@ static FaBytes fa_bytes_replace(FaBytes input, FaBytes needle, FaBytes replaceme
     }
   }
   size_t total = input.len + matches * replacement.len - matches * needle.len;
-  char *bytes = (char *)malloc(total + 1);
-  if (!bytes) fa_die_alloc();
+  char *bytes = (char *)fa_malloc(total + 1);
   size_t in = 0;
   size_t out = 0;
   while (in < input.len) {
@@ -105,8 +104,7 @@ static FaBytes fa_bytes_replace(FaBytes input, FaBytes needle, FaBytes replaceme
 static FaBytes fa_bytes_repeat(FaBytes input, int64_t count) {
   if (count < 0) fa_die_usage("repeat: count must be non-negative");
   size_t total = input.len * (size_t)count;
-  char *bytes = (char *)malloc(total + 1);
-  if (!bytes) fa_die_alloc();
+  char *bytes = (char *)fa_malloc(total + 1);
   size_t offset = 0;
   for (int64_t i = 0; i < count; i++) {
     memcpy(bytes + offset, input.bytes, input.len);
@@ -117,16 +115,14 @@ static FaBytes fa_bytes_repeat(FaBytes input, int64_t count) {
 }
 
 static FaBytes fa_ascii_lower(FaBytes input) {
-  char *bytes = (char *)malloc(input.len + 1);
-  if (!bytes) fa_die_alloc();
+  char *bytes = (char *)fa_malloc(input.len + 1);
   for (size_t i = 0; i < input.len; i++) bytes[i] = (char)tolower((unsigned char)input.bytes[i]);
   bytes[input.len] = '\0';
   return fa_bytes_owned(bytes, input.len);
 }
 
 static FaBytes fa_ascii_upper(FaBytes input) {
-  char *bytes = (char *)malloc(input.len + 1);
-  if (!bytes) fa_die_alloc();
+  char *bytes = (char *)fa_malloc(input.len + 1);
   for (size_t i = 0; i < input.len; i++) bytes[i] = (char)toupper((unsigned char)input.bytes[i]);
   bytes[input.len] = '\0';
   return fa_bytes_owned(bytes, input.len);
@@ -176,8 +172,7 @@ static FaSeq_Int fa_bytes_to_codes(FaBytes input) {
 }
 
 static FaBytes fa_codes_to_bytes(FaSeq_Int codes) {
-  char *bytes = (char *)malloc(codes.count + 1);
-  if (!bytes) fa_die_alloc();
+  char *bytes = (char *)fa_malloc(codes.count + 1);
   for (size_t i = 0; i < codes.count; i++) bytes[i] = (char)codes.items[i];
   bytes[codes.count] = '\0';
   return fa_bytes_owned(bytes, codes.count);
@@ -187,8 +182,7 @@ static FaBytes fa_join_bytes(FaSeq_Bytes values, FaBytes delimiter) {
   size_t total = 0;
   for (size_t i = 0; i < values.count; i++) total += values.items[i].len;
   if (values.count > 1) total += delimiter.len * (values.count - 1);
-  char *bytes = (char *)malloc(total + 1);
-  if (!bytes) fa_die_alloc();
+  char *bytes = (char *)fa_malloc(total + 1);
   size_t offset = 0;
   for (size_t i = 0; i < values.count; i++) {
     if (i > 0) {
@@ -205,8 +199,7 @@ static FaBytes fa_join_bytes(FaSeq_Bytes values, FaBytes delimiter) {
 static FaBytes fa_reduce_concat_bytes(FaSeq_Bytes values, FaBytes identity) {
   size_t total = identity.len;
   for (size_t i = 0; i < values.count; i++) total += values.items[i].len;
-  char *bytes = (char *)malloc(total + 1);
-  if (!bytes) fa_die_alloc();
+  char *bytes = (char *)fa_malloc(total + 1);
   size_t offset = 0;
   memcpy(bytes + offset, identity.bytes, identity.len);
   offset += identity.len;

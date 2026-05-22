@@ -1,3 +1,4 @@
+#include "cv.h"
 #include "cv_native.h"
 
 typedef struct {

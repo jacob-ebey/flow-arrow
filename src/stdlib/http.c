@@ -2,11 +2,11 @@
 
 static FaHttpServerConfig fa_http_default_config(void) {
   FaHttpServerConfig config;
-  config.host = fa_bytes_literal("127.0.0.1", 9);
+  config.host = fa_bytes_borrowed("127.0.0.1", 9);
   config.port = 8080;
   config.tls = false;
-  config.cert_path = fa_bytes_literal("", 0);
-  config.key_path = fa_bytes_literal("", 0);
+  config.cert_path = fa_bytes_borrowed("", 0);
+  config.key_path = fa_bytes_borrowed("", 0);
   config.http2 = true;
   config.http3 = false;
   return config;
@@ -57,7 +57,7 @@ static FaStream fa_http_requests(FaHttpListener listener) {
   FaStream stream;
   stream.file = NULL;
   stream.fd = -1;
-  stream.path = fa_bytes_literal("", 0);
+  stream.path = fa_bytes_borrowed("", 0);
   stream.state = listener.state;
   stream.map_fn = NULL;
   stream.next = NULL;
@@ -82,6 +82,10 @@ typedef struct {
   h2o_socket_t *listener;
   SSL_CTX *ssl_ctx;
 } FaHttpServeState;
+
+static void *fa_http_request_alloc(void *ctx, size_t size) {
+  return h2o_mem_alloc_pool((h2o_mem_pool_t *)ctx, size);
+}
 
 static FaFault fa_http_fault2(const char *prefix, const char *detail) {
   size_t prefix_len = strlen(prefix);
@@ -152,17 +156,19 @@ static void fa_http_send_response(h2o_req_t *req, FaHttpResponse response) {
   req->res.reason = fa_http_reason(status);
   fa_http_add_response_headers(req, response);
   h2o_send_inline(req, response.body.bytes, response.body.len);
+  free(response.header_names.items);
+  free(response.header_values.items);
 }
 
 static FaBytes fa_http_req_path(h2o_req_t *req) {
   if (req->path_normalized.base != NULL) {
-    return fa_bytes_owned(req->path_normalized.base, req->path_normalized.len);
+    return fa_bytes_borrowed(req->path_normalized.base, req->path_normalized.len);
   }
   size_t len = req->path.len;
   if (req->query_at != SIZE_MAX && req->query_at < len) {
     len = req->query_at;
   }
-  return fa_bytes_owned(req->path.base, len);
+  return fa_bytes_borrowed(req->path.base, len);
 }
 
 static int fa_http_on_request(h2o_handler_t *self, h2o_req_t *req) {
@@ -173,14 +179,16 @@ static int fa_http_on_request(h2o_handler_t *self, h2o_req_t *req) {
   }
 
   FaHttpRequest request;
-  request.method = fa_bytes_owned(req->method.base, req->method.len);
+  request.method = fa_bytes_borrowed(req->method.base, req->method.len);
   request.path = fa_http_req_path(req);
   request.body = req->entity.base != NULL
-      ? fa_bytes_owned(req->entity.base, req->entity.len)
-      : fa_bytes_literal("", 0);
+      ? fa_bytes_borrowed(req->entity.base, req->entity.len)
+      : fa_bytes_borrowed("", 0);
   request.h2o_req = req;
 
+  FaScopedAllocator previous_allocator = fa_scoped_allocator_enter(fa_http_request_alloc, &req->pool);
   FaHttpResponse response = handler->handler(request);
+  fa_scoped_allocator_restore(previous_allocator);
   fa_http_send_response(req, response);
   return 0;
 }
@@ -206,7 +214,7 @@ static int fa_http_create_listener(FaHttpServeState *state, FaHttpServerConfig c
 
   struct addrinfo *result = NULL;
   int gai = getaddrinfo(host, port, &hints, &result);
-  free(host);
+  fa_free(host);
   if (gai != 0) {
     *fault = fa_http_fault2("std.http: failed to resolve TCP listener address", gai_strerror(gai));
     return -1;
@@ -264,18 +272,18 @@ static int fa_http_setup_tls(FaHttpServeState *state, FaHttpServerConfig config,
   char *key_path = fa_copy_bytes(config.key_path.bytes, config.key_path.len);
   if (SSL_CTX_use_certificate_file(state->ssl_ctx, cert_path, SSL_FILETYPE_PEM) != 1) {
     *fault = fa_http_fault2("std.http: failed to load TLS certificate", cert_path);
-    free(cert_path);
-    free(key_path);
+    fa_free(cert_path);
+    fa_free(key_path);
     return -1;
   }
   if (SSL_CTX_use_PrivateKey_file(state->ssl_ctx, key_path, SSL_FILETYPE_PEM) != 1) {
     *fault = fa_http_fault2("std.http: failed to load TLS private key", key_path);
-    free(cert_path);
-    free(key_path);
+    fa_free(cert_path);
+    fa_free(key_path);
     return -1;
   }
-  free(cert_path);
-  free(key_path);
+  fa_free(cert_path);
+  fa_free(key_path);
 
   if (config.http2) {
 #if H2O_USE_NPN
@@ -377,10 +385,12 @@ static FaHttpResponse fa_http_response(FaHttpRequest request) {
   FaHttpResponse response;
   response.request = request;
   response.status = 200;
-  response.header_names = FaSeq_Bytes_new(0);
-  response.header_values = FaSeq_Bytes_new(0);
-  response.body = fa_bytes_literal("", 0);
-  response.content_type = fa_bytes_literal("", 0);
+  response.header_names.count = 0;
+  response.header_names.items = NULL;
+  response.header_values.count = 0;
+  response.header_values.items = NULL;
+  response.body = fa_bytes_borrowed("", 0);
+  response.content_type = fa_bytes_borrowed("", 0);
   return response;
 }
 
@@ -393,37 +403,37 @@ static FaHttpResponse fa_http_with_status(FaTuple_HttpResponse_Int input) {
 static FaHttpResponse fa_http_with_header(FaTuple_HttpResponse_Bytes_Bytes input) {
   FaHttpResponse response = input.f0;
   size_t count = response.header_names.count;
-  FaSeq_Bytes names = FaSeq_Bytes_new(count + 1);
-  FaSeq_Bytes values = FaSeq_Bytes_new(count + 1);
-  for (size_t i = 0; i < count; i++) {
-    names.items[i] = response.header_names.items[i];
-    values.items[i] = response.header_values.items[i];
-  }
-  names.items[count] = input.f1;
-  values.items[count] = input.f2;
-  response.header_names = names;
-  response.header_values = values;
+  FaBytes *names = (FaBytes *)realloc(response.header_names.items, (count + 1) * sizeof(FaBytes));
+  if (!names) fa_die_alloc();
+  FaBytes *values = (FaBytes *)realloc(response.header_values.items, (count + 1) * sizeof(FaBytes));
+  if (!values) fa_die_alloc();
+  names[count] = input.f1;
+  values[count] = input.f2;
+  response.header_names.items = names;
+  response.header_names.count = count + 1;
+  response.header_values.items = values;
+  response.header_values.count = count + 1;
   return response;
 }
 
 static FaHttpResponse fa_http_text(FaTuple_HttpResponse_Bytes input) {
   FaHttpResponse response = input.f0;
   response.body = input.f1;
-  response.content_type = fa_bytes_literal("text/plain; charset=utf-8", 25);
+  response.content_type = fa_bytes_borrowed("text/plain; charset=utf-8", 25);
   return response;
 }
 
 static FaHttpResponse fa_http_json(FaTuple_HttpResponse_Bytes input) {
   FaHttpResponse response = input.f0;
   response.body = input.f1;
-  response.content_type = fa_bytes_literal("application/json", 16);
+  response.content_type = fa_bytes_borrowed("application/json", 16);
   return response;
 }
 
 static FaHttpResponse fa_http_not_found(FaHttpRequest request) {
   FaHttpResponse response = fa_http_response(request);
   response.status = 404;
-  response.body = fa_bytes_literal("not found\n", 10);
-  response.content_type = fa_bytes_literal("text/plain; charset=utf-8", 25);
+  response.body = fa_bytes_borrowed("not found\n", 10);
+  response.content_type = fa_bytes_borrowed("text/plain; charset=utf-8", 25);
   return response;
 }

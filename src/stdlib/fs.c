@@ -14,7 +14,7 @@ static FaFaultable_Bytes fa_read_file(FaBytes path) {
   }
   char *path_c = fa_copy_bytes(path.bytes, path.len);
   FILE *file = fopen(path_c, "rb");
-  free(path_c);
+  fa_free(path_c);
   if (!file) return FaFaultable_Bytes_fault(fa_io_fault(path, "read_file"));
 
   size_t cap = 4096;
@@ -53,7 +53,7 @@ static FaFaultable_Int fa_write_file(FaBytes path, FaBytes contents) {
   }
   char *path_c = fa_copy_bytes(path.bytes, path.len);
   FILE *file = fopen(path_c, "wb");
-  free(path_c);
+  fa_free(path_c);
   if (!file) return FaFaultable_Int_fault(fa_io_fault(path, "write_file"));
 
   if (contents.len > 0) fwrite(contents.bytes, 1, contents.len, file);
@@ -70,7 +70,7 @@ static bool fa_path_stat(FaBytes path, struct stat *st) {
   if (memchr(path.bytes, '\0', path.len)) return false;
   char *path_c = fa_copy_bytes(path.bytes, path.len);
   int result = stat(path_c, st);
-  free(path_c);
+  fa_free(path_c);
   return result == 0;
 }
 
@@ -96,7 +96,7 @@ static FaFaultable_Int fa_path_file_size(FaBytes path) {
   char *path_c = fa_copy_bytes(path.bytes, path.len);
   struct stat st;
   int result = stat(path_c, &st);
-  free(path_c);
+  fa_free(path_c);
   if (result != 0) return FaFaultable_Int_fault(fa_io_fault(path, "file_size"));
   if (!S_ISREG(st.st_mode)) return FaFaultable_Int_fault(fa_fault_cstr("file_size: path is not a regular file"));
   return FaFaultable_Int_ok((int64_t)st.st_size);
@@ -179,7 +179,7 @@ static FaFaultable_Seq_Bytes fa_list_dir(FaBytes path) {
   }
   char *path_c = fa_copy_bytes(path.bytes, path.len);
   DIR *dir = opendir(path_c);
-  free(path_c);
+  fa_free(path_c);
   if (!dir) return FaFaultable_Seq_Bytes_fault(fa_io_fault(path, "list_dir"));
 
   FaBytesVec entries = {0};
@@ -216,21 +216,21 @@ static int fa_walk_files_into(FaBytes path, FaBytesVec *files, FaFault *fault) {
   char *path_c = fa_copy_bytes(path.bytes, path.len);
   struct stat st;
   if (lstat(path_c, &st) != 0) {
-    free(path_c);
+    fa_free(path_c);
     *fault = fa_io_fault(path, "walk_files");
     return -1;
   }
   if (S_ISREG(st.st_mode)) {
-    free(path_c);
+    fa_free(path_c);
     fa_bytes_vec_push(files, fa_bytes_literal(path.bytes, path.len));
     return 0;
   }
   if (!S_ISDIR(st.st_mode)) {
-    free(path_c);
+    fa_free(path_c);
     return 0;
   }
   DIR *dir = opendir(path_c);
-  free(path_c);
+  fa_free(path_c);
   if (!dir) {
     *fault = fa_io_fault(path, "walk_files");
     return -1;
@@ -276,7 +276,7 @@ static FaFaultable_Seq_Bytes fa_walk_files(FaBytes path) {
     glob_t matches;
     memset(&matches, 0, sizeof(matches));
     int result = glob(pattern, 0, NULL, &matches);
-    free(pattern);
+    fa_free(pattern);
     if (result != 0) {
       globfree(&matches);
       if (result == GLOB_NOMATCH) {
@@ -362,7 +362,7 @@ static FaFaultable_Stream_Bytes fa_open_file(FaBytes path) {
   }
   char *path_c = fa_copy_bytes(path.bytes, path.len);
   FILE *file = fopen(path_c, "rb");
-  free(path_c);
+  fa_free(path_c);
   if (!file) return FaFaultable_Stream_Bytes_fault(fa_io_fault(path, "open_file"));
 
   FaFileStreamState *state = (FaFileStreamState *)calloc(1, sizeof(FaFileStreamState));
@@ -449,7 +449,7 @@ static FaFaultable_Int fa_copy_stream_to_file(FaStream stream, FaBytes output_pa
 
   char *path_c = fa_copy_bytes(output_path.bytes, output_path.len);
   FILE *output = fopen(path_c, "wb");
-  free(path_c);
+  fa_free(path_c);
   if (!output) return FaFaultable_Int_fault(fa_io_fault(output_path, "copy_to_file"));
 
   char *buffer = (char *)malloc(FA_STREAM_BUFFER_SIZE);
