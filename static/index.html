@@ -120,6 +120,34 @@
         gap: 8px;
       }
 
+      .target-toggle {
+        display: inline-flex;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+      }
+
+      .target-option {
+        min-height: 34px;
+        border: 0;
+        border-right: 1px solid var(--line);
+        background: transparent;
+        color: var(--muted);
+        padding: 0 12px;
+        font: inherit;
+      }
+
+      .target-option:last-child {
+        border-right: 0;
+      }
+
+      .target-option[aria-pressed="true"] {
+        background: var(--accent);
+        color: #ffffff;
+        font-weight: 680;
+      }
+
       button {
         cursor: pointer;
       }
@@ -155,7 +183,7 @@
 
       .workspace {
         display: grid;
-        grid-template-columns: minmax(260px, 0.9fr) minmax(0, 0.8fr) minmax(0, 1fr);
+        grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
         min-height: min(680px, calc(100vh - 128px));
         border: 1px solid var(--line);
         border-top: 0;
@@ -172,6 +200,30 @@
 
       .pane + .pane {
         border-left: 1px solid var(--line);
+      }
+
+      .results {
+        display: grid;
+        grid-template-rows: minmax(0, 0.75fr) minmax(0, 1fr);
+        min-width: 0;
+        border-left: 1px solid var(--line);
+      }
+
+      .results .pane + .pane {
+        border-top: 1px solid var(--line);
+        border-left: 0;
+      }
+
+      .results[data-mode="typescript"] {
+        grid-template-rows: minmax(0, 1fr);
+      }
+
+      .results[data-mode="typescript"] .pane[data-output="declarations"] {
+        display: none;
+      }
+
+      .results[data-mode="typescript"] .pane[data-output="source"] {
+        border-top: 0;
       }
 
       .pane-title {
@@ -222,6 +274,15 @@
           flex-direction: column;
         }
 
+        .actions,
+        .target-toggle {
+          width: 100%;
+        }
+
+        .target-option {
+          flex: 1;
+        }
+
         .status {
           width: 100%;
           white-space: normal;
@@ -235,6 +296,12 @@
         .pane + .pane {
           border-left: 0;
           border-top: 1px solid var(--line);
+        }
+
+        .results {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+          min-height: 520px;
         }
       }
     </style>
@@ -252,6 +319,10 @@
             <button class="tab" type="button" role="tab" aria-selected="true">fib.flow</button>
           </div>
           <div class="actions">
+            <div class="target-toggle" role="group" aria-label="Output target">
+              <button class="target-option" type="button" data-target="javascript" aria-pressed="true">JavaScript</button>
+              <button class="target-option" type="button" data-target="typescript" aria-pressed="false">TypeScript</button>
+            </div>
             <button id="reset" class="icon-button" type="button" title="Reset example" aria-label="Reset example">
               Reset
             </button>
@@ -263,14 +334,16 @@
             <div class="pane-title">FlowArrow</div>
             <textarea id="source" spellcheck="false"></textarea>
           </section>
-          <section class="pane" aria-label="TypeScript declarations output">
-            <div class="pane-title">fib.d.ts</div>
-            <pre id="types-output" aria-live="polite"></pre>
-          </section>
-          <section class="pane" aria-label="JavaScript output">
-            <div class="pane-title">fib.js</div>
-            <pre id="js-output" aria-live="polite"></pre>
-          </section>
+          <div id="results" class="results" data-mode="javascript">
+            <section class="pane" data-output="declarations" aria-label="TypeScript declarations output">
+              <div class="pane-title">fib.d.ts</div>
+              <pre id="types-output" aria-live="polite"></pre>
+            </section>
+            <section class="pane" data-output="source" aria-label="JavaScript output">
+              <div id="source-output-title" class="pane-title">fib.js</div>
+              <pre id="source-output" aria-live="polite"></pre>
+            </section>
+          </div>
         </div>
       </section>
     </main>
@@ -293,12 +366,16 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
       const encoder = new TextEncoder();
       const status = document.querySelector("#status");
       const source = document.querySelector("#source");
+      const results = document.querySelector("#results");
       const typesOutput = document.querySelector("#types-output");
-      const jsOutput = document.querySelector("#js-output");
+      const sourceOutput = document.querySelector("#source-output");
+      const sourceOutputTitle = document.querySelector("#source-output-title");
       const compileButton = document.querySelector("#compile");
       const resetButton = document.querySelector("#reset");
+      const targetButtons = [...document.querySelectorAll(".target-option")];
 
       let wasm = null;
+      let target = "javascript";
 
       source.value = fibExample;
       compileButton.disabled = true;
@@ -330,15 +407,33 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
         const ptr = wasm.flowarrow_alloc(bytes.length);
         new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
         try {
-          const ok = wasm.flowarrow_compile_javascript_artifacts(ptr, bytes.length, 1);
+          const ok =
+            target === "javascript"
+              ? wasm.flowarrow_compile_javascript_artifacts(ptr, bytes.length, 1)
+              : wasm.flowarrow_compile_typescript(ptr, bytes.length, 1);
           const result = readResult();
-          const separator = result.indexOf("\0");
-          typesOutput.textContent = ok ? result.slice(0, separator) : result;
-          jsOutput.textContent = ok ? result.slice(separator + 1) : "";
+          if (target === "javascript") {
+            const separator = result.indexOf("\0");
+            typesOutput.textContent = ok && separator >= 0 ? result.slice(0, separator) : result;
+            sourceOutput.textContent = ok && separator >= 0 ? result.slice(separator + 1) : "";
+          } else {
+            typesOutput.textContent = "";
+            sourceOutput.textContent = result;
+          }
           setStatus(ok ? "Compiled" : "Compile error", ok ? "ok" : "error");
         } finally {
           wasm.flowarrow_dealloc(ptr, bytes.length);
         }
+      }
+
+      function setTarget(nextTarget) {
+        target = nextTarget;
+        results.dataset.mode = nextTarget;
+        sourceOutputTitle.textContent = nextTarget === "javascript" ? "fib.js" : "fib.ts";
+        for (const button of targetButtons) {
+          button.setAttribute("aria-pressed", String(button.dataset.target === nextTarget));
+        }
+        compile();
       }
 
       compileButton.addEventListener("click", compile);
@@ -346,6 +441,9 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
         source.value = fibExample;
         compile();
       });
+      for (const button of targetButtons) {
+        button.addEventListener("click", () => setTarget(button.dataset.target));
+      }
 
       try {
         wasm = await loadCompiler();
@@ -355,7 +453,7 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
       } catch (error) {
         setStatus("Compiler failed to load", "error");
         typesOutput.textContent = error instanceof Error ? error.message : String(error);
-        jsOutput.textContent = "";
+        sourceOutput.textContent = "";
       }
     </script>
   </body>
