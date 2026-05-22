@@ -19,9 +19,14 @@ pub(super) fn emit_module_with_options(
     TypeScriptCodegen::new(codegen, options).emit()
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) fn scalar_worker_module_source() -> &'static str {
+    TS_SCALAR_WORKER_MODULE
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct TypeScriptEmitOptions {
     pub worker_concurrency: bool,
+    pub worker_module_specifier: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -108,13 +113,22 @@ if (import.meta.url === __flowarrow_main_url) {\n  const __flowarrow_result = ma
         out.push_str(&format!(
             "\nconst __flowarrow_worker_mappers = [{mapper_sources}];\n\
 faUseSharedNumericSequences = true;\n\
+{}\n\
 export async function __flowarrow_setup_workers(): Promise<void> {{\n\
   await faSetupScalarWorkerPools(__flowarrow_worker_mappers);\n\
 }}\n\
 \n\
 export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
   await faTeardownScalarWorkerPools();\n\
-}}\n"
+}}\n",
+            self.options
+                .worker_module_specifier
+                .as_ref()
+                .map(|specifier| format!(
+                    "faScalarWorkerModuleUrl = new URL({}, import.meta.url).href;",
+                    ts_string(specifier)
+                ))
+                .unwrap_or_default()
         ));
     }
 
@@ -2193,11 +2207,12 @@ type FaScalarWorkerRuntime =
   | {
       kind: "node";
       workerUrl: string;
-      Worker: new (url: URL, options: { type: "module" }) => FaScalarWorker;
+      Worker: new (url: URL, options: { type: "module"; execArgv: Array<string> }) => FaScalarWorker;
     };
 type FaScalarPooledWorker = {
   worker: FaScalarWorker;
   alive: boolean;
+  ready: Promise<void>;
   resolve?: () => void;
   reject?: (error: unknown) => void;
 };
@@ -2208,6 +2223,7 @@ type FaScalarWorkerPool = {
   retired: boolean;
 };
 let faUseSharedNumericSequences = false;
+let faScalarWorkerModuleUrl: string | null = null;
 const faScalarWorkerPools = new Map<string, Promise<FaScalarWorkerPool | null>>();
 
 function faParallelMapBigInt(input: Array<bigint>, mapperSource: string): Promise<Array<bigint>> {
@@ -2286,7 +2302,7 @@ async function faScalarWorkerPool(mapperSource: string, workerCount: number): Pr
   if (pool === null || pool.retired) return null;
 
   try {
-    faGrowScalarWorkerPool(pool, workerCount);
+    faGrowScalarWorkerPool(pool, mapperSource, workerCount);
     return pool;
   } catch {
     await faRetireScalarWorkerPool(mapperSource, pool);
@@ -2295,13 +2311,45 @@ async function faScalarWorkerPool(mapperSource: string, workerCount: number): Pr
 }
 
 async function faCreateScalarWorkerPool(mapperSource: string): Promise<FaScalarWorkerPool | null> {
-  const script = faScalarWorkerScript(mapperSource);
+  const script = faScalarWorkerScript();
   const runtime = await faScalarWorkerRuntime(script);
   if (runtime === null) return null;
   return { runtime, workers: [], queue: Promise.resolve(), retired: false };
 }
 
 async function faScalarWorkerRuntime(script: string): Promise<FaScalarWorkerRuntime | null> {
+  if (faScalarWorkerModuleUrl !== null) {
+    const workerGlobals = globalThis as typeof globalThis & {
+      Worker?: new (url: string, options: { type: "module" }) => FaScalarWorker;
+    };
+    if (typeof workerGlobals.Worker === "function") {
+      return {
+        kind: "browser",
+        workerUrl: faScalarWorkerModuleUrl,
+        Worker: workerGlobals.Worker,
+        revokeObjectURL: () => undefined,
+      };
+    }
+
+    const processLike = (globalThis as typeof globalThis & {
+      process?: {
+        versions?: { node?: string };
+        getBuiltinModule?: (name: string) => any;
+      };
+    }).process;
+    if (typeof processLike?.versions?.node !== "string") return null;
+    try {
+      const workerThreads = typeof processLike.getBuiltinModule === "function"
+        ? processLike.getBuiltinModule("node:worker_threads")
+        : await ((0, eval)("specifier => import(specifier)") as (specifier: string) => Promise<any>)("node:worker_threads");
+      return typeof workerThreads?.Worker === "function"
+        ? { kind: "node", workerUrl: faScalarWorkerModuleUrl, Worker: workerThreads.Worker }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   const workerGlobals = globalThis as typeof globalThis & {
     Worker?: new (url: string, options: { type: "module" }) => FaScalarWorker;
     Blob?: new (parts: Array<string>, options: { type: string }) => unknown;
@@ -2345,9 +2393,9 @@ async function faScalarWorkerRuntime(script: string): Promise<FaScalarWorkerRunt
   }
 }
 
-function faGrowScalarWorkerPool(pool: FaScalarWorkerPool, workerCount: number): void {
+function faGrowScalarWorkerPool(pool: FaScalarWorkerPool, mapperSource: string, workerCount: number): void {
   while (pool.workers.length < workerCount) {
-    pool.workers.push(faCreateScalarPooledWorker(pool.runtime));
+    pool.workers.push(faCreateScalarPooledWorker(pool.runtime, mapperSource));
   }
 }
 
@@ -2375,49 +2423,70 @@ function faDispatchScalarWorkerPool(
   return pool.queue;
 }
 
-function faCreateScalarPooledWorker(runtime: FaScalarWorkerRuntime): FaScalarPooledWorker {
+function faCreateScalarPooledWorker(runtime: FaScalarWorkerRuntime, mapperSource: string): FaScalarPooledWorker {
   let worker: FaScalarWorker;
   try {
     worker = runtime.kind === "browser"
       ? new runtime.Worker(runtime.workerUrl, { type: "module" })
-      : new runtime.Worker(new URL(runtime.workerUrl), { type: "module" });
+      : new runtime.Worker(new URL(runtime.workerUrl), { type: "module", execArgv: [] });
   } catch (e) {
     if (runtime.kind === "browser") console.error(`Cross-origin worker module failed to load: ${e}`);
     throw e;
   }
 
-  const pooled: FaScalarPooledWorker = { worker, alive: true };
+  let readyResolve: () => void = () => undefined;
+  let readyReject: (error: unknown) => void = () => undefined;
+  const ready = new Promise<void>((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  const pooled: FaScalarPooledWorker = { worker, alive: true, ready };
   if (runtime.kind === "browser") {
-    worker.onmessage = () => {
+    worker.onmessage = (event) => {
+      if (event.data && (event.data as { type?: string }).type === "ready") {
+        readyResolve();
+        return;
+      }
       const resolve = pooled.resolve;
       pooled.resolve = undefined;
       pooled.reject = undefined;
-      resolve?.();
+      if (resolve) resolve();
     };
     worker.onerror = (event) => {
       pooled.alive = false;
+      readyReject(event.error ?? new Error(event.message));
       faRejectScalarWorker(pooled, event.error ?? new Error(event.message));
     };
   } else {
-    worker.on?.("message", () => {
+    if (worker.on) worker.on("message", (data: unknown) => {
+      if (data && (data as { type?: string }).type === "ready") {
+        readyResolve();
+        return;
+      }
       const resolve = pooled.resolve;
       pooled.resolve = undefined;
       pooled.reject = undefined;
-      resolve?.();
+      if (resolve) resolve();
     });
-    worker.on?.("error", (error: unknown) => {
+    if (worker.on) worker.on("error", (error: unknown) => {
       pooled.alive = false;
+      readyReject(error);
       faRejectScalarWorker(pooled, error);
     });
-    worker.on?.("exit", (code: number) => {
+    if (worker.on) worker.on("exit", (code: number) => {
       pooled.alive = false;
-      if (code !== 0) faRejectScalarWorker(pooled, new Error(`Worker stopped with exit code ${code}`));
+      if (code !== 0) {
+        const error = new Error(`Worker stopped with exit code ${code}`);
+        readyReject(error);
+        faRejectScalarWorker(pooled, error);
+      }
     });
   }
+  worker.postMessage({ type: "init", mapperSource });
   return pooled;
 }
 
-function faRunScalarWorker(
+async function faRunScalarWorker(
   pooled: FaScalarPooledWorker,
   message: {
     inputBuffer: SharedArrayBuffer;
@@ -2428,6 +2497,7 @@ function faRunScalarWorker(
     outputKind: FaScalarMapKind;
   },
 ): Promise<void> {
+  await pooled.ready;
   return new Promise<void>((resolve, reject) => {
     if (!pooled.alive) {
       reject(new Error("Worker is no longer available"));
@@ -2454,7 +2524,7 @@ function faRejectScalarWorker(pooled: FaScalarPooledWorker, error: unknown): voi
   const reject = pooled.reject;
   pooled.resolve = undefined;
   pooled.reject = undefined;
-  reject?.(error);
+  if (reject) reject(error);
 }
 
 async function faRetireScalarWorkerPool(mapperSource: string, pool: FaScalarWorkerPool): Promise<void> {
@@ -2525,7 +2595,7 @@ function faReadScalarBuffer<T>(buffer: SharedArrayBuffer, length: number, kind: 
   return Array.from(new Uint8Array(buffer, 0, length), (value) => value !== 0) as Array<T>;
 }
 
-function faScalarWorkerScript(mapperSource: string): string {
+function faScalarWorkerScript(): string {
   return `
 let nodeParentPort = null;
 try {
@@ -2535,7 +2605,7 @@ try {
 } catch {
   nodeParentPort = null;
 }
-const mapper = (${mapperSource});
+let mapper = null;
 const postDone = () => {
   if (nodeParentPort) {
     nodeParentPort.postMessage({ done: true });
@@ -2544,6 +2614,12 @@ const postDone = () => {
   }
 };
 const handleMessage = (message) => {
+  if (message.type === "init") {
+    mapper = (0, eval)("(" + message.mapperSource + ")");
+    postReady();
+    return;
+  }
+  if (mapper === null) throw new Error("worker mapper has not been initialized");
   const { inputBuffer, outputBuffer, start, end, inputKind, outputKind } = message;
   const input = inputKind === "bigint"
     ? new BigInt64Array(inputBuffer)
@@ -2561,6 +2637,13 @@ const handleMessage = (message) => {
     output[index] = outputKind === "bool" ? (mapped ? 1 : 0) : mapped;
   }
   postDone();
+};
+const postReady = () => {
+  if (nodeParentPort) {
+    nodeParentPort.postMessage({ type: "ready" });
+  } else {
+    self.postMessage({ type: "ready" });
+  }
 };
 if (nodeParentPort) {
   nodeParentPort.on("message", handleMessage);
@@ -2669,4 +2752,59 @@ function faRangeStep(input: [f0: bigint, f1: bigint, f2: bigint]): bigint[] {
   return out;
 }
 
+"#;
+
+const TS_SCALAR_WORKER_MODULE: &str = r#"let nodeParentPort = null;
+try {
+  if (typeof process !== "undefined" && process.versions?.node) {
+    nodeParentPort = (await import("node:worker_threads")).parentPort;
+  }
+} catch {
+  nodeParentPort = null;
+}
+let mapper = null;
+const postDone = () => {
+  if (nodeParentPort) {
+    nodeParentPort.postMessage({ done: true });
+  } else {
+    self.postMessage({ done: true });
+  }
+};
+const postReady = () => {
+  if (nodeParentPort) {
+    nodeParentPort.postMessage({ type: "ready" });
+  } else {
+    self.postMessage({ type: "ready" });
+  }
+};
+const handleMessage = (message) => {
+  if (message.type === "init") {
+    mapper = (0, eval)("(" + message.mapperSource + ")");
+    postReady();
+    return;
+  }
+  if (mapper === null) throw new Error("worker mapper has not been initialized");
+  const { inputBuffer, outputBuffer, start, end, inputKind, outputKind } = message;
+  const input = inputKind === "bigint"
+    ? new BigInt64Array(inputBuffer)
+    : inputKind === "number"
+      ? new Float64Array(inputBuffer)
+      : new Uint8Array(inputBuffer);
+  const output = outputKind === "bigint"
+    ? new BigInt64Array(outputBuffer)
+    : outputKind === "number"
+      ? new Float64Array(outputBuffer)
+      : new Uint8Array(outputBuffer);
+  for (let index = start; index < end; index++) {
+    const value = inputKind === "bool" ? input[index] !== 0 : input[index];
+    const mapped = mapper(value);
+    output[index] = outputKind === "bool" ? (mapped ? 1 : 0) : mapped;
+  }
+  postDone();
+};
+if (nodeParentPort) {
+  nodeParentPort.on("message", handleMessage);
+} else {
+  self.onmessage = (event) => handleMessage(event.data);
+}
 "#;

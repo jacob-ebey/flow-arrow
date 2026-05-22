@@ -1,6 +1,6 @@
 # typescript-fib
 
-Builds JavaScript plus TypeScript declarations from FlowArrow and calls the
+Builds `.mjs` JavaScript plus TypeScript declarations from FlowArrow and calls the
 exported `fib` node from Node.js. The TypeScript target emits a `.ts` source
 file when you want the generated TypeScript directly.
 

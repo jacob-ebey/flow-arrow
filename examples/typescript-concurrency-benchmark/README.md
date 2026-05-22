@@ -5,7 +5,7 @@ Builds the same FlowArrow library twice with the TypeScript backend:
 - `sequential`: normal TypeScript output.
 - `workers`: TypeScript output with `--workers` enabled.
 
-The benchmark compiles both generated `.ts` files to JavaScript, imports them,
+The benchmark compiles both generated `.ts` files to `.mjs` JavaScript, imports them,
 and calls the exported `score_batch(width: Int) -> (total: Int, peak: Int)`.
 
 ```sh

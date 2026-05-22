@@ -175,7 +175,7 @@ javascript
 The `typescript` target emits standalone `.ts` source instead of invoking
 a native compiler or linker. The `javascript` target runs the same
 TypeScript lowering through OXC's TypeScript transform and emits
-standalone `.js` source plus a `.d.ts` declaration file. Both source
+standalone `.mjs` source plus a `.d.ts` declaration file. Both source
 targets run OXC dead code elimination before writing artifacts. The
 JavaScript target uses OXC isolated declarations for `.d.ts` generation.
 They support the core language lowering and core
@@ -239,7 +239,10 @@ library mode and bit 1 enables worker-backed concurrency.
 exports `extern node` declarations. `flowarrow_compile_typescript`
 returns generated TypeScript or an error message.
 `flowarrow_compile_javascript_artifacts` returns
-`declarations + "\0" + javascript` or an error message.
+`declarations + "\0" + javascript`, followed by NUL-separated
+`path + "\0" + source` pairs for extra files such as worker modules, or an
+error message. `flowarrow_compile_typescript` uses the same extra-file suffix
+when worker-backed concurrency needs a worker module.
 `flowarrow_compile_llvm_ir` returns a textual LLVM IR preview that constructs
 the `.ll` module but does not emit an object file or invoke native LLVM target
 compilation. The result buffer remains valid until the next compile call or

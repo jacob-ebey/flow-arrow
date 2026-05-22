@@ -27,7 +27,10 @@ async function buildVariant(name, flags) {
   const tsDir = new URL(`build/benchmark/${name}/`, rootUrl);
   const jsDir = new URL(`build/benchmark/${name}-js/`, rootUrl);
   const generated = new URL("build/typescript/bench.ts", rootUrl);
-  const target = new URL("bench.ts", tsDir);
+  const generatedWorker = new URL("build/typescript/bench.worker.mjs", rootUrl);
+  const target = new URL("bench.mts", tsDir);
+  const workerTarget = new URL("bench.worker.mjs", tsDir);
+  const workerOutput = new URL("bench.worker.mjs", jsDir);
 
   await rm(tsDir, { recursive: true, force: true });
   await rm(jsDir, { recursive: true, force: true });
@@ -44,18 +47,24 @@ async function buildVariant(name, flags) {
     "bench.flow",
   ]);
   await copyFile(generated, target);
+  if (flags.includes("--workers")) {
+    await copyFile(generatedWorker, workerTarget);
+  }
 
   run("tsc", [
     "--target",
     "ES2022",
     "--module",
-    "ESNext",
+    "NodeNext",
     "--moduleResolution",
-    "bundler",
+    "NodeNext",
     "--outDir",
     fileURLToPath(jsDir),
     fileURLToPath(target),
   ]);
+  if (flags.includes("--workers")) {
+    await copyFile(workerTarget, workerOutput);
+  }
 }
 
 await buildVariant("sequential", []);

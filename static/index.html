@@ -277,8 +277,21 @@
         grid-template-rows: minmax(0, 1fr);
       }
 
+      .results[data-has-worker="true"][data-mode="javascript"] {
+        grid-template-rows: minmax(0, 0.6fr) minmax(0, 1fr) minmax(0, 1fr);
+      }
+
+      .results[data-has-worker="true"][data-mode="typescript"] {
+        grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+      }
+
       .results[data-mode="typescript"] .pane[data-output="declarations"],
       .results[data-mode="llvm"] .pane[data-output="declarations"] {
+        display: none;
+      }
+
+      .results[data-has-worker="false"] .pane[data-output="worker"],
+      .results[data-mode="llvm"] .pane[data-output="worker"] {
         display: none;
       }
 
@@ -568,8 +581,12 @@
               <pre id="types-output" aria-live="polite"><code class="language-typescript"></code></pre>
             </section>
             <section class="pane" data-output="source" aria-label="JavaScript output">
-              <div id="source-output-title" class="pane-title">fib.js</div>
+              <div id="source-output-title" class="pane-title">fib.mjs</div>
               <pre id="source-output" aria-live="polite"><code class="language-javascript"></code></pre>
+            </section>
+            <section class="pane" data-output="worker" aria-label="Worker module output">
+              <div id="worker-output-title" class="pane-title">flowarrow.worker.mjs</div>
+              <pre id="worker-output" aria-live="polite"><code class="language-javascript"></code></pre>
             </section>
           </div>
         </div>
@@ -643,6 +660,8 @@ node score_job(n: Int) -> score: Int {
       const sourceOutput = document.querySelector("#source-output");
       const sourceOutputCode = document.querySelector("#source-output code");
       const sourceOutputTitle = document.querySelector("#source-output-title");
+      const workerOutputCode = document.querySelector("#worker-output code");
+      const workerOutputTitle = document.querySelector("#worker-output-title");
       const compileButton = document.querySelector("#compile");
       const workersToggle = document.querySelector("#workers");
       const resetButton = document.querySelector("#reset");
@@ -655,8 +674,10 @@ node score_job(n: Int) -> score: Int {
       let wasm = null;
       let target = "javascript";
       let currentExample = "fib";
+      let currentWorkerOutputName = "";
 
       source.value = examples[currentExample].source;
+      results.dataset.hasWorker = "false";
       compileButton.disabled = true;
 
       function setStatus(message, state = "idle") {
@@ -744,6 +765,21 @@ node score_job(n: Int) -> score: Int {
         codeElement.innerHTML = highlight(code, language);
       }
 
+      function setWorkerOutput(filename, code, language) {
+        currentWorkerOutputName = filename;
+        results.dataset.hasWorker = filename && target !== "llvm" ? "true" : "false";
+        workerOutputTitle.textContent = filename || "worker";
+        setHighlightedOutput(workerOutputCode, code, language);
+      }
+
+      function parseExtraFiles(parts, start) {
+        const files = [];
+        for (let index = start; index + 1 < parts.length; index += 2) {
+          files.push({ filename: parts[index], code: parts[index + 1] });
+        }
+        return files;
+      }
+
       function updateSourceHighlight() {
         sourceHighlightCode.innerHTML = `${highlight(source.value, "flowarrow")}\n`;
         updateLineNumbers();
@@ -777,6 +813,7 @@ node score_job(n: Int) -> score: Int {
       function clearOutputs() {
         setHighlightedOutput(typesOutputCode, "", "typescript");
         setHighlightedOutput(sourceOutputCode, "", outputLanguage());
+        setWorkerOutput("", "", outputLanguage());
       }
 
       function outputLanguage() {
@@ -829,26 +866,34 @@ node score_job(n: Int) -> score: Int {
             clearOutputs();
             showDiagnostics("Compile Error", result);
           } else if (target === "javascript") {
-            const separator = result.indexOf("\0");
+            const parts = result.split("\0");
+            const files = parseExtraFiles(parts, 2);
+            const worker = files[0] ?? null;
             clearDiagnostics();
             setHighlightedOutput(
               typesOutputCode,
-              separator >= 0 ? result.slice(0, separator) : "",
+              parts.length >= 2 ? parts[0] : "",
               "typescript",
             );
             setHighlightedOutput(
               sourceOutputCode,
-              separator >= 0 ? result.slice(separator + 1) : result,
+              parts.length >= 2 ? parts[1] : result,
               "javascript",
             );
+            setWorkerOutput(worker?.filename ?? "", worker?.code ?? "", "javascript");
           } else if (target === "llvm") {
             clearDiagnostics();
             setHighlightedOutput(typesOutputCode, "", "typescript");
             setHighlightedOutput(sourceOutputCode, result, "llvm");
+            setWorkerOutput("", "", "javascript");
           } else {
+            const parts = result.split("\0");
+            const files = parseExtraFiles(parts, 1);
+            const worker = files[0] ?? null;
             clearDiagnostics();
             setHighlightedOutput(typesOutputCode, "", "typescript");
-            setHighlightedOutput(sourceOutputCode, result, "typescript");
+            setHighlightedOutput(sourceOutputCode, parts[0], "typescript");
+            setWorkerOutput(worker?.filename ?? "", worker?.code ?? "", "javascript");
           }
           setStatus(ok ? "Compiled" : "Compile error", ok ? "ok" : "error");
         } finally {
@@ -880,8 +925,11 @@ node score_job(n: Int) -> score: Int {
       function updateOutputTitles() {
         const filename = examples[currentExample].filename;
         typesOutputTitle.textContent = `${filename}.d.ts`;
-        const extension = target === "javascript" ? "js" : target === "llvm" ? "ll" : "ts";
+        const extension = target === "javascript" ? "mjs" : target === "llvm" ? "ll" : "ts";
         sourceOutputTitle.textContent = `${filename}.${extension}`;
+        if (!currentWorkerOutputName) {
+          workerOutputTitle.textContent = "flowarrow.worker.mjs";
+        }
       }
 
       compileButton.addEventListener("click", compile);

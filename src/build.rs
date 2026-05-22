@@ -309,21 +309,29 @@ fn build_typescript(
         return Err("TypeScript builds do not support `--emit-llvm`".to_string());
     }
 
-    let source = codegen::emit_typescript_with_base_and_options(
-        module,
-        base_dir,
-        codegen::TypeScriptBackendOptions {
-            worker_concurrency: options.worker_concurrency,
-        },
-    )?;
     let target = BuildTarget::Typescript;
     let build_dir = build_dir(path, &target);
     fs::create_dir_all(&build_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", build_dir.display()))?;
     let executable_name = executable_name(path)?;
+    let artifacts = codegen::emit_typescript_artifacts_with_base_and_options(
+        module,
+        base_dir,
+        codegen::TypeScriptBackendOptions {
+            worker_concurrency: options.worker_concurrency,
+            worker_module_specifier: options
+                .worker_concurrency
+                .then(|| format!("./{executable_name}.worker.mjs")),
+        },
+    )?;
     let artifact = build_dir.join(format!("{executable_name}.ts"));
-    fs::write(&artifact, source)
+    fs::write(&artifact, artifacts.source)
         .map_err(|error| format!("failed to write `{}`: {error}", artifact.display()))?;
+    for file in artifacts.files {
+        let path = build_dir.join(file.path);
+        fs::write(&path, file.source)
+            .map_err(|error| format!("failed to write `{}`: {error}", path.display()))?;
+    }
     Ok(BuildOutput {
         build_dir,
         executable: artifact,
@@ -346,24 +354,32 @@ fn build_javascript(
         return Err("JavaScript builds do not support `--emit-llvm`".to_string());
     }
 
-    let artifacts = codegen::emit_javascript_artifacts_with_base_and_options(
-        module,
-        base_dir,
-        codegen::TypeScriptBackendOptions {
-            worker_concurrency: options.worker_concurrency,
-        },
-    )?;
     let target = BuildTarget::Javascript;
     let build_dir = build_dir(path, &target);
     fs::create_dir_all(&build_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", build_dir.display()))?;
     let executable_name = executable_name(path)?;
-    let artifact = build_dir.join(format!("{executable_name}.js"));
+    let artifacts = codegen::emit_javascript_artifacts_with_base_and_options(
+        module,
+        base_dir,
+        codegen::TypeScriptBackendOptions {
+            worker_concurrency: options.worker_concurrency,
+            worker_module_specifier: options
+                .worker_concurrency
+                .then(|| format!("./{executable_name}.worker.mjs")),
+        },
+    )?;
+    let artifact = build_dir.join(format!("{executable_name}.mjs"));
     let declarations = build_dir.join(format!("{executable_name}.d.ts"));
     fs::write(&artifact, artifacts.javascript)
         .map_err(|error| format!("failed to write `{}`: {error}", artifact.display()))?;
     fs::write(&declarations, artifacts.declarations)
         .map_err(|error| format!("failed to write `{}`: {error}", declarations.display()))?;
+    if options.worker_concurrency {
+        let worker = build_dir.join(format!("{executable_name}.worker.mjs"));
+        fs::write(&worker, codegen::scalar_worker_module_source())
+            .map_err(|error| format!("failed to write `{}`: {error}", worker.display()))?;
+    }
     Ok(BuildOutput {
         build_dir,
         executable: artifact,
@@ -511,7 +527,7 @@ impl BuildPlan {
             }
             BuildTarget::Wasm(_) => build_dir.join(format!("{executable_name}.wasm")),
             BuildTarget::Typescript => build_dir.join(format!("{executable_name}.ts")),
-            BuildTarget::Javascript => build_dir.join(format!("{executable_name}.js")),
+            BuildTarget::Javascript => build_dir.join(format!("{executable_name}.mjs")),
         };
         Ok(Self {
             build_dir,

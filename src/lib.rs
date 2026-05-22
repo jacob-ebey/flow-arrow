@@ -99,6 +99,7 @@ pub fn compile_typescript_source_with_options(
         &module,
         codegen::TypeScriptBackendOptions {
             worker_concurrency: options.worker_concurrency,
+            worker_module_specifier: None,
         },
     )
 }
@@ -119,6 +120,7 @@ pub fn compile_javascript_artifacts_source_with_options(
         &module,
         codegen::TypeScriptBackendOptions {
             worker_concurrency: options.worker_concurrency,
+            worker_module_specifier: None,
         },
     )?;
     Ok((artifacts.declarations, artifacts.javascript))
@@ -400,10 +402,8 @@ mod tests {
         assert!(workers.contains("Promise<Array<bigint>>"));
         assert!(workers.contains("new runtime.Worker(runtime.workerUrl, { type: \"module\" })"));
         assert!(workers.contains("node:worker_threads"));
-        assert!(
-            workers
-                .contains("new runtime.Worker(new URL(runtime.workerUrl), { type: \"module\" })")
-        );
+        assert!(workers.contains("new runtime.Worker(new URL(runtime.workerUrl)"));
+        assert!(workers.contains("execArgv: []"));
         assert!(!workers.contains("eval: true"));
         assert!(workers.contains("faScalarWorkerPools"));
         assert!(workers.contains("SharedArrayBuffer"));

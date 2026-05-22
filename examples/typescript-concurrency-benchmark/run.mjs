@@ -4,8 +4,8 @@ const width = BigInt(process.env.WIDTH ?? "200000");
 const warmups = Number(process.env.WARMUPS ?? "2");
 const iterations = Number(process.env.ITERATIONS ?? "8");
 
-const sequential = await import("./build/benchmark/sequential-js/bench.js");
-const workers = await import("./build/benchmark/workers-js/bench.js");
+const sequential = await import("./build/benchmark/sequential-js/bench.mjs");
+const workers = await import("./build/benchmark/workers-js/bench.mjs");
 
 function formatTuple(value) {
   return `[${value.map((item) => item.toString()).join(", ")}]`;

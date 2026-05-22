@@ -1,7 +1,7 @@
 use crate::{
-    TypeScriptCompileMode, TypeScriptCompileOptions,
+    TypeScriptCompileMode, TypeScriptCompileOptions, codegen,
     compile_javascript_artifacts_source_with_options, compile_llvm_ir_source_with_options,
-    compile_typescript_source_with_options,
+    compile_typescript_source_with_options, diagnostic, parser, typecheck,
 };
 use std::cell::{Cell, RefCell};
 use std::mem;
@@ -49,8 +49,15 @@ pub unsafe extern "C" fn flowarrow_compile_typescript(
             return 0;
         }
     };
-    match compile_typescript_source_with_options(source, options) {
-        Ok(output) => {
+    match compile_typescript_artifacts_for_static(source, options) {
+        Ok((source, files)) => {
+            let mut output = source;
+            for (path, content) in files {
+                output.push('\0');
+                output.push_str(&path);
+                output.push('\0');
+                output.push_str(&content);
+            }
             store_result(true, output);
             1
         }
@@ -81,9 +88,16 @@ pub unsafe extern "C" fn flowarrow_compile_javascript_artifacts(
             return 0;
         }
     };
-    match compile_javascript_artifacts_source_with_options(source, options) {
-        Ok((declarations, javascript)) => {
-            store_result(true, format!("{declarations}\0{javascript}"));
+    match compile_javascript_artifacts_for_static(source, options) {
+        Ok((declarations, javascript, files)) => {
+            let mut output = format!("{declarations}\0{javascript}");
+            for (path, content) in files {
+                output.push('\0');
+                output.push_str(&path);
+                output.push('\0');
+                output.push_str(&content);
+            }
+            store_result(true, output);
             1
         }
         Err(error) => {
@@ -91,6 +105,72 @@ pub unsafe extern "C" fn flowarrow_compile_javascript_artifacts(
             0
         }
     }
+}
+
+fn compile_typescript_artifacts_for_static(
+    source: &str,
+    options: TypeScriptCompileOptions,
+) -> Result<(String, Vec<(String, String)>), String> {
+    if !options.worker_concurrency {
+        return compile_typescript_source_with_options(source, options)
+            .map(|source| (source, Vec::new()));
+    }
+    let module = parser::parse_diagnostic(source)
+        .map_err(|error| diagnostic::format_source_diagnostic(&error))?;
+    match options.mode {
+        TypeScriptCompileMode::Program => typecheck::check_module(&module)
+            .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
+        TypeScriptCompileMode::Library => typecheck::check_library_module(&module)
+            .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
+    }
+    let artifacts = codegen::emit_typescript_artifacts_with_options(
+        &module,
+        codegen::TypeScriptBackendOptions {
+            worker_concurrency: true,
+            worker_module_specifier: Some("./flowarrow.worker.mjs".to_string()),
+        },
+    )?;
+    Ok((
+        artifacts.source,
+        artifacts
+            .files
+            .into_iter()
+            .map(|file| (file.path, file.source))
+            .collect(),
+    ))
+}
+
+fn compile_javascript_artifacts_for_static(
+    source: &str,
+    options: TypeScriptCompileOptions,
+) -> Result<(String, String, Vec<(String, String)>), String> {
+    if !options.worker_concurrency {
+        return compile_javascript_artifacts_source_with_options(source, options)
+            .map(|(declarations, javascript)| (declarations, javascript, Vec::new()));
+    }
+    let module = parser::parse_diagnostic(source)
+        .map_err(|error| diagnostic::format_source_diagnostic(&error))?;
+    match options.mode {
+        TypeScriptCompileMode::Program => typecheck::check_module(&module)
+            .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
+        TypeScriptCompileMode::Library => typecheck::check_library_module(&module)
+            .map_err(|error| diagnostic::format_flowarrow_error(source, &error))?,
+    }
+    let artifacts = codegen::emit_javascript_artifacts_with_options(
+        &module,
+        codegen::TypeScriptBackendOptions {
+            worker_concurrency: true,
+            worker_module_specifier: Some("./flowarrow.worker.mjs".to_string()),
+        },
+    )?;
+    Ok((
+        artifacts.declarations,
+        artifacts.javascript,
+        vec![(
+            "flowarrow.worker.mjs".to_string(),
+            codegen::scalar_worker_module_source().to_string(),
+        )],
+    ))
 }
 
 #[unsafe(no_mangle)]

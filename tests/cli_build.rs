@@ -203,7 +203,7 @@ fn build_javascript_fib_example_and_run_node_script() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let generated = fs::read_to_string("examples/typescript-fib/build/javascript/fib.js")
+    let generated = fs::read_to_string("examples/typescript-fib/build/javascript/fib.mjs")
         .expect("read generated JavaScript");
     let generated_dts = fs::read_to_string("examples/typescript-fib/build/javascript/fib.d.ts")
         .expect("read generated JavaScript declarations");
@@ -229,7 +229,7 @@ fn build_javascript_fib_example_and_run_node_script() {
 
     let script = r#"
         const fs = require("node:fs");
-        const source = fs.readFileSync("examples/typescript-fib/build/javascript/fib.js", "utf8");
+        const source = fs.readFileSync("examples/typescript-fib/build/javascript/fib.mjs", "utf8");
         import("data:text/javascript," + encodeURIComponent(source))
           .then((mod) => console.log(mod.fib(10n).toString()));
     "#;
@@ -299,7 +299,7 @@ fn build_javascript_program_with_core_stdlib_and_run_node() {
 
     let output = Command::new("node")
         .args([
-            "examples/add-numbers-from-args/build/javascript/main.js",
+            "examples/add-numbers-from-args/build/javascript/main.mjs",
             "1.5",
             "2.5",
             "3",
@@ -336,7 +336,7 @@ fn build_javascript_with_worker_concurrency_and_run_node_workers() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let generated = fs::read_to_string("examples/concurrency/build/javascript/main.js")
+    let generated = fs::read_to_string("examples/concurrency/build/javascript/main.mjs")
         .expect("read generated JavaScript");
     let declarations = fs::read_to_string("examples/concurrency/build/javascript/main.d.ts")
         .expect("read generated JavaScript declarations");
@@ -351,9 +351,9 @@ fn build_javascript_with_worker_concurrency_and_run_node_workers() {
     assert!(generated.contains("faUseSharedNumericSequences = true"));
     assert!(generated.contains("function faScalarInputBuffer"));
     assert!(generated.contains("node:worker_threads"));
-    assert!(
-        generated.contains("new runtime.Worker(new URL(runtime.workerUrl), { type: \"module\" })")
-    );
+    assert!(generated.contains("new runtime.Worker(new URL(runtime.workerUrl)"));
+    assert!(generated.contains("execArgv: []"));
+    assert!(generated.contains("new URL(\"./main.worker.mjs\", import.meta.url).href"));
     assert!(!generated.contains("eval: true"));
     assert!(generated.contains("SharedArrayBuffer"));
     assert!(generated.contains("faParallelMapBigInt"));
@@ -372,9 +372,8 @@ fn build_javascript_with_worker_concurrency_and_run_node_workers() {
     }
 
     let script = r#"
-        const fs = require("node:fs");
-        const source = fs.readFileSync("examples/concurrency/build/javascript/main.js", "utf8");
-        import("data:text/javascript," + encodeURIComponent(source)).then(async (mod) => {
+        const { pathToFileURL } = require("node:url");
+        import(pathToFileURL("examples/concurrency/build/javascript/main.mjs").href).then(async (mod) => {
           const realProcess = globalThis.process;
           const realWorkerThreads = realProcess.getBuiltinModule?.("node:worker_threads") ?? require("node:worker_threads");
           let workerStarts = 0;
@@ -472,11 +471,11 @@ fn typescript_concurrency_benchmark_example_builds_and_runs() {
     );
 
     let sequential_ts = fs::read_to_string(
-        "examples/typescript-concurrency-benchmark/build/benchmark/sequential/bench.ts",
+        "examples/typescript-concurrency-benchmark/build/benchmark/sequential/bench.mts",
     )
     .expect("read sequential TypeScript benchmark build");
     let workers_ts = fs::read_to_string(
-        "examples/typescript-concurrency-benchmark/build/benchmark/workers/bench.ts",
+        "examples/typescript-concurrency-benchmark/build/benchmark/workers/bench.mts",
     )
     .expect("read worker TypeScript benchmark build");
     assert!(sequential_ts.contains("export function score_batch"));
@@ -488,9 +487,9 @@ fn typescript_concurrency_benchmark_example_builds_and_runs() {
     assert!(workers_ts.contains("faUseSharedNumericSequences = true"));
     assert!(workers_ts.contains("function faScalarInputBuffer"));
     assert!(workers_ts.contains("node:worker_threads"));
-    assert!(
-        workers_ts.contains("new runtime.Worker(new URL(runtime.workerUrl), { type: \"module\" })")
-    );
+    assert!(workers_ts.contains("new runtime.Worker(new URL(runtime.workerUrl)"));
+    assert!(workers_ts.contains("execArgv: []"));
+    assert!(workers_ts.contains("new URL(\"./bench.worker.mjs\", import.meta.url).href"));
     assert!(!workers_ts.contains("eval: true"));
     assert!(workers_ts.contains("faScalarWorkerPools"));
     assert!(workers_ts.contains("SharedArrayBuffer"));
