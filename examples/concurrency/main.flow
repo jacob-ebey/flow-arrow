@@ -23,16 +23,21 @@ struct JobSummary {
 }
 
 program main(args: Args) -> exit_code: Int {
-    (1, 17, 1)                                                                                                                -> range_step              -> $jobs
-    $jobs                                                                                                                     -> map score_job           -> $scores
-    $jobs                                                                                                                     -> map weight_job          -> $weights
-    $scores                                                                                                                   -> reduce add(identity: 0) -> $total_score
-    $scores                                                                                                                   -> reduce max(identity: 0) -> $peak_score
-    $weights                                                                                                                  -> reduce add(identity: 0) -> $total_weight
-    $weights                                                                                                                  -> reduce max(identity: 0) -> $peak_weight
-    JobSummary { total_score: $total_score, peak_score: $peak_score, total_weight: $total_weight, peak_weight: $peak_weight } -> $summary
-    $summary                                                                                                                  -> render_summary          -> $output
-    $output                                                                                                                   -> write_stdout            -> $exit_code
+    (1, 17, 1) -> range_step              -> $jobs
+    $jobs      -> map score_job           -> $scores
+    $jobs      -> map weight_job          -> $weights
+    $scores    -> reduce add(identity: 0) -> $total_score
+    $scores    -> reduce max(identity: 0) -> $peak_score
+    $weights   -> reduce add(identity: 0) -> $total_weight
+    $weights   -> reduce max(identity: 0) -> $peak_weight
+    JobSummary {
+        total_score: $total_score,
+        peak_score: $peak_score,
+        total_weight: $total_weight,
+        peak_weight: $peak_weight
+    } -> $summary
+    $summary -> render_summary -> $output
+    $output  -> write_stdout   -> $exit_code
 }
 
 node score_job(n: Int) -> score: Int {

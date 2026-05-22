@@ -6,6 +6,7 @@ use std::path::Path;
 const INDENT: &str = "    ";
 const MULTILINE_IMPORT_ITEM_LIMIT: usize = 4;
 const MAX_INLINE_IMPORT_WIDTH: usize = 100;
+const MAX_INLINE_STRUCT_WIDTH: usize = 100;
 
 pub fn format_source(source: &str) -> Result<String, String> {
     let module = parser::parse(source)?;
@@ -338,6 +339,7 @@ impl Formatter {
                 .stages
                 .iter()
                 .any(|stage| matches!(stage, Stage::Match { .. }))
+                || should_format_endpoint_multiline(&chain.source)
             {
                 self.flush_chain_group(&mut group);
                 self.format_chain_multiline(chain, comments.trailing);
@@ -369,6 +371,11 @@ impl Formatter {
     }
 
     fn format_chain_multiline(&mut self, chain: &Chain, trailing: Option<String>) {
+        if should_format_endpoint_multiline(&chain.source) {
+            self.format_chain_with_multiline_source(chain, trailing);
+            return;
+        }
+
         let mut first = format!("{INDENT}{}", format_endpoint(&chain.source));
         if let Some(comment) = trailing {
             first.push_str("  ");
@@ -376,6 +383,50 @@ impl Formatter {
         }
         self.line(first);
         for stage in &chain.stages {
+            match stage {
+                Stage::Match { arms } => {
+                    self.line(format!("{INDENT}-> match {{"));
+                    for arm in arms {
+                        self.line(format!("{INDENT}{INDENT}{}", format_match_arm(arm)));
+                    }
+                    self.line(format!("{INDENT}}}"));
+                }
+                other => self.line(format!("{INDENT}-> {}", format_stage(other))),
+            }
+        }
+    }
+
+    fn format_chain_with_multiline_source(&mut self, chain: &Chain, trailing: Option<String>) {
+        let first_multiline_stage = chain
+            .stages
+            .iter()
+            .position(|stage| matches!(stage, Stage::Match { .. }))
+            .unwrap_or(chain.stages.len());
+        let inline_stages = &chain.stages[..first_multiline_stage];
+        let remaining_stages = &chain.stages[first_multiline_stage..];
+        let mut source_lines = format_multiline_endpoint(&chain.source, INDENT);
+        let mut last = source_lines
+            .pop()
+            .unwrap_or_else(|| format!("{INDENT}{}", format_endpoint(&chain.source)));
+        if !inline_stages.is_empty() {
+            last.push_str(" -> ");
+            last.push_str(
+                &inline_stages
+                    .iter()
+                    .map(format_stage)
+                    .collect::<Vec<_>>()
+                    .join(" -> "),
+            );
+        }
+        if let Some(comment) = trailing {
+            last.push_str("  ");
+            last.push_str(&comment);
+        }
+        for line in source_lines {
+            self.line(line);
+        }
+        self.line(last);
+        for stage in remaining_stages {
             match stage {
                 Stage::Match { arms } => {
                     self.line(format!("{INDENT}-> match {{"));
@@ -630,6 +681,29 @@ fn format_endpoint(endpoint: &Endpoint) -> String {
     }
 }
 
+fn should_format_endpoint_multiline(endpoint: &Endpoint) -> bool {
+    matches!(endpoint, Endpoint::Struct { .. })
+        && format_endpoint(endpoint).chars().count() > MAX_INLINE_STRUCT_WIDTH
+}
+
+fn format_multiline_endpoint(endpoint: &Endpoint, indent: &str) -> Vec<String> {
+    match endpoint {
+        Endpoint::Struct { name, fields } => {
+            let mut lines = vec![format!("{indent}{name} {{")];
+            for (index, (field, value)) in fields.iter().enumerate() {
+                let comma = if index + 1 == fields.len() { "" } else { "," };
+                lines.push(format!(
+                    "{indent}{INDENT}{field}: {}{comma}",
+                    format_endpoint(value)
+                ));
+            }
+            lines.push(format!("{indent}}}"));
+            lines
+        }
+        _ => vec![format!("{indent}{}", format_endpoint(endpoint))],
+    }
+}
+
 fn format_real(value: f64) -> String {
     let mut text = value.to_string();
     if text.contains('e') || text.contains('E') {
@@ -838,6 +912,30 @@ $left->$exit_code}"#,
             r#"program main(args: Args) -> exit_code: Int {
     (1, 2) -> pair -> ($left, $right)
     $left  -> $exit_code
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn formats_long_struct_literals_on_multiple_lines() {
+        assert_formats(
+            r#"struct JobSummary{total_score:Int,peak_score:Int,total_weight:Int,peak_weight:Int}
+extern node score_batch(width:Int)->summary:JobSummary{JobSummary{total_score:$total_score,peak_score:$peak_score,total_weight:$total_weight,peak_weight:$peak_weight}->$summary}"#,
+            r#"struct JobSummary {
+    total_score: Int,
+    peak_score: Int,
+    total_weight: Int,
+    peak_weight: Int,
+}
+
+extern node score_batch(width: Int) -> summary: JobSummary {
+    JobSummary {
+        total_score: $total_score,
+        peak_score: $peak_score,
+        total_weight: $total_weight,
+        peak_weight: $peak_weight
+    } -> $summary
 }
 "#,
         );
