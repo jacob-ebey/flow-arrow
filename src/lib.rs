@@ -16,7 +16,7 @@ mod stdlib;
 mod typecheck;
 
 pub use build::{
-    BuildOptions, BuildOutput, BuildTarget, NativeTarget, WasmTarget, build_file,
+    BuildOptions, BuildOutput, BuildTarget, CrateType, NativeTarget, WasmTarget, build_file,
     build_file_with_options,
 };
 pub use fmt::{check_file as check_format_file, format_file, format_source};

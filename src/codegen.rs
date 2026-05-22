@@ -3,10 +3,15 @@ use crate::module_resolver;
 use crate::stdlib::{self, RuntimeSupport};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
+use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::module::Module as LlvmModule;
+use inkwell::memory_buffer::MemoryBuffer;
+use inkwell::module::{Linkage, Module as LlvmModule};
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
+};
 use inkwell::types::{AnyType, BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -23,6 +28,37 @@ pub fn emit_direct_llvm_with_base(module: &Module, base_dir: &Path) -> Result<St
     let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
     let codegen = TypedCodegen::new(&expanded)?;
     DirectLlvm::emit(codegen)
+}
+
+pub(crate) struct WasmCdylibOutput {
+    pub llvm: String,
+    pub object: Vec<u8>,
+    pub exports: Vec<String>,
+}
+
+pub(crate) fn emit_wasm_cdylib_llvm_with_base(
+    module: &Module,
+    base_dir: &Path,
+    target_triple: &str,
+) -> Result<WasmCdylibOutput, String> {
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let codegen = TypedCodegen::new(&expanded)?;
+    let emitted = DirectLlvm::emit_with_options(
+        codegen,
+        DirectLlvmOptions {
+            target_triple: Some(target_triple.to_string()),
+            emit_entrypoint: false,
+            export_nodes: true,
+            emit_object: true,
+        },
+    )?;
+    Ok(WasmCdylibOutput {
+        llvm: emitted.llvm,
+        object: emitted
+            .object
+            .ok_or_else(|| "WASM object emission did not produce an object file".to_string())?,
+        exports: emitted.exports,
+    })
 }
 
 #[allow(dead_code)]
@@ -652,9 +688,6 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     output: self.port_types(&callable.outputs)?,
                 },
             );
-        }
-        if !self.callables.contains_key("main") {
-            return Err("missing `program main`".to_string());
         }
         Ok(())
     }
@@ -4607,13 +4640,49 @@ struct DirectLlvm<'ctx, 'a> {
     codegen: TypedCodegen<'a>,
     types: LlvmTypeRegistry<'ctx>,
     functions: HashMap<String, FunctionValue<'ctx>>,
+    options: DirectLlvmOptions,
+    exports: Vec<String>,
     stream_helper: usize,
+}
+
+struct DirectLlvmOptions {
+    target_triple: Option<String>,
+    emit_entrypoint: bool,
+    export_nodes: bool,
+    emit_object: bool,
+}
+
+impl Default for DirectLlvmOptions {
+    fn default() -> Self {
+        Self {
+            target_triple: None,
+            emit_entrypoint: true,
+            export_nodes: false,
+            emit_object: false,
+        }
+    }
+}
+
+struct DirectLlvmEmission {
+    llvm: String,
+    object: Option<Vec<u8>>,
+    exports: Vec<String>,
 }
 
 impl<'a> DirectLlvm<'_, 'a> {
     fn emit(codegen: TypedCodegen<'a>) -> Result<String, String> {
+        Ok(Self::emit_with_options(codegen, DirectLlvmOptions::default())?.llvm)
+    }
+
+    fn emit_with_options(
+        codegen: TypedCodegen<'a>,
+        options: DirectLlvmOptions,
+    ) -> Result<DirectLlvmEmission, String> {
         let context = Context::create();
         let module = context.create_module("flowarrow");
+        if let Some(target_triple) = &options.target_triple {
+            module.set_triple(&TargetTriple::create(target_triple));
+        }
         let builder = context.create_builder();
         let types = LlvmTypeRegistry::new(&context);
         let mut direct = DirectLlvm {
@@ -4623,13 +4692,60 @@ impl<'a> DirectLlvm<'_, 'a> {
             codegen,
             types,
             functions: HashMap::new(),
+            options,
+            exports: Vec::new(),
             stream_helper: 0,
         };
         direct.declare_callables()?;
         direct.emit_callables()?;
-        direct.emit_entrypoint()?;
-        Ok(direct.module.print_to_string().to_string())
+        if direct.options.export_nodes {
+            direct.emit_wasm_exports()?;
+        }
+        if direct.options.emit_entrypoint {
+            direct.emit_entrypoint()?;
+        }
+        let object = if direct.options.emit_object {
+            let target_triple = direct
+                .options
+                .target_triple
+                .as_deref()
+                .ok_or_else(|| "object emission requires a target triple".to_string())?;
+            Some(emit_target_object(&direct.module, target_triple)?)
+        } else {
+            None
+        };
+        Ok(DirectLlvmEmission {
+            llvm: direct.module.print_to_string().to_string(),
+            object,
+            exports: direct.exports,
+        })
     }
+}
+
+fn emit_target_object(module: &LlvmModule<'_>, target_triple: &str) -> Result<Vec<u8>, String> {
+    Target::initialize_webassembly(&InitializationConfig::default());
+    let triple = TargetTriple::create(target_triple);
+    let target = Target::from_triple(&triple)
+        .map_err(|error| format!("failed to initialize target `{target_triple}`: {error}"))?;
+    let machine = target
+        .create_target_machine(
+            &triple,
+            "generic",
+            "",
+            OptimizationLevel::Aggressive,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| format!("failed to create target machine for `{target_triple}`"))?;
+    let object = machine
+        .write_to_memory_buffer(module, FileType::Object)
+        .map_err(|error| format!("failed to emit object for `{target_triple}`: {error}"))?;
+    Ok(memory_buffer_without_nul(&object))
+}
+
+fn memory_buffer_without_nul(buffer: &MemoryBuffer<'_>) -> Vec<u8> {
+    let bytes = buffer.as_slice();
+    bytes[..bytes.len().saturating_sub(1)].to_vec()
 }
 
 impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
@@ -4665,6 +4781,145 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             self.emit_callable(callable)?;
         }
         Ok(())
+    }
+
+    fn emit_wasm_exports(&mut self) -> Result<(), String> {
+        let names = self
+            .codegen
+            .module
+            .declarations
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::Node(callable) => Some(callable.name.clone()),
+                Decl::TypeAlias(_) | Decl::Import(_) | Decl::Program(_) => None,
+            })
+            .collect::<Vec<_>>();
+
+        for name in names {
+            let sig = self
+                .codegen
+                .signatures
+                .get(&name)
+                .ok_or_else(|| format!("missing signature for WASM export `{name}`"))?;
+            if wasm_exportable_input(&sig.input) && wasm_exportable_output(&sig.output) {
+                self.emit_wasm_export(&name)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_wasm_export(&mut self, name: &str) -> Result<(), String> {
+        let export_name = sanitize_symbol(name);
+        if export_name != name {
+            return Err(format!(
+                "WASM export `{name}` cannot be represented as a stable symbol yet"
+            ));
+        }
+        let sig = self
+            .codegen
+            .signatures
+            .get(name)
+            .ok_or_else(|| format!("missing signature for WASM export `{name}`"))?
+            .clone();
+        let output_ty = self.wasm_scalar_type(&sig.output, name)?;
+        let params = self.wasm_input_types(&sig.input, name)?;
+        let param_types = params
+            .iter()
+            .map(|(_, ty)| (*ty).into())
+            .collect::<Vec<_>>();
+        let wrapper_ty = output_ty.fn_type(&param_types, false);
+        let wrapper = self.module.add_function(&export_name, wrapper_ty, None);
+        wrapper.set_linkage(Linkage::External);
+
+        let block = self.context.append_basic_block(wrapper, "entry");
+        self.builder.position_at_end(block);
+        let input = self.build_wasm_export_input(wrapper, &sig.input, &params, name)?;
+        let internal = *self
+            .functions
+            .get(name)
+            .ok_or_else(|| format!("missing internal function for WASM export `{name}`"))?;
+        let result = self
+            .builder
+            .build_call(internal, &[input.into()], "result")
+            .map_err(|error| format!("LLVM backend failed to call WASM export `{name}`: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("WASM export `{name}` did not return a value"))?;
+        self.builder.build_return(Some(&result)).map_err(|error| {
+            format!("LLVM backend failed to return WASM export `{name}`: {error}")
+        })?;
+        self.exports.push(export_name);
+        Ok(())
+    }
+
+    fn wasm_input_types(
+        &self,
+        input_ty: &Ty,
+        export_name: &str,
+    ) -> Result<Vec<(Ty, BasicTypeEnum<'ctx>)>, String> {
+        match input_ty {
+            Ty::Unit => Ok(Vec::new()),
+            Ty::Tuple(items) => items
+                .iter()
+                .map(|item| Ok((item.clone(), self.wasm_scalar_type(item, export_name)?)))
+                .collect(),
+            other => Ok(vec![(
+                other.clone(),
+                self.wasm_scalar_type(other, export_name)?,
+            )]),
+        }
+    }
+
+    fn wasm_scalar_type(&self, ty: &Ty, export_name: &str) -> Result<BasicTypeEnum<'ctx>, String> {
+        match ty {
+            Ty::Int => Ok(self.context.i64_type().into()),
+            Ty::Real => Ok(self.context.f64_type().into()),
+            other => Err(format!(
+                "WASM export `{export_name}` uses `{other}`; only Int and Real scalar inputs and outputs are supported"
+            )),
+        }
+    }
+
+    fn build_wasm_export_input(
+        &mut self,
+        wrapper: FunctionValue<'ctx>,
+        input_ty: &Ty,
+        params: &[(Ty, BasicTypeEnum<'ctx>)],
+        export_name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match input_ty {
+            Ty::Unit => Ok(self.types.basic_type(&Ty::Unit)?.const_zero()),
+            Ty::Tuple(items) => {
+                let mut tuple = self
+                    .types
+                    .basic_type(input_ty)?
+                    .into_struct_type()
+                    .const_zero();
+                for (index, item) in items.iter().enumerate() {
+                    let param = wrapper.get_nth_param(index as u32).ok_or_else(|| {
+                        format!("missing parameter {index} for WASM export `{export_name}`")
+                    })?;
+                    tuple = self
+                        .builder
+                        .build_insert_value(tuple, param, index as u32, "arg")
+                        .map_err(|error| {
+                            format!(
+                                "LLVM backend failed to build tuple input for WASM export `{export_name}`: {error}"
+                            )
+                        })?
+                        .into_struct_value();
+                    if params.get(index).map(|(ty, _)| ty) != Some(item) {
+                        return Err(format!(
+                            "internal parameter mismatch for WASM export `{export_name}`"
+                        ));
+                    }
+                }
+                Ok(tuple.into())
+            }
+            _ => wrapper
+                .get_nth_param(0)
+                .ok_or_else(|| format!("missing parameter for WASM export `{export_name}`")),
+        }
     }
 
     fn emit_callable(&mut self, callable: &Callable) -> Result<(), String> {
@@ -9896,6 +10151,22 @@ fn format_binding_target_for_error(target: &BindingTarget) -> String {
 
 fn binding_target_is_discard(target: &BindingTarget) -> bool {
     matches!(target, BindingTarget::Discard)
+}
+
+fn wasm_exportable_input(ty: &Ty) -> bool {
+    match ty {
+        Ty::Unit | Ty::Int | Ty::Real => true,
+        Ty::Tuple(items) => items.iter().all(wasm_exportable_scalar),
+        _ => false,
+    }
+}
+
+fn wasm_exportable_output(ty: &Ty) -> bool {
+    wasm_exportable_scalar(ty)
+}
+
+fn wasm_exportable_scalar(ty: &Ty) -> bool {
+    matches!(ty, Ty::Int | Ty::Real)
 }
 
 fn type_suffix(ty: &Ty) -> String {

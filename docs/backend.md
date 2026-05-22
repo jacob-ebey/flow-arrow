@@ -128,9 +128,9 @@ flowarrow build --target <triple> --crate-type <kind>
 
 Current implementation status: `flowarrow build` defaults to the host
 native target and accepts `--target native`, `--target host`, or the host
-target triple for that backend. WASM triples are parsed and routed through
-the target-aware build pipeline, but the WASM backend is not implemented
-yet.
+target triple for that backend. `wasm32-unknown-unknown` supports an
+initial `--crate-type cdylib` reactor-module path for pure scalar node
+exports. `wasm32-wasi` is parsed but not implemented yet.
 
 Supported `--crate-type` values:
 
@@ -155,9 +155,14 @@ wasm32-wasi
 ### 2.5 WebAssembly story
 
 - The `wasm32-unknown-unknown` target produces a freestanding module
-  suitable for browsers.
+  suitable for browsers or JavaScript runtimes. The implemented first
+  slice is `--crate-type cdylib` with ABI-compatible top-level nodes
+  exported as core WASM functions. Exported node inputs and outputs are
+  currently limited to scalar `Int` and `Real` values, with `Int`
+  represented as WASM `i64`.
 - The `wasm32-wasi` target produces a module runnable under wasmtime
-  / wasmer / wasi-compatible hosts.
+  / wasmer / wasi-compatible hosts. This target is planned but not yet
+  implemented.
 - For browser use, the compiler emits a companion JavaScript/TypeScript
   bindings file that:
   - imports the `.wasm`,

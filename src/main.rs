@@ -33,6 +33,12 @@ fn run_cli() -> Result<u8, String> {
                             .ok_or_else(|| "--target requires a target triple".to_string())?;
                         options.target = target.parse()?;
                     }
+                    "--crate-type" => {
+                        let crate_type = args
+                            .next()
+                            .ok_or_else(|| "--crate-type requires `bin` or `cdylib`".to_string())?;
+                        options.crate_type = crate_type.parse()?;
+                    }
                     "--emit-llvm" => {
                         let out = args
                             .next()
@@ -47,7 +53,7 @@ fn run_cli() -> Result<u8, String> {
                 }
             }
             let path = path.ok_or_else(|| {
-                "usage: flowarrow build [--target <target>] [--emit-llvm <path.ll>] <path.flow>"
+                "usage: flowarrow build [--target <target>] [--crate-type <bin|cdylib>] [--emit-llvm <path.ll>] <path.flow>"
                     .to_string()
             })?;
             flowarrow::build_file_with_options(PathBuf::from(path).as_path(), &options)?;

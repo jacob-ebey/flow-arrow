@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "scripts": {
+    "build": "cd ../.. && cargo run -- build --target wasm32-unknown-unknown --crate-type cdylib examples/wasm-fib/fib.flow",
+    "start": "node run.mjs"
+  }
+}

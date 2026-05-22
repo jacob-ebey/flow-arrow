@@ -34,7 +34,55 @@ fn build_accepts_target_option_before_path() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("build target `wasm32-wasi` is recognized"));
-    assert!(stderr.contains("WASM backend is not implemented yet"));
+    assert!(stderr.contains("only `wasm32-unknown-unknown` is implemented"));
+}
+
+#[test]
+fn build_wasm_fib_example_and_run_node_script() {
+    let output = Command::new(flowarrow())
+        .args([
+            "build",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--crate-type",
+            "cdylib",
+            "examples/wasm-fib/fib.flow",
+        ])
+        .output()
+        .expect("run flowarrow build");
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("WASM backend requires `wasm-ld`")
+            || stderr.contains("failed to initialize target `wasm32-unknown-unknown`")
+        {
+            eprintln!("skipping WASM example test: {stderr}");
+            return;
+        }
+    }
+    assert!(
+        output.status.success(),
+        "flowarrow build failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    if Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipping WASM example runtime test: node is not installed");
+        return;
+    }
+
+    let output = Command::new("node")
+        .arg("examples/wasm-fib/run.mjs")
+        .output()
+        .expect("run node example");
+    assert!(
+        output.status.success(),
+        "node example failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "55");
 }
 
 fn temp_flow_path(prefix: &str) -> std::path::PathBuf {

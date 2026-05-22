@@ -16,6 +16,14 @@ pub fn check_module_with_base(module: &Module, base_dir: &Path) -> Result<(), St
     Checker::new(&expanded)?.check()
 }
 
+pub(crate) fn check_library_module_with_base(
+    module: &Module,
+    base_dir: &Path,
+) -> Result<(), String> {
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    Checker::new(&expanded)?.check_library()
+}
+
 pub(crate) fn semantic_summary_with_base(
     module: &Module,
     base_dir: &Path,
@@ -161,27 +169,11 @@ impl<'a> Checker<'a> {
     }
 
     fn check(&self) -> Result<(), String> {
-        let main = self
-            .symbols
-            .get("main")
-            .ok_or_else(|| "missing `program main`".to_string())?;
-        if main.kind != CallableKind::Program {
-            return Err("`main` must be declared as a program".to_string());
-        }
-        let main_signature = main
-            .signatures
-            .first()
-            .ok_or_else(|| "`main` has no signature".to_string())?;
-        self.expect_type("program main input", &main_signature.input, &Type::Args)?;
-        if main_signature.output != Type::Int
-            && main_signature.output != Type::Faultable(Box::new(Type::Int))
-        {
-            return Err(format!(
-                "program main output expected `Int` or `Faultable[Int]`, found `{}`",
-                main_signature.output
-            ));
-        }
+        self.validate_main()?;
+        self.check_library()
+    }
 
+    fn check_library(&self) -> Result<(), String> {
         for decl in &self.module.declarations {
             match decl {
                 Decl::TypeAlias(_) => {}

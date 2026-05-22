@@ -16,6 +16,7 @@ const NATIVE_TARGETS: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildOptions {
     pub target: BuildTarget,
+    pub crate_type: CrateType,
     pub emit_llvm: Option<PathBuf>,
 }
 
@@ -27,6 +28,7 @@ impl BuildOptions {
     pub fn with_target(target: BuildTarget) -> Self {
         Self {
             target,
+            crate_type: CrateType::Bin,
             emit_llvm: None,
         }
     }
@@ -41,7 +43,34 @@ impl Default for BuildOptions {
     fn default() -> Self {
         Self {
             target: BuildTarget::native_host(),
+            crate_type: CrateType::Bin,
             emit_llvm: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrateType {
+    Bin,
+    Cdylib,
+}
+
+impl Default for CrateType {
+    fn default() -> Self {
+        Self::Bin
+    }
+}
+
+impl FromStr for CrateType {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "bin" => Ok(Self::Bin),
+            "cdylib" => Ok(Self::Cdylib),
+            other => Err(format!(
+                "unsupported crate type `{other}`; supported crate types are `bin`, `cdylib`"
+            )),
         }
     }
 }
@@ -153,6 +182,7 @@ struct BuildPlan {
     cache_dir: PathBuf,
     executable: PathBuf,
     llvm_path: PathBuf,
+    object_path: PathBuf,
     runtime_llvm_path: PathBuf,
     stale_runtime_c_path: PathBuf,
     hash_path: PathBuf,
@@ -170,14 +200,14 @@ pub fn build_file_with_options(path: &Path, options: &BuildOptions) -> Result<Bu
         .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
     let module = parser::parse(&source)?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    typecheck::check_module_with_base(&module, base_dir)?;
+    match options.crate_type {
+        CrateType::Bin => typecheck::check_module_with_base(&module, base_dir)?,
+        CrateType::Cdylib => typecheck::check_library_module_with_base(&module, base_dir)?,
+    }
 
     match &options.target {
         BuildTarget::Native(target) => build_native(path, base_dir, &module, target, options),
-        BuildTarget::Wasm(target) => Err(format!(
-            "build target `{}` is recognized, but the WASM backend is not implemented yet",
-            target.triple()
-        )),
+        BuildTarget::Wasm(target) => build_wasm(path, base_dir, &module, *target, options),
     }
 }
 
@@ -188,6 +218,9 @@ fn build_native(
     target: &NativeTarget,
     options: &BuildOptions,
 ) -> Result<BuildOutput, String> {
+    if options.crate_type != CrateType::Bin {
+        return Err("native builds currently support only `--crate-type bin`".to_string());
+    }
     if !target.is_host() {
         return Err(format!(
             "native target `{}` is recognized, but cross-compilation is not implemented yet; use `native` or `{}`",
@@ -201,6 +234,7 @@ fn build_native(
     let plan = BuildPlan::new(
         path,
         &BuildTarget::Native(target.clone()),
+        options.crate_type,
         &llvm,
         &runtime_c,
     )?;
@@ -230,22 +264,91 @@ fn build_native(
     })
 }
 
+fn build_wasm(
+    path: &Path,
+    base_dir: &Path,
+    module: &Module,
+    target: WasmTarget,
+    options: &BuildOptions,
+) -> Result<BuildOutput, String> {
+    if target != WasmTarget::UnknownUnknown {
+        return Err(format!(
+            "build target `{}` is recognized, but only `wasm32-unknown-unknown` is implemented for WASM builds",
+            target.triple()
+        ));
+    }
+    if options.crate_type != CrateType::Cdylib {
+        return Err(
+            "WASM builds currently require `--crate-type cdylib` for an exportable reactor module"
+                .to_string(),
+        );
+    }
+
+    let emitted = codegen::emit_wasm_cdylib_llvm_with_base(module, base_dir, target.triple())?;
+    if emitted.exports.is_empty() {
+        return Err("WASM cdylib build requires at least one top-level node export".to_string());
+    }
+    let export_hash = emitted.exports.join(",");
+    let plan = BuildPlan::new(
+        path,
+        &BuildTarget::Wasm(target),
+        options.crate_type,
+        &emitted.llvm,
+        &export_hash,
+    )?;
+    fs::create_dir_all(&plan.cache_dir)
+        .map_err(|error| format!("failed to create `{}`: {error}", plan.cache_dir.display()))?;
+
+    if plan.is_wasm_fresh() {
+        copy_emitted_llvm(&plan.llvm_path, options.emit_llvm.as_deref())?;
+        return Ok(BuildOutput {
+            build_dir: plan.build_dir,
+            executable: plan.executable,
+        });
+    }
+
+    fs::write(&plan.llvm_path, emitted.llvm)
+        .map_err(|error| format!("failed to write `{}`: {error}", plan.llvm_path.display()))?;
+    fs::write(&plan.object_path, emitted.object)
+        .map_err(|error| format!("failed to write `{}`: {error}", plan.object_path.display()))?;
+    copy_emitted_llvm(&plan.llvm_path, options.emit_llvm.as_deref())?;
+    link_wasm_cdylib(&plan, target, &emitted.exports)?;
+    fs::write(&plan.hash_path, plan.build_hash)
+        .map_err(|error| format!("failed to write `{}`: {error}", plan.hash_path.display()))?;
+
+    Ok(BuildOutput {
+        build_dir: plan.build_dir,
+        executable: plan.executable,
+    })
+}
+
 impl BuildPlan {
-    fn new(path: &Path, target: &BuildTarget, llvm: &str, runtime_c: &str) -> Result<Self, String> {
+    fn new(
+        path: &Path,
+        target: &BuildTarget,
+        crate_type: CrateType,
+        llvm: &str,
+        runtime_c: &str,
+    ) -> Result<Self, String> {
         let build_dir = build_dir(path, target);
         let cache_dir = build_dir.join(".cache");
         let executable_name = executable_name(path)?;
-        let executable =
-            build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX));
+        let executable = match target {
+            BuildTarget::Native(_) => {
+                build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX))
+            }
+            BuildTarget::Wasm(_) => build_dir.join(format!("{executable_name}.wasm")),
+        };
         Ok(Self {
             build_dir,
             cache_dir: cache_dir.clone(),
             executable,
             llvm_path: cache_dir.join("main.ll"),
+            object_path: cache_dir.join("main.o"),
             runtime_llvm_path: cache_dir.join("runtime.ll"),
             stale_runtime_c_path: cache_dir.join("runtime.c"),
             hash_path: cache_dir.join("build.hash"),
-            build_hash: format!("{:016x}", build_hash(target, llvm, runtime_c)),
+            build_hash: format!("{:016x}", build_hash(target, crate_type, llvm, runtime_c)),
         })
     }
 
@@ -253,6 +356,15 @@ impl BuildPlan {
         self.executable.exists()
             && self.runtime_llvm_path.exists()
             && self.llvm_path.exists()
+            && fs::read_to_string(&self.hash_path)
+                .map(|cached_hash| cached_hash == self.build_hash)
+                .unwrap_or(false)
+    }
+
+    fn is_wasm_fresh(&self) -> bool {
+        self.executable.exists()
+            && self.llvm_path.exists()
+            && self.object_path.exists()
             && fs::read_to_string(&self.hash_path)
                 .map(|cached_hash| cached_hash == self.build_hash)
                 .unwrap_or(false)
@@ -307,6 +419,145 @@ fn link_native_executable(plan: &BuildPlan, runtime_c: &str) -> Result<(), Strin
         ));
     }
     Ok(())
+}
+
+fn link_wasm_cdylib(
+    plan: &BuildPlan,
+    _target: WasmTarget,
+    exports: &[String],
+) -> Result<(), String> {
+    let linker = wasm_linker()?;
+    let mut command = Command::new(&linker.path);
+    if linker.needs_flavor {
+        command.args(["-flavor", "wasm"]);
+    }
+    command.arg("--no-entry").arg(&plan.object_path);
+    for export in exports {
+        command.arg(format!("--export={export}"));
+    }
+    let output = command
+        .arg("-o")
+        .arg(&plan.executable)
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to invoke `{}` for WASM backend: {error}",
+                linker.path.display()
+            )
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "WASM backend failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
+struct WasmLinker {
+    path: PathBuf,
+    needs_flavor: bool,
+}
+
+fn wasm_linker() -> Result<WasmLinker, String> {
+    if let Some(path) = find_on_path("wasm-ld") {
+        return Ok(WasmLinker {
+            path,
+            needs_flavor: false,
+        });
+    }
+    let sysroot = rustc_sysroot()?;
+    let wasm_ld = sysroot
+        .join("lib")
+        .join("rustlib")
+        .join(host_target())
+        .join("bin")
+        .join("gcc-ld")
+        .join("wasm-ld");
+    if wasm_ld.exists() {
+        return Ok(WasmLinker {
+            path: wasm_ld,
+            needs_flavor: false,
+        });
+    }
+    if let Some(path) = find_on_path("rust-lld") {
+        return Ok(WasmLinker {
+            path,
+            needs_flavor: true,
+        });
+    }
+    let rust_lld = sysroot
+        .join("lib")
+        .join("rustlib")
+        .join(host_target())
+        .join("bin")
+        .join("rust-lld");
+    if rust_lld.exists() {
+        return Ok(WasmLinker {
+            path: rust_lld,
+            needs_flavor: true,
+        });
+    }
+    for candidate in rustup_wasm_linker_candidates() {
+        if candidate.path.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err("WASM backend requires `wasm-ld` or `rust-lld` from a Rust toolchain".to_string())
+}
+
+fn rustc_sysroot() -> Result<PathBuf, String> {
+    let output = Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .map_err(|error| format!("failed to invoke rustc to locate WASM linker: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to locate Rust sysroot for WASM linker:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&output.stdout).trim(),
+    ))
+}
+
+fn find_on_path(program: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|path| path.join(program))
+            .find(|path| path.exists())
+    })
+}
+
+fn rustup_wasm_linker_candidates() -> Vec<WasmLinker> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Vec::new();
+    };
+    let toolchains = PathBuf::from(home).join(".rustup").join("toolchains");
+    let Ok(entries) = fs::read_dir(toolchains) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for entry in entries.flatten() {
+        let root = entry.path();
+        let bin = root
+            .join("lib")
+            .join("rustlib")
+            .join(host_target())
+            .join("bin");
+        candidates.push(WasmLinker {
+            path: bin.join("gcc-ld").join("wasm-ld"),
+            needs_flavor: false,
+        });
+        candidates.push(WasmLinker {
+            path: bin.join("rust-lld"),
+            needs_flavor: true,
+        });
+    }
+    candidates
 }
 
 fn emit_native_runtime_llvm(runtime_c: &str, runtime_llvm_path: &Path) -> Result<(), String> {
@@ -397,16 +648,19 @@ pub(crate) fn host_target() -> String {
     format!("{arch}-{os}")
 }
 
-fn build_hash(target: &BuildTarget, source: &str, runtime_c: &str) -> u64 {
+fn build_hash(target: &BuildTarget, crate_type: CrateType, source: &str, runtime_c: &str) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
 
     let mut hash = FNV_OFFSET;
+    let crate_type = format!("{crate_type:?}");
     for byte in env!("CARGO_PKG_VERSION")
         .as_bytes()
         .iter()
         .chain(b":llvm-runtime-ir-v2:")
         .chain(target.triple().as_bytes())
+        .chain(b":")
+        .chain(crate_type.as_bytes())
         .chain(b":")
         .chain(source.as_bytes())
         .chain(runtime_c.as_bytes())
@@ -544,7 +798,13 @@ mod tests {
     }
 
     #[test]
-    fn wasm_build_target_reports_backend_gap() {
+    fn parses_supported_crate_types() {
+        assert_eq!(CrateType::from_str("bin"), Ok(CrateType::Bin));
+        assert_eq!(CrateType::from_str("cdylib"), Ok(CrateType::Cdylib));
+    }
+
+    #[test]
+    fn wasm_build_target_requires_cdylib() {
         let root = unique_temp_root("wasm-target");
         let path = root.join("main.flow");
         fs::write(
@@ -562,8 +822,7 @@ mod tests {
 
         let error = build_file_with_options(&path, &options).expect_err("wasm build should fail");
 
-        assert!(error.contains("build target `wasm32-unknown-unknown` is recognized"));
-        assert!(error.contains("WASM backend is not implemented yet"));
+        assert!(error.contains("WASM builds currently require `--crate-type cdylib`"));
     }
 
     fn unique_temp_root(prefix: &str) -> PathBuf {
