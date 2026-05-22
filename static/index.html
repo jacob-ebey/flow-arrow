@@ -305,6 +305,89 @@
         white-space: pre;
       }
 
+      code[class*="language-"],
+      pre[class*="language-"] {
+        color: var(--code);
+        text-shadow: none;
+      }
+
+      .editor-stack {
+        position: relative;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        background: var(--code-bg);
+      }
+
+      .source-highlight {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        padding: 16px;
+        pointer-events: none;
+      }
+
+      .source-highlight code {
+        display: inline-block;
+        min-width: 100%;
+        font: inherit;
+        line-height: inherit;
+        tab-size: inherit;
+      }
+
+      #source {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+        background: transparent;
+        color: transparent;
+        caret-color: var(--code);
+        -webkit-text-fill-color: transparent;
+      }
+
+      #source::selection {
+        background: rgba(22, 116, 95, 0.22);
+      }
+
+      .token.comment {
+        color: #7a8491;
+      }
+
+      .token.keyword,
+      .token.operator {
+        color: #7b4ab8;
+        font-weight: 650;
+      }
+
+      .token.function {
+        color: #0c6f7d;
+      }
+
+      .token.builtin,
+      .token.class-name {
+        color: #9b5b12;
+      }
+
+      .token.string {
+        color: #1b6f3a;
+      }
+
+      .token.number,
+      .token.boolean {
+        color: #9a3f62;
+      }
+
+      .token.variable {
+        color: #315bb3;
+      }
+
+      .token.punctuation {
+        color: #4b5563;
+      }
+
       .diagnostics {
         flex: 0 0 auto;
         max-height: min(220px, 28vh);
@@ -420,16 +503,19 @@
         <div class="workspace">
           <section class="pane" aria-label="FlowArrow source">
             <div class="pane-title">FlowArrow</div>
-            <textarea id="source" spellcheck="false"></textarea>
+            <div class="editor-stack">
+              <pre id="source-highlight" class="source-highlight" aria-hidden="true"><code class="language-flowarrow"></code></pre>
+              <textarea id="source" spellcheck="false" wrap="off"></textarea>
+            </div>
           </section>
           <div id="results" class="results" data-mode="javascript">
             <section class="pane" data-output="declarations" aria-label="TypeScript declarations output">
               <div id="types-output-title" class="pane-title">fib.d.ts</div>
-              <pre id="types-output" aria-live="polite"></pre>
+              <pre id="types-output" aria-live="polite"><code class="language-typescript"></code></pre>
             </section>
             <section class="pane" data-output="source" aria-label="JavaScript output">
               <div id="source-output-title" class="pane-title">fib.js</div>
-              <pre id="source-output" aria-live="polite"></pre>
+              <pre id="source-output" aria-live="polite"><code class="language-javascript"></code></pre>
             </section>
           </div>
         </div>
@@ -440,6 +526,14 @@
       </section>
     </main>
 
+    <script>
+      window.Prism = window.Prism || {};
+      window.Prism.manual = true;
+    </script>
+    <script src="https://unpkg.com/prismjs@1.29.0/components/prism-core.min.js"></script>
+    <script src="https://unpkg.com/prismjs@1.29.0/components/prism-clike.min.js"></script>
+    <script src="https://unpkg.com/prismjs@1.29.0/components/prism-javascript.min.js"></script>
+    <script src="https://unpkg.com/prismjs@1.29.0/components/prism-typescript.min.js"></script>
     <script type="module">
       const fibExample = `# Exports a pure Fibonacci node for the browser TypeScript demo.
 import std.math { add }
@@ -485,10 +579,14 @@ node score_job(n: Int) -> score: Int {
       const encoder = new TextEncoder();
       const status = document.querySelector("#status");
       const source = document.querySelector("#source");
+      const sourceHighlight = document.querySelector("#source-highlight");
+      const sourceHighlightCode = document.querySelector("#source-highlight code");
       const results = document.querySelector("#results");
       const typesOutput = document.querySelector("#types-output");
+      const typesOutputCode = document.querySelector("#types-output code");
       const typesOutputTitle = document.querySelector("#types-output-title");
       const sourceOutput = document.querySelector("#source-output");
+      const sourceOutputCode = document.querySelector("#source-output code");
       const sourceOutputTitle = document.querySelector("#source-output-title");
       const compileButton = document.querySelector("#compile");
       const resetButton = document.querySelector("#reset");
@@ -526,6 +624,65 @@ node score_job(n: Int) -> score: Int {
         return decoder.decode(new Uint8Array(wasm.memory.buffer, ptr, len));
       }
 
+      function configureSyntax() {
+        if (!window.Prism) return;
+        window.Prism.languages.flowarrow = {
+          comment: /#.*/,
+          string: {
+            pattern: /"(?:\\.|[^"\\])*"/,
+            greedy: true,
+          },
+          variable: /\$[A-Za-z_][\w]*/,
+          keyword:
+            /\b(?:as|extern|filter|fault|import|map|match|node|program|reduce|repeat|scan|type)\b/,
+          builtin:
+            /\b(?:Args|Bool|Bytes|Faultable|HttpListener|HttpRequest|HttpResponse|HttpServerConfig|Int|Real|Seq|SqliteConnection|SqliteRow|SqliteValue|Stream|Unit)\b/,
+          function: /\b[A-Za-z_]\w*(?=\s*(?:\(|\{|->))/,
+          number: /-?\b\d+(?:\.\d+)?\b/,
+          operator: /->|\$|[+*/%-]/,
+          punctuation: /[{}()[\],.:<>]/,
+        };
+      }
+
+      function highlight(code, language) {
+        const prism = window.Prism;
+        const grammar = prism?.languages?.[language];
+        if (!prism?.highlight || !grammar) return escapeHtml(code);
+        return prism.highlight(code, grammar, language);
+      }
+
+      function escapeHtml(code) {
+        return code.replace(/[&<>"']/g, (char) => {
+          switch (char) {
+            case "&":
+              return "&amp;";
+            case "<":
+              return "&lt;";
+            case ">":
+              return "&gt;";
+            case "\"":
+              return "&quot;";
+            default:
+              return "&#39;";
+          }
+        });
+      }
+
+      function setHighlightedOutput(codeElement, code, language) {
+        codeElement.className = `language-${language}`;
+        codeElement.innerHTML = highlight(code, language);
+      }
+
+      function updateSourceHighlight() {
+        sourceHighlightCode.innerHTML = `${highlight(source.value, "flowarrow")}\n`;
+        syncSourceScroll();
+      }
+
+      function syncSourceScroll() {
+        sourceHighlight.scrollTop = source.scrollTop;
+        sourceHighlight.scrollLeft = source.scrollLeft;
+      }
+
       function clearDiagnostics() {
         diagnostics.hidden = true;
         diagnostics.open = false;
@@ -540,8 +697,8 @@ node score_job(n: Int) -> score: Int {
       }
 
       function clearOutputs() {
-        typesOutput.textContent = "";
-        sourceOutput.textContent = "";
+        setHighlightedOutput(typesOutputCode, "", "typescript");
+        setHighlightedOutput(sourceOutputCode, "", target === "javascript" ? "javascript" : "typescript");
       }
 
       function compile() {
@@ -561,12 +718,20 @@ node score_job(n: Int) -> score: Int {
           } else if (target === "javascript") {
             const separator = result.indexOf("\0");
             clearDiagnostics();
-            typesOutput.textContent = separator >= 0 ? result.slice(0, separator) : "";
-            sourceOutput.textContent = separator >= 0 ? result.slice(separator + 1) : result;
+            setHighlightedOutput(
+              typesOutputCode,
+              separator >= 0 ? result.slice(0, separator) : "",
+              "typescript",
+            );
+            setHighlightedOutput(
+              sourceOutputCode,
+              separator >= 0 ? result.slice(separator + 1) : result,
+              "javascript",
+            );
           } else {
             clearDiagnostics();
-            typesOutput.textContent = "";
-            sourceOutput.textContent = result;
+            setHighlightedOutput(typesOutputCode, "", "typescript");
+            setHighlightedOutput(sourceOutputCode, result, "typescript");
           }
           setStatus(ok ? "Compiled" : "Compile error", ok ? "ok" : "error");
         } finally {
@@ -587,6 +752,7 @@ node score_job(n: Int) -> score: Int {
       function setExample(nextExample) {
         currentExample = nextExample;
         source.value = examples[nextExample].source;
+        updateSourceHighlight();
         for (const button of exampleButtons) {
           button.setAttribute("aria-selected", String(button.dataset.example === nextExample));
         }
@@ -603,14 +769,20 @@ node score_job(n: Int) -> score: Int {
       compileButton.addEventListener("click", compile);
       resetButton.addEventListener("click", () => {
         source.value = examples[currentExample].source;
+        updateSourceHighlight();
         compile();
       });
+      source.addEventListener("input", updateSourceHighlight);
+      source.addEventListener("scroll", syncSourceScroll);
       for (const button of exampleButtons) {
         button.addEventListener("click", () => setExample(button.dataset.example));
       }
       for (const button of targetButtons) {
         button.addEventListener("click", () => setTarget(button.dataset.target));
       }
+
+      configureSyntax();
+      updateSourceHighlight();
 
       try {
         wasm = await loadCompiler();
