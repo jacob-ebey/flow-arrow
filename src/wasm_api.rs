@@ -128,7 +128,7 @@ fn compile_typescript_artifacts_for_static(
         codegen::TypeScriptBackendOptions {
             worker_concurrency: true,
             worker_module_specifier: Some("./flowarrow.worker.mjs".to_string()),
-            gpu: false,
+            gpu: options.gpu,
         },
     )?;
     Ok((
@@ -162,7 +162,7 @@ fn compile_javascript_artifacts_for_static(
         codegen::TypeScriptBackendOptions {
             worker_concurrency: true,
             worker_module_specifier: Some("./flowarrow.worker.mjs".to_string()),
-            gpu: false,
+            gpu: options.gpu,
         },
     )?;
     Ok((
@@ -221,13 +221,13 @@ fn typescript_options(flags: u32) -> Result<TypeScriptCompileOptions, String> {
         1 => TypeScriptCompileMode::Library,
         _ => unreachable!(),
     };
-    if flags & !0b11 != 0 {
+    if flags & !0b111 != 0 {
         return Err(format!("unknown TypeScript compile option flags `{flags}`"));
     }
     Ok(TypeScriptCompileOptions {
         mode,
         worker_concurrency: flags & 0b10 != 0,
-        gpu: false,
+        gpu: flags & 0b100 != 0,
     })
 }
 

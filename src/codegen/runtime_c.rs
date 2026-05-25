@@ -181,6 +181,7 @@ impl<'a> TypedCodegen<'a> {
         Ok(out)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn emit_native_cdylib_c(&mut self) -> Result<NativeCdylibOutput, String> {
         let mut bodies = String::new();
         let uses_cv_runtime = self.uses_cv_runtime();
@@ -293,6 +294,7 @@ impl<'a> TypedCodegen<'a> {
         })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn emit_native_c_export_wrappers(&mut self, exports: &[String]) -> Result<String, String> {
         let mut out = String::new();
         for name in exports {
@@ -372,6 +374,7 @@ impl<'a> TypedCodegen<'a> {
             .ok_or_else(|| format!("missing declaration for native C export `{name}`"))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn native_c_header(&self) -> Result<String, String> {
         let mut registry = TypeRegistry::default();
         let mut prototypes = Vec::new();

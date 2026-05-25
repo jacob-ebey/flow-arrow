@@ -179,7 +179,8 @@
         font-weight: 680;
       }
 
-      .workers-toggle {
+      .workers-toggle,
+      .gpu-toggle {
         display: inline-flex;
         min-height: 34px;
         align-items: center;
@@ -192,7 +193,13 @@
         font: inherit;
       }
 
-      .workers-toggle input {
+      .workers-toggle:has(input:disabled),
+      .gpu-toggle:has(input:disabled) {
+        opacity: 0.55;
+      }
+
+      .workers-toggle input,
+      .gpu-toggle input {
         margin: 0;
       }
 
@@ -272,8 +279,7 @@
         border-left: 0;
       }
 
-      .results[data-mode="typescript"],
-      .results[data-mode="llvm"] {
+      .results[data-mode="typescript"] {
         grid-template-rows: minmax(0, 1fr);
       }
 
@@ -285,18 +291,15 @@
         grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
       }
 
-      .results[data-mode="typescript"] .pane[data-output="declarations"],
-      .results[data-mode="llvm"] .pane[data-output="declarations"] {
+      .results[data-mode="typescript"] .pane[data-output="declarations"] {
         display: none;
       }
 
-      .results[data-has-worker="false"] .pane[data-output="worker"],
-      .results[data-mode="llvm"] .pane[data-output="worker"] {
+      .results[data-has-worker="false"] .pane[data-output="worker"] {
         display: none;
       }
 
-      .results[data-mode="typescript"] .pane[data-output="source"],
-      .results[data-mode="llvm"] .pane[data-output="source"] {
+      .results[data-mode="typescript"] .pane[data-output="source"] {
         border-top: 0;
       }
 
@@ -539,12 +542,13 @@
         .target-toggle {
           display: grid;
           grid-column: 1 / -1;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           width: 100%;
         }
 
         .target-option,
         .workers-toggle,
+        .gpu-toggle,
         .icon-button,
         .compile {
           min-width: 0;
@@ -561,6 +565,7 @@
         }
 
         .workers-toggle,
+        .gpu-toggle,
         .icon-button,
         .compile {
           justify-content: center;
@@ -653,6 +658,7 @@
         .tab,
         .target-option,
         .workers-toggle,
+        .gpu-toggle,
         .icon-button,
         .compile {
           min-height: 36px;
@@ -687,11 +693,14 @@
             <div class="target-toggle" role="group" aria-label="Output target">
               <button class="target-option" type="button" data-target="javascript" aria-pressed="true">JavaScript</button>
               <button class="target-option" type="button" data-target="typescript" aria-pressed="false">TypeScript</button>
-              <button class="target-option" type="button" data-target="llvm" aria-pressed="false">LLVM IR</button>
             </div>
             <label class="workers-toggle">
               <input id="workers" type="checkbox" />
               Workers
+            </label>
+            <label class="gpu-toggle">
+              <input id="gpu" type="checkbox" />
+              GPU
             </label>
             <button id="reset" class="icon-button" type="button" title="Reset example" aria-label="Reset example">
               Reset
@@ -844,6 +853,7 @@ extern node browser_sample() -> message: Bytes {
       const workerOutputTitle = document.querySelector("#worker-output-title");
       const compileButton = document.querySelector("#compile");
       const workersToggle = document.querySelector("#workers");
+      const gpuToggle = document.querySelector("#gpu");
       const resetButton = document.querySelector("#reset");
       const diagnostics = document.querySelector("#diagnostics");
       const diagnosticsSummary = document.querySelector("#diagnostics-summary");
@@ -899,21 +909,6 @@ extern node browser_sample() -> message: Bytes {
           operator: /->|\$|[+*/%-]/,
           punctuation: /[{}()[\],.:<>]/,
         };
-        window.Prism.languages.llvm = {
-          comment: /;.*/,
-          string: {
-            pattern: /"(?:\\.|[^"\\])*"/,
-            greedy: true,
-          },
-          keyword:
-            /\b(?:addrspace|align|alloca|attributes|br|call|declare|define|dso_local|external|false|global|label|load|module|nonnull|null|opaque|private|ret|source_filename|store|target|to|true|type|unnamed_addr)\b/,
-          builtin: /\b(?:void|half|float|double|metadata|token|ptr|i\d+)\b/,
-          function: /@[A-Za-z_.$-][\w.$-]*/,
-          variable: /%[A-Za-z_.$-][\w.$-]*/,
-          number: /-?\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/i,
-          operator: /[-=*>]+/,
-          punctuation: /[{}()[\],.:]/,
-        };
       }
 
       function highlight(code, language) {
@@ -947,7 +942,7 @@ extern node browser_sample() -> message: Bytes {
 
       function setWorkerOutput(filename, code, language) {
         currentWorkerOutputName = filename;
-        results.dataset.hasWorker = filename && target !== "llvm" ? "true" : "false";
+        results.dataset.hasWorker = filename ? "true" : "false";
         workerOutputTitle.textContent = filename || "worker";
         setHighlightedOutput(workerOutputCode, code, language);
       }
@@ -1000,8 +995,6 @@ extern node browser_sample() -> message: Bytes {
         switch (target) {
           case "javascript":
             return "javascript";
-          case "llvm":
-            return "llvm";
           default:
             return "typescript";
         }
@@ -1013,33 +1006,13 @@ extern node browser_sample() -> message: Bytes {
         const ptr = wasm.flowarrow_alloc(bytes.length);
         new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
         try {
-          const compileLlvm = wasm.flowarrow_compile_llvm_ir ?? wasm.flowarrow_compile_llvm;
-          if (target === "llvm" && typeof compileLlvm !== "function") {
-            clearDiagnostics();
-            setHighlightedOutput(typesOutputCode, "", "typescript");
-            setHighlightedOutput(
-              sourceOutputCode,
-              [
-                "; LLVM IR output is not available in this browser compiler build.",
-                ";",
-                "; The static demo is running the wasm-hosted compiler, which currently exposes",
-                "; JavaScript and TypeScript generation. Use the native CLI with --emit-llvm",
-                "; to produce the intermediate .ll file for the same source.",
-              ].join("\n"),
-              "llvm",
-            );
-            setStatus("LLVM IR unavailable", "error");
-            return;
-          }
-
           const ok =
             (() => {
-              const options = 1 | (workersToggle.checked && target !== "llvm" ? 2 : 0);
+              const options =
+                1 | (workersToggle.checked ? 2 : 0) | (gpuToggle.checked ? 4 : 0);
               return target === "javascript"
                 ? wasm.flowarrow_compile_javascript_artifacts(ptr, bytes.length, options)
-                : target === "llvm"
-                  ? compileLlvm(ptr, bytes.length, 1)
-                  : wasm.flowarrow_compile_typescript(ptr, bytes.length, options);
+                : wasm.flowarrow_compile_typescript(ptr, bytes.length, options);
             })();
           const result = readResult();
           if (!ok) {
@@ -1061,11 +1034,6 @@ extern node browser_sample() -> message: Bytes {
               "javascript",
             );
             setWorkerOutput(worker?.filename ?? "", worker?.code ?? "", "javascript");
-          } else if (target === "llvm") {
-            clearDiagnostics();
-            setHighlightedOutput(typesOutputCode, "", "typescript");
-            setHighlightedOutput(sourceOutputCode, result, "llvm");
-            setWorkerOutput("", "", "javascript");
           } else {
             const parts = result.split("\0");
             const files = parseExtraFiles(parts, 1);
@@ -1105,7 +1073,7 @@ extern node browser_sample() -> message: Bytes {
       function updateOutputTitles() {
         const filename = examples[currentExample].filename;
         typesOutputTitle.textContent = `${filename}.d.ts`;
-        const extension = target === "javascript" ? "mjs" : target === "llvm" ? "ll" : "ts";
+        const extension = target === "javascript" ? "mjs" : "ts";
         sourceOutputTitle.textContent = `${filename}.${extension}`;
         if (!currentWorkerOutputName) {
           workerOutputTitle.textContent = "flowarrow.worker.mjs";
@@ -1114,6 +1082,7 @@ extern node browser_sample() -> message: Bytes {
 
       compileButton.addEventListener("click", compile);
       workersToggle.addEventListener("change", compile);
+      gpuToggle.addEventListener("change", compile);
       resetButton.addEventListener("click", () => {
         source.value = examples[currentExample].source;
         updateSourceHighlight();
