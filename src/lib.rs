@@ -786,8 +786,11 @@ mod tests {
 
         assert!(javascript.contains("export async function run_gpu_accumulator"));
         assert!(javascript.contains("faGpuRepeatVectorAccumF64"));
-        assert!(javascript.contains("left.push(left_value("));
-        assert!(javascript.contains("right.push(right_value("));
+        assert!(javascript.contains("new Float64Array(1024)"));
+        assert!(javascript.contains("left["));
+        assert!(javascript.contains("right["));
+        assert!(!javascript.contains("left.push"));
+        assert!(!javascript.contains("right.push"));
         assert!(javascript.contains("function left_value"));
         assert!(javascript.contains("function right_value"));
         assert!(!javascript.contains("async function left_value"));
@@ -799,6 +802,44 @@ mod tests {
         assert!(!javascript.contains("else if"));
         assert!(!javascript.contains("range_step: step cannot be zero"));
         assert!(!javascript.contains("await final_score"));
+    }
+
+    #[test]
+    fn typescript_range_map_real_batches_use_packed_numeric_sequences() {
+        let source = r#"
+            import std.math { add, rem }
+            import std.real { from_int }
+
+            extern node build_vectors() -> (left: Seq[Real], right: Seq[Real]) {
+                (1, 1025, 1) -> range_step      -> $indices
+                $indices     -> map left_value  -> $left
+                $indices     -> map right_value -> $right
+            }
+
+            node left_value(index: Int) -> value: Real {
+                ($index, 11)  -> rem      -> $wrapped
+                ($wrapped, 1) -> add      -> $offset
+                $offset       -> from_int -> $value
+            }
+
+            node right_value(index: Int) -> value: Real {
+                ($index, 3)    -> add      -> $shifted
+                ($shifted, 11) -> rem      -> $wrapped
+                ($wrapped, 1)  -> add      -> $offset
+                $offset        -> from_int -> $value
+            }
+        "#;
+
+        let typescript = compile_typescript_library_source(source).expect("typescript");
+
+        assert!(typescript.contains("new Float64Array(1024)"));
+        assert!(typescript.contains("as unknown"));
+        assert!(typescript.contains("as Array<number>"));
+        assert!(typescript.contains("left["));
+        assert!(typescript.contains("right["));
+        assert!(!typescript.contains("left.push"));
+        assert!(!typescript.contains("right.push"));
+        assert!(!typescript.contains("const indices = faRangeStep"));
     }
 
     #[test]

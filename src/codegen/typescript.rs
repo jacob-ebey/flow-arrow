@@ -81,9 +81,21 @@ struct SyncMapBatchItem {
     output_ty: Ty,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncMapOutputStorage {
+    Array,
+    Float64Array,
+}
+
 struct RangeSyncMapBatch {
     range_source: TypedEndpoint,
     items: Vec<SyncMapBatchItem>,
+}
+
+impl SyncMapBatchItem {
+    fn storage(&self) -> SyncMapOutputStorage {
+        sync_map_output_storage(&self.output_ty)
+    }
 }
 
 pub(super) struct TypeScriptEmitOutput {
@@ -1139,16 +1151,26 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         indent: &str,
     ) -> Result<(), String> {
         let range_ty = Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]);
-        self.emit_sync_map_batch_outputs(out, &batch.items, env, indent)?;
+        let typed_outputs = batch
+            .items
+            .iter()
+            .any(|item| item.storage() != SyncMapOutputStorage::Array);
         let item = self.next_temp();
 
         if let Some((start, stop, step)) = const_int_range_endpoint(&batch.range_source) {
             if step == 0 {
+                self.emit_sync_map_batch_outputs(out, &batch.items, env, indent, Some("0"))?;
                 out.push_str(&format!(
                     "{indent}throw new Error(\"range_step: step cannot be zero\");\n"
                 ));
             } else {
                 let cmp = if step > 0 { "<" } else { ">" };
+                let count = const_range_len(start, stop, step);
+                self.emit_sync_map_batch_outputs(out, &batch.items, env, indent, Some(&count))?;
+                let index = typed_outputs.then(|| self.next_temp());
+                if let Some(index) = &index {
+                    out.push_str(&format!("{indent}let {index} = 0;\n"));
+                }
                 out.push_str(&format!(
                     "{indent}for (let {item} = {start}n; {item} {cmp} {stop}n; {item} += {step}n) {{\n"
                 ));
@@ -1156,6 +1178,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                     out,
                     &batch.items,
                     &item,
+                    index.as_deref(),
                     &(indent.to_string() + "  "),
                 )?;
                 out.push_str(&format!("{indent}}}\n"));
@@ -1176,7 +1199,21 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         out.push_str(&format!(
             "{indent}  throw new Error(\"range_step: step cannot be zero\");\n"
         ));
-        out.push_str(&format!("{indent}}} else if ({range_tmp}[2] > 0n) {{\n"));
+        out.push_str(&format!("{indent}}}\n"));
+        let count = self.next_temp();
+        out.push_str(&format!("{indent}const {count} = {range_tmp}[2] > 0n\n"));
+        out.push_str(&format!(
+            "{indent}  ? {range_tmp}[0] >= {range_tmp}[1] ? 0 : Number((({range_tmp}[1] - {range_tmp}[0] - 1n) / {range_tmp}[2]) + 1n)\n"
+        ));
+        out.push_str(&format!(
+            "{indent}  : {range_tmp}[0] <= {range_tmp}[1] ? 0 : Number((({range_tmp}[0] - {range_tmp}[1] - 1n) / -{range_tmp}[2]) + 1n);\n"
+        ));
+        self.emit_sync_map_batch_outputs(out, &batch.items, env, indent, Some(&count))?;
+        let index = typed_outputs.then(|| self.next_temp());
+        if let Some(index) = &index {
+            out.push_str(&format!("{indent}let {index} = 0;\n"));
+        }
+        out.push_str(&format!("{indent}if ({range_tmp}[2] > 0n) {{\n"));
         out.push_str(&format!(
             "{indent}  for (let {item} = {range_tmp}[0]; {item} < {range_tmp}[1]; {item} += {range_tmp}[2]) {{\n"
         ));
@@ -1184,6 +1221,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             out,
             &batch.items,
             &item,
+            index.as_deref(),
             &(indent.to_string() + "    "),
         )?;
         out.push_str(&format!("{indent}  }}\n"));
@@ -1195,6 +1233,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             out,
             &batch.items,
             &item,
+            index.as_deref(),
             &(indent.to_string() + "    "),
         )?;
         out.push_str(&format!("{indent}  }}\n"));
@@ -1227,13 +1266,32 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             ));
             source.code = source_tmp;
         }
-        self.emit_sync_map_batch_outputs(out, &items, env, indent)?;
+        self.emit_sync_map_batch_outputs(
+            out,
+            &items,
+            env,
+            indent,
+            Some(&format!("{}.length", source.code)),
+        )?;
         let item = self.next_temp();
+        let typed_outputs = items
+            .iter()
+            .any(|item| item.storage() != SyncMapOutputStorage::Array);
+        let index = typed_outputs.then(|| self.next_temp());
+        if let Some(index) = &index {
+            out.push_str(&format!("{indent}let {index} = 0;\n"));
+        }
         out.push_str(&format!(
             "{indent}for (const {item} of {}) {{\n",
             source.code
         ));
-        self.emit_sync_map_batch_loop_body(out, &items, &item, &(indent.to_string() + "  "))?;
+        self.emit_sync_map_batch_loop_body(
+            out,
+            &items,
+            &item,
+            index.as_deref(),
+            &(indent.to_string() + "  "),
+        )?;
         out.push_str(&format!("{indent}}}\n"));
         self.bind_sync_map_batch_outputs(&items, env)?;
         Ok(())
@@ -1245,15 +1303,27 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         items: &[SyncMapBatchItem],
         _env: &HashMap<String, TsValue>,
         indent: &str,
+        length: Option<&str>,
     ) -> Result<(), String> {
         for item in items {
             let target = ts_ident(&item.target);
             if !self.try_reserve_ident(&target) {
                 return Err(format!("value `{}` is bound more than once", item.target));
             }
+            let initializer = match (item.storage(), length) {
+                (SyncMapOutputStorage::Float64Array, Some(length)) => {
+                    format!(
+                        "new Float64Array({length}) as unknown as {}",
+                        ts_type(&item.output_ty)
+                    )
+                }
+                (SyncMapOutputStorage::Float64Array, None) | (SyncMapOutputStorage::Array, _) => {
+                    "[]".to_string()
+                }
+            };
             out.push_str(&format!(
-                "{indent}const {target}: {} = [];\n",
-                ts_type(&item.output_ty)
+                "{indent}const {target}: {} = {initializer};\n",
+                ts_type(&item.output_ty),
             ));
         }
         Ok(())
@@ -1264,6 +1334,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         out: &mut String,
         items: &[SyncMapBatchItem],
         item_name: &str,
+        index_name: Option<&str>,
         indent: &str,
     ) -> Result<(), String> {
         for item in items {
@@ -1273,11 +1344,28 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 ts_value(item_name.to_string(), item.item_ty.clone()),
                 indent,
             )?;
-            out.push_str(&format!(
-                "{indent}{}.push({});\n",
-                ts_ident(&item.target),
-                mapped.code
-            ));
+            match item.storage() {
+                SyncMapOutputStorage::Array => {
+                    out.push_str(&format!(
+                        "{indent}{}.push({});\n",
+                        ts_ident(&item.target),
+                        mapped.code
+                    ));
+                }
+                SyncMapOutputStorage::Float64Array => {
+                    let index = index_name.ok_or_else(|| {
+                        "typed synchronous map output requires an index".to_string()
+                    })?;
+                    out.push_str(&format!(
+                        "{indent}{}[{index}] = {};\n",
+                        ts_ident(&item.target),
+                        mapped.code
+                    ));
+                }
+            }
+        }
+        if let Some(index) = index_name {
+            out.push_str(&format!("{indent}{index}++;\n"));
         }
         Ok(())
     }
@@ -2950,6 +3038,31 @@ fn const_int_endpoint(endpoint: &TypedEndpoint) -> Option<i64> {
     }
 }
 
+fn const_range_len(start: i64, stop: i64, step: i64) -> String {
+    if step == 0 {
+        return "0".to_string();
+    }
+    let len = if step > 0 {
+        if start >= stop {
+            0
+        } else {
+            ((stop - start - 1) / step) + 1
+        }
+    } else if start <= stop {
+        0
+    } else {
+        ((start - stop - 1) / -step) + 1
+    };
+    len.to_string()
+}
+
+fn sync_map_output_storage(ty: &Ty) -> SyncMapOutputStorage {
+    match ty {
+        Ty::Seq(item) if matches!(item.as_ref(), Ty::Real) => SyncMapOutputStorage::Float64Array,
+        _ => SyncMapOutputStorage::Array,
+    }
+}
+
 fn ts_value(code: impl Into<String>, ty: Ty) -> TsValue {
     TsValue {
         code: code.into(),
@@ -3905,8 +4018,8 @@ async function faGpuMapI32(input: bigint[], _kernelId: string, wgsl: string): Pr
 
 async function faGpuMapF32(input: number[], _kernelId: string, wgsl: string): Promise<number[]> {
   const runtime = await faGpuRuntime();
-  const mapped = await runtime.fa_gpu_map_f64(wgsl, new Float64Array(input));
-  return Array.from(mapped);
+  const mapped = await runtime.fa_gpu_map_f64(wgsl, faGpuFloat64Input(input));
+  return mapped as unknown as number[];
 }
 
 async function faGpuReduceI32(input: bigint[], op: string, identity: bigint): Promise<bigint> {
@@ -3921,7 +4034,7 @@ async function faGpuReduceI32(input: bigint[], op: string, identity: bigint): Pr
 
 async function faGpuReduceF32(input: number[], op: string, identity: number): Promise<number> {
   const runtime = await faGpuRuntime();
-  return await runtime.fa_gpu_reduce_f64(faGpuReduceOp(op), new Float64Array(input), identity);
+  return await runtime.fa_gpu_reduce_f64(faGpuReduceOp(op), faGpuFloat64Input(input), identity);
 }
 
 async function faGpuRangeMapReduceI32(
@@ -3952,8 +4065,8 @@ async function faGpuRepeatVectorAccumF64(
 ): Promise<number> {
   return await (await faGpuRuntime()).fa_gpu_repeat_vector_accum_f64(
     wgsl,
-    new Float64Array(left),
-    new Float64Array(right),
+    faGpuFloat64Input(left),
+    faGpuFloat64Input(right),
     score,
     faGpuAssertI32(iterations),
   );
@@ -3994,6 +4107,10 @@ function faGpuFlattenMatrix(input: number[][], label: string): { values: Float64
     values.set(input[row], row * cols);
   }
   return { values, rows, cols };
+}
+
+function faGpuFloat64Input(input: number[] | Float64Array): Float64Array {
+  return input instanceof Float64Array ? input : new Float64Array(input);
 }
 
 "#;
