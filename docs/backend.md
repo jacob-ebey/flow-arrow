@@ -280,16 +280,15 @@ It also recognizes `range_step -> map Int -> reduce` groups and lowers them as
 GPU-resident virtual-range reductions, so the host does not materialize the
 range or mapped sequence when every downstream consumer is reducible on the GPU.
 The planner lowers map regions to WGSL with explicit storage buffers and a
-workgroup dispatch shape. The TypeScript and JavaScript backends emit WebGPU
-host code that compiles and dispatches the generated WGSL through
-`navigator.gpu`, and reduction lowering emits WebGPU reduction passes.
-GPU-targeted artifacts require WebGPU at runtime and fail if a device cannot be
-acquired. Native/LLVM builds lower eligible maps, reductions, virtual range
-reductions, and generated repeat accumulator programs to direct calls into a
-generated wgpu runtime library. That runtime is bundled next to the native
-executable, requires a native adapter at startup, compiles the WGSL kernels
-through wgpu, and aborts instead of falling back to CPU execution when no GPU
-device is available.
+workgroup dispatch shape. GPU-targeted artifacts require a GPU at runtime and
+fail if a device cannot be acquired. Native/LLVM builds lower eligible maps,
+reductions, virtual range reductions, and generated repeat accumulator programs
+to direct calls into a generated Rust `wgpu` runtime library. TypeScript and
+JavaScript GPU builds compile that same runtime source to a wasm-bindgen
+WebGPU module (`flowarrow_gpu_runtime.js` plus
+`flowarrow_gpu_runtime_bg.wasm`) and emit only thin async calls into that
+runtime. Both packaging paths compile and dispatch WGSL through `wgpu`, and
+neither path falls back to CPU execution when GPU execution is requested.
 
 ### 2.5 WASM-hosted TypeScript compiler
 

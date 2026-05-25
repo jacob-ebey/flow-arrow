@@ -35,5 +35,6 @@ cd examples/gpu-accumulator-benchmark
 npx serve
 ```
 
-The page imports `build/javascript/lib.mjs`, calls the exported
+The page imports `build/javascript/lib.mjs`, which loads the generated
+`flowarrow_gpu_runtime_bg.wasm` wgpu runtime, calls the exported
 `run_gpu_accumulator` node, and compares the score with the expected value.

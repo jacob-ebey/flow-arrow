@@ -351,6 +351,9 @@ fn build_typescript(
         fs::write(&path, file.source)
             .map_err(|error| format!("failed to write `{}`: {error}", path.display()))?;
     }
+    if options.gpu {
+        build_wasm_gpu_runtime(&build_dir)?;
+    }
     Ok(BuildOutput {
         build_dir,
         executable: artifact,
@@ -399,6 +402,9 @@ fn build_javascript(
         let path = build_dir.join(file.path);
         fs::write(&path, file.source)
             .map_err(|error| format!("failed to write `{}`: {error}", path.display()))?;
+    }
+    if options.gpu {
+        build_wasm_gpu_runtime(&build_dir)?;
     }
     Ok(BuildOutput {
         build_dir,
@@ -824,7 +830,7 @@ fn build_native_gpu_runtime(plan: &BuildPlan) -> Result<NativeGpuRuntime, String
     let source = src_dir.join("lib.rs");
     fs::write(&manifest, native_gpu_runtime_manifest())
         .map_err(|error| format!("failed to write `{}`: {error}", manifest.display()))?;
-    fs::write(&source, native_gpu_runtime_source())
+    fs::write(&source, gpu_runtime_source())
         .map_err(|error| format!("failed to write `{}`: {error}", source.display()))?;
 
     let output = Command::new("cargo")
@@ -881,6 +887,111 @@ fn build_native_gpu_runtime(plan: &BuildPlan) -> Result<NativeGpuRuntime, String
     Ok(NativeGpuRuntime {
         link_dir: plan.build_dir.clone(),
         link_name: "flowarrow_gpu_runtime",
+    })
+}
+
+fn build_wasm_gpu_runtime(build_dir: &Path) -> Result<(), String> {
+    let runtime_dir = build_dir.join(".cache").join("wasm-gpu-runtime");
+    let src_dir = runtime_dir.join("src");
+    fs::create_dir_all(&src_dir)
+        .map_err(|error| format!("failed to create `{}`: {error}", src_dir.display()))?;
+    let manifest = runtime_dir.join("Cargo.toml");
+    let source = src_dir.join("lib.rs");
+    fs::write(&manifest, wasm_gpu_runtime_manifest())
+        .map_err(|error| format!("failed to write `{}`: {error}", manifest.display()))?;
+    fs::write(&source, gpu_runtime_source())
+        .map_err(|error| format!("failed to write `{}`: {error}", source.display()))?;
+
+    let output = Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .arg("--target")
+        .arg("wasm32-unknown-unknown")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .output()
+        .map_err(|error| format!("failed to invoke cargo for WebGPU WASM runtime: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "WebGPU WASM runtime build failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let wasm = runtime_dir
+        .join("target")
+        .join("wasm32-unknown-unknown")
+        .join("release")
+        .join("flowarrow_gpu_runtime.wasm");
+    let output = run_wasm_bindgen(&runtime_dir, build_dir, &wasm)?;
+    if !output.status.success() {
+        return Err(format!(
+            "wasm-bindgen failed for WebGPU runtime:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
+fn run_wasm_bindgen(
+    runtime_dir: &Path,
+    build_dir: &Path,
+    wasm: &Path,
+) -> Result<std::process::Output, String> {
+    let args = [
+        "--target".to_string(),
+        "web".to_string(),
+        "--out-dir".to_string(),
+        build_dir.to_string_lossy().into_owned(),
+        "--out-name".to_string(),
+        "flowarrow_gpu_runtime".to_string(),
+        wasm.to_string_lossy().into_owned(),
+    ];
+    match Command::new("wasm-bindgen").args(&args).output() {
+        Ok(output) => Ok(output),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            run_cached_wasm_bindgen_cli(runtime_dir, &args)
+        }
+        Err(error) => Err(format!(
+            "failed to invoke wasm-bindgen for WebGPU runtime: {error}"
+        )),
+    }
+}
+
+fn run_cached_wasm_bindgen_cli(
+    runtime_dir: &Path,
+    args: &[String],
+) -> Result<std::process::Output, String> {
+    let install_dir = runtime_dir.join("wasm-bindgen-cli");
+    let bin = install_dir
+        .join("bin")
+        .join(format!("wasm-bindgen{}", std::env::consts::EXE_SUFFIX));
+    if !bin.exists() {
+        let output = Command::new("cargo")
+            .arg("install")
+            .arg("wasm-bindgen-cli")
+            .arg("--version")
+            .arg("0.2.122")
+            .arg("--locked")
+            .arg("--root")
+            .arg(&install_dir)
+            .output()
+            .map_err(|error| format!("failed to install wasm-bindgen CLI: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "failed to install wasm-bindgen CLI for WebGPU runtime:\n{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+    Command::new(&bin).args(args).output().map_err(|error| {
+        format!(
+            "failed to invoke cached wasm-bindgen CLI `{}`: {error}",
+            bin.display()
+        )
     })
 }
 
@@ -1164,15 +1275,40 @@ crate-type = [\"cdylib\"]\n\
 wgpu = \"29.0.3\"\n"
 }
 
-fn native_gpu_runtime_source() -> &'static str {
-    r##"use std::ffi::CStr;
+fn wasm_gpu_runtime_manifest() -> &'static str {
+    "[package]\n\
+name = \"flowarrow_gpu_runtime\"\n\
+version = \"0.1.0\"\n\
+edition = \"2024\"\n\
+\n\
+[lib]\n\
+crate-type = [\"cdylib\"]\n\
+\n\
+[dependencies]\n\
+wasm-bindgen = \"0.2.122\"\n\
+wasm-bindgen-futures = \"0.4.72\"\n\
+wgpu = \"29.0.3\"\n"
+}
+
+fn gpu_runtime_source() -> &'static str {
+    r##"#[cfg(not(target_arch = "wasm32"))]
+use std::ffi::CStr;
 use std::future::Future;
+#[cfg(not(target_arch = "wasm32"))]
 use std::os::raw::c_char;
 use std::slice;
+#[cfg(target_arch = "wasm32")]
+use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::task::{Context, Poll, Wake, Waker};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 
 struct GpuRuntime {
@@ -1193,13 +1329,25 @@ struct GpuMatrixInput {
     values: Vec<f32>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 static GPU: OnceLock<Mutex<GpuRuntime>> = OnceLock::new();
 
+#[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn fa_gpu_require_device() {
     let _ = runtime();
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_require_device() -> Result<(), JsValue> {
+    GpuRuntime::new()
+        .await
+        .map(|_| ())
+        .map_err(|error| JsValue::from_str(&error))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fa_gpu_map_i64(
     wgsl: *const c_char,
@@ -1231,6 +1379,16 @@ pub unsafe extern "C" fn fa_gpu_map_i64(
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_map_i32(wgsl: String, input: Vec<i32>) -> Result<Vec<i32>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.map_i32(&wgsl, &input).await)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fa_gpu_map_f64(
     wgsl: *const c_char,
@@ -1258,6 +1416,16 @@ pub unsafe extern "C" fn fa_gpu_map_f64(
     runtime.map_f64(&wgsl, input, output);
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_map_f64(wgsl: String, input: Vec<f64>) -> Result<Vec<f64>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.map_f64(&wgsl, &input).await)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fa_gpu_reduce_i64(
     op: u32,
@@ -1280,6 +1448,20 @@ pub unsafe extern "C" fn fa_gpu_reduce_i64(
     i64::from(runtime.reduce_i32(op, &input_i32, checked_i32(identity)))
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_reduce_i32(
+    op: u32,
+    input: Vec<i32>,
+    identity: i32,
+) -> Result<i32, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.reduce_i32(op, &input, identity).await)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fa_gpu_reduce_f64(
     op: u32,
@@ -1302,6 +1484,21 @@ pub unsafe extern "C" fn fa_gpu_reduce_f64(
     f64::from(runtime.reduce_f32(op, &input_f32, identity as f32))
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_reduce_f64(
+    op: u32,
+    input: Vec<f64>,
+    identity: f64,
+) -> Result<f64, JsValue> {
+    let input_f32 = input.iter().map(|value| *value as f32).collect::<Vec<_>>();
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(f64::from(runtime.reduce_f32(op, &input_f32, identity as f32).await))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fa_gpu_range_map_reduce_i64(
     map_expr: *const c_char,
@@ -1325,6 +1522,25 @@ pub unsafe extern "C" fn fa_gpu_range_map_reduce_i64(
     ))
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_range_map_reduce_i32(
+    map_expr: String,
+    start: i32,
+    stop: i32,
+    step: i32,
+    op: u32,
+    identity: i32,
+) -> Result<i32, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime
+        .range_map_reduce_i32(&map_expr, start, stop, step, op, identity)
+        .await)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fa_gpu_repeat_vector_accum_f64(
     wgsl: *const c_char,
@@ -1369,6 +1585,7 @@ pub unsafe extern "C" fn fa_gpu_repeat_vector_accum_f64(
     score + iterations as f64 * f64::from(delta)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fa_gpu_repeat_matrix_accum_f64(
     wgsl: *const c_char,
@@ -1445,6 +1662,7 @@ pub unsafe extern "C" fn fa_gpu_repeat_matrix_accum_f64(
     score + iterations as f64 * f64::from(delta)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn read_wgsl(wgsl: *const c_char) -> String {
     if wgsl.is_null() {
         fail("FlowArrow GPU target received a null WGSL kernel");
@@ -1455,6 +1673,7 @@ fn read_wgsl(wgsl: *const c_char) -> String {
         .to_string()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn runtime() -> &'static Mutex<GpuRuntime> {
     GPU.get_or_init(|| {
         let runtime = block_on(GpuRuntime::new()).unwrap_or_else(|error| {
@@ -1464,6 +1683,7 @@ fn runtime() -> &'static Mutex<GpuRuntime> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl GpuRuntime {
     async fn new() -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -1969,6 +2189,423 @@ impl GpuRuntime {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+impl GpuRuntime {
+    async fn new() -> Result<Self, String> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(Self { device, queue })
+    }
+
+    async fn map_i32(&mut self, wgsl: &str, input: &[i32]) -> Vec<i32> {
+        let bytes = self.dispatch_map(wgsl, i32_as_bytes(input), input.len()).await;
+        bytes_as_i32(&bytes).to_vec()
+    }
+
+    async fn map_f64(&mut self, wgsl: &str, input: &[f64]) -> Vec<f64> {
+        if input.is_empty() {
+            return Vec::new();
+        }
+        let input_f32 = input.iter().map(|value| *value as f32).collect::<Vec<_>>();
+        let mapped = self.dispatch_map(wgsl, f32_as_bytes(&input_f32), input.len()).await;
+        bytes_as_f32(&mapped)
+            .iter()
+            .map(|value| f64::from(*value))
+            .collect()
+    }
+
+    async fn dispatch_map(&mut self, wgsl: &str, input_bytes: &[u8], len: usize) -> Vec<u8> {
+        if len == 0 {
+            return Vec::new();
+        }
+        let input_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.input"),
+            contents: input_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let byte_len = input_bytes.len() as wgpu::BufferAddress;
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("flowarrow.gpu.output"),
+            size: byte_len,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let params_buffer = self.map_params_buffer(len);
+
+        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("flowarrow.gpu.kernel"),
+            source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+        });
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("flowarrow.gpu.pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: None,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flowarrow.gpu.bind_group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("flowarrow.gpu.encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("flowarrow.gpu.pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(len.div_ceil(64) as u32, 1, 1);
+        }
+        let readback = self.readback_buffer(byte_len);
+        encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback, 0, byte_len);
+        self.queue.submit(Some(encoder.finish()));
+        self.read_buffer(&readback).await
+    }
+
+    async fn reduce_i32(&mut self, op: u32, input: &[i32], identity: i32) -> i32 {
+        let bytes = self
+            .dispatch_reduce("i32", op, i32_as_bytes(input), input.len(), identity)
+            .await;
+        bytes_as_i32(&bytes)[0]
+    }
+
+    async fn reduce_f32(&mut self, op: u32, input: &[f32], identity: f32) -> f32 {
+        let bytes = self
+            .dispatch_reduce("f32", op, f32_as_bytes(input), input.len(), identity)
+            .await;
+        bytes_as_f32(&bytes)[0]
+    }
+
+    async fn range_map_reduce_i32(
+        &mut self,
+        map_expr: &str,
+        start: i32,
+        stop: i32,
+        step: i32,
+        op: u32,
+        identity: i32,
+    ) -> i32 {
+        let len = range_count(start, stop, step);
+        if len == 0 {
+            return identity;
+        }
+        let output_len = (len + 1).div_ceil(2);
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("flowarrow.gpu.range_reduce.output"),
+            size: (output_len * 4).max(4) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let params_buffer = self.range_reduce_params_buffer(start, step, len, op, identity);
+        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("flowarrow.gpu.range_reduce.kernel"),
+            source: wgpu::ShaderSource::Wgsl(range_map_reduce_wgsl(map_expr).into()),
+        });
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("flowarrow.gpu.range_reduce.pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flowarrow.gpu.range_reduce.bind_group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("flowarrow.gpu.range_reduce.encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("flowarrow.gpu.range_reduce.pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(output_len.div_ceil(64) as u32, 1, 1);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        let bytes = self
+            .dispatch_reduce_buffer("i32", op, output_buffer, output_len, identity, false)
+            .await;
+        bytes_as_i32(&bytes)[0]
+    }
+
+    async fn dispatch_reduce<T: GpuParam>(
+        &mut self,
+        scalar: &str,
+        op: u32,
+        input_bytes: &[u8],
+        len: usize,
+        identity: T,
+    ) -> Vec<u8> {
+        if len == 0 {
+            return identity.to_bytes().to_vec();
+        }
+        let input_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.reduce.input"),
+            contents: input_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        self.dispatch_reduce_buffer(scalar, op, input_buffer, len, identity, true)
+            .await
+    }
+
+    async fn dispatch_reduce_buffer<T: GpuParam>(
+        &mut self,
+        scalar: &str,
+        op: u32,
+        input_buffer: wgpu::Buffer,
+        len: usize,
+        identity: T,
+        include_initial_identity: bool,
+    ) -> Vec<u8> {
+        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("flowarrow.gpu.reduce.kernel"),
+            source: wgpu::ShaderSource::Wgsl(reduce_wgsl(scalar).into()),
+        });
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("flowarrow.gpu.reduce.pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let mut current_len = len;
+        let mut current_buffer = input_buffer;
+        let mut keep_alive = Vec::new();
+        let mut include_identity = include_initial_identity;
+        while current_len > 1 || include_identity {
+            let virtual_len = current_len + usize::from(include_identity);
+            let output_len = virtual_len.div_ceil(2);
+            let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("flowarrow.gpu.reduce.output"),
+                size: (output_len * 4).max(4) as wgpu::BufferAddress,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let params_buffer =
+                self.reduce_params_buffer(op, current_len, identity, include_identity);
+            let bind_group_layout = pipeline.get_bind_group_layout(0);
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("flowarrow.gpu.reduce.bind_group"),
+                layout: &bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: current_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: output_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: params_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("flowarrow.gpu.reduce.encoder"),
+                });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("flowarrow.gpu.reduce.pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(output_len.div_ceil(64) as u32, 1, 1);
+            }
+            self.queue.submit(Some(encoder.finish()));
+            keep_alive.push(current_buffer);
+            keep_alive.push(params_buffer);
+            current_buffer = output_buffer;
+            current_len = output_len;
+            include_identity = false;
+        }
+        let readback = self.readback_buffer(4);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("flowarrow.gpu.reduce.readback.encoder"),
+            });
+        encoder.copy_buffer_to_buffer(&current_buffer, 0, &readback, 0, 4);
+        self.queue.submit(Some(encoder.finish()));
+        self.read_buffer(&readback).await
+    }
+
+    fn map_params_buffer(&self, len: usize) -> wgpu::Buffer {
+        let mut params = [0u8; 16];
+        params[0..4].copy_from_slice(&(len as u32).to_le_bytes());
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.map.params"),
+            contents: &params,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    }
+
+    fn reduce_params_buffer<T: GpuParam>(
+        &self,
+        op: u32,
+        len: usize,
+        identity: T,
+        include_identity: bool,
+    ) -> wgpu::Buffer {
+        let mut params = [0u8; 16];
+        params[0..4].copy_from_slice(&(len as u32).to_le_bytes());
+        params[4..8].copy_from_slice(&op.to_le_bytes());
+        params[8..12].copy_from_slice(&identity.to_bytes());
+        params[12..16].copy_from_slice(&(u32::from(include_identity)).to_le_bytes());
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.reduce.params"),
+            contents: &params,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    }
+
+    fn range_reduce_params_buffer(
+        &self,
+        start: i32,
+        step: i32,
+        len: usize,
+        op: u32,
+        identity: i32,
+    ) -> wgpu::Buffer {
+        let mut params = [0u8; 32];
+        params[0..4].copy_from_slice(&start.to_le_bytes());
+        params[4..8].copy_from_slice(&step.to_le_bytes());
+        params[8..12].copy_from_slice(&(len as u32).to_le_bytes());
+        params[12..16].copy_from_slice(&op.to_le_bytes());
+        params[16..20].copy_from_slice(&identity.to_le_bytes());
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.range_reduce.params"),
+            contents: &params,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    }
+
+    fn readback_buffer(&self, byte_len: wgpu::BufferAddress) -> wgpu::Buffer {
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("flowarrow.gpu.readback"),
+            size: byte_len,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        })
+    }
+
+    async fn read_buffer(&mut self, readback: &wgpu::Buffer) -> Vec<u8> {
+        let slice = readback.slice(..);
+        map_buffer_async(slice).await.unwrap_or_else(|error| {
+            fail(&format!("FlowArrow GPU target failed to map readback: {error}"));
+        });
+        let mapped = slice.get_mapped_range();
+        let out = mapped.to_vec();
+        drop(mapped);
+        readback.unmap();
+        out
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct MapReadFuture {
+    state: Rc<RefCell<MapReadState>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+struct MapReadState {
+    result: Option<Result<(), wgpu::BufferAsyncError>>,
+    waker: Option<Waker>,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn map_buffer_async(slice: wgpu::BufferSlice<'_>) -> MapReadFuture {
+    let state = Rc::new(RefCell::new(MapReadState {
+        result: None,
+        waker: None,
+    }));
+    let callback_state = Rc::clone(&state);
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let mut state = callback_state.borrow_mut();
+        state.result = Some(result);
+        if let Some(waker) = state.waker.take() {
+            waker.wake();
+        }
+    });
+    MapReadFuture { state }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Future for MapReadFuture {
+    type Output = Result<(), wgpu::BufferAsyncError>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Self::Output> {
+        let mut state = self.state.borrow_mut();
+        if let Some(result) = state.result.take() {
+            Poll::Ready(result)
+        } else {
+            state.waker = Some(context.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
 trait GpuParam: Copy {
     fn to_bytes(self) -> [u8; 4];
 }
@@ -2168,6 +2805,7 @@ fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
 }
 "#;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn block_on<F: Future>(future: F) -> F::Output {
     struct ThreadWaker(thread::Thread);
 
@@ -2270,7 +2908,7 @@ fn build_hash(
         .chain(source.as_bytes())
         .chain(runtime_c.as_bytes())
         .chain(if options.gpu {
-            native_gpu_runtime_source().as_bytes()
+            gpu_runtime_source().as_bytes()
         } else {
             b""
         })

@@ -560,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn typescript_gpu_lowering_emits_webgpu_map_kernel() {
+    fn typescript_gpu_lowering_uses_wasm_wgpu_runtime() {
         let source = r#"
             import std.math { add, mul }
 
@@ -587,7 +587,10 @@ mod tests {
         assert!(emitted.contains("async function square_plus_one_all"));
         assert!(emitted.contains("faGpuMapF32"));
         assert!(emitted.contains("fa_gpu_map_square_plus_one"));
-        assert!(emitted.contains("createShaderModule"));
+        assert!(emitted.contains("flowarrow_gpu_runtime.js"));
+        assert!(emitted.contains("fa_gpu_map_f64"));
+        assert!(!emitted.contains("createShaderModule"));
+        assert!(!emitted.contains("GPUBufferUsage"));
         assert!(emitted.contains("@compute @workgroup_size(64)"));
     }
 
@@ -606,7 +609,8 @@ mod tests {
         assert!(emitted.contains("faGpuRangeMapReduceI32"));
         assert!(emitted.contains("fa_gpu_map_score_job"));
         assert!(emitted.contains("fa_gpu_map_weight_job"));
-        assert!(emitted.contains("faGpuRangeMapReduceWgsl"));
+        assert!(emitted.contains("fa_gpu_range_map_reduce_i32"));
+        assert!(!emitted.contains("faGpuRangeMapReduceWgsl"));
         assert!(!emitted.contains("const jobs = faRangeStep"));
         assert!(!emitted.contains("await faGpuMapI32"));
         assert!(!emitted.contains("await faGpuReduceI32"));

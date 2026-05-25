@@ -106,7 +106,7 @@ impl<'a> TypeScriptCodegen<'a> {
         self.emit_foreign_js_imports(&mut out);
         out.push_str(TS_PRELUDE);
         if self.options.gpu {
-            out.push_str(TS_GPU_PRELUDE);
+            out.push_str(TS_GPU_WASM_PRELUDE);
         }
         self.emit_foreign_js_wrappers(&mut out)?;
 
@@ -3132,20 +3132,35 @@ function faRangeStep(input: [f0: bigint, f1: bigint, f2: bigint]): bigint[] {
 
 "#;
 
-const TS_GPU_PRELUDE: &str = r#"
-let faGpuDevicePromise: Promise<any> | null = null;
+const TS_GPU_WASM_PRELUDE: &str = r#"
+type FaGpuRuntimeModule = {
+  default: (moduleOrPath?: RequestInfo | URL | Response | BufferSource | WebAssembly.Module) => Promise<any>;
+  fa_gpu_require_device: () => Promise<void>;
+  fa_gpu_map_i32: (wgsl: string, input: Int32Array) => Promise<Int32Array>;
+  fa_gpu_map_f64: (wgsl: string, input: Float64Array) => Promise<Float64Array>;
+  fa_gpu_reduce_i32: (op: number, input: Int32Array, identity: number) => Promise<number>;
+  fa_gpu_reduce_f64: (op: number, input: Float64Array, identity: number) => Promise<number>;
+  fa_gpu_range_map_reduce_i32: (
+    mapExpr: string,
+    start: number,
+    stop: number,
+    step: number,
+    op: number,
+    identity: number,
+  ) => Promise<number>;
+};
 
-async function faGpuDevice(): Promise<any> {
-  if (faGpuDevicePromise !== null) return faGpuDevicePromise;
-  faGpuDevicePromise = (async () => {
-    const navigatorLike = (globalThis as any).navigator;
-    const gpu = navigatorLike?.gpu;
-    if (!gpu) throw new Error("FlowArrow GPU target requires WebGPU support");
-    const adapter = await gpu.requestAdapter();
-    if (!adapter) throw new Error("FlowArrow GPU target could not acquire a WebGPU adapter");
-    return await adapter.requestDevice();
+let faGpuRuntimePromise: Promise<FaGpuRuntimeModule> | null = null;
+
+async function faGpuRuntime(): Promise<FaGpuRuntimeModule> {
+  if (faGpuRuntimePromise !== null) return faGpuRuntimePromise;
+  faGpuRuntimePromise = (async () => {
+    const runtime = await import("./flowarrow_gpu_runtime.mjs") as FaGpuRuntimeModule;
+    await runtime.default(new URL("./flowarrow_gpu_runtime_bg.wasm", import.meta.url));
+    await runtime.fa_gpu_require_device();
+    return runtime;
   })();
-  return faGpuDevicePromise;
+  return faGpuRuntimePromise;
 }
 
 function faGpuAssertI32(value: bigint): number {
@@ -3155,339 +3170,6 @@ function faGpuAssertI32(value: bigint): number {
   return Number(value);
 }
 
-async function faGpuMapI32(input: bigint[], kernelId: string, wgsl: string): Promise<bigint[]> {
-  const mapped = await faGpuMapTyped(
-    new Int32Array(input.map(faGpuAssertI32)),
-    Int32Array,
-    kernelId,
-    wgsl,
-  );
-  return Array.from(mapped, (value) => BigInt(value));
-}
-
-async function faGpuMapF32(input: number[], kernelId: string, wgsl: string): Promise<number[]> {
-  const mapped = await faGpuMapTyped(new Float32Array(input), Float32Array, kernelId, wgsl);
-  return Array.from(mapped);
-}
-
-async function faGpuMapTyped<T extends Int32Array | Float32Array>(
-  source: T,
-  ArrayType: { new(buffer: ArrayBuffer): T },
-  kernelId: string,
-  wgsl: string,
-): Promise<T> {
-  if (source.length === 0) return new ArrayType(new ArrayBuffer(0));
-  const device = await faGpuDevice();
-  const usage = (globalThis as any).GPUBufferUsage;
-  const mapMode = (globalThis as any).GPUMapMode;
-  if (!usage || !mapMode) throw new Error("FlowArrow GPU target requires WebGPU buffer constants");
-
-  const byteLength = Math.max(source.byteLength, 4);
-  const inputBuffer = device.createBuffer({
-    label: `${kernelId}.input`,
-    size: byteLength,
-    usage: usage.STORAGE | usage.COPY_DST,
-  });
-  const outputBuffer = device.createBuffer({
-    label: `${kernelId}.output`,
-    size: byteLength,
-    usage: usage.STORAGE | usage.COPY_SRC,
-  });
-  const paramsBuffer = device.createBuffer({
-    label: `${kernelId}.params`,
-    size: 16,
-    usage: usage.UNIFORM | usage.COPY_DST,
-  });
-  const params = new ArrayBuffer(16);
-  new DataView(params).setUint32(0, source.length, true);
-  device.queue.writeBuffer(inputBuffer, 0, source);
-  device.queue.writeBuffer(paramsBuffer, 0, params);
-
-  const module = device.createShaderModule({ label: `${kernelId}.wgsl`, code: wgsl });
-  const pipeline = device.createComputePipeline({
-    label: kernelId,
-    layout: "auto",
-    compute: { module, entryPoint: kernelId },
-  });
-  const bindGroup = device.createBindGroup({
-    label: `${kernelId}.bindings`,
-    layout: pipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: inputBuffer } },
-      { binding: 1, resource: { buffer: outputBuffer } },
-      { binding: 2, resource: { buffer: paramsBuffer } },
-    ],
-  });
-  const readBuffer = device.createBuffer({
-    label: `${kernelId}.readback`,
-    size: byteLength,
-    usage: usage.COPY_DST | usage.MAP_READ,
-  });
-  const encoder = device.createCommandEncoder({ label: `${kernelId}.commands` });
-  const pass = encoder.beginComputePass({ label: `${kernelId}.pass` });
-  pass.setPipeline(pipeline);
-  pass.setBindGroup(0, bindGroup);
-  pass.dispatchWorkgroups(Math.ceil(source.length / 64));
-  pass.end();
-  encoder.copyBufferToBuffer(outputBuffer, 0, readBuffer, 0, byteLength);
-  device.queue.submit([encoder.finish()]);
-  await readBuffer.mapAsync(mapMode.READ);
-  const copied = readBuffer.getMappedRange();
-  const output = new ArrayType(copied.slice(0));
-  readBuffer.unmap();
-  inputBuffer.destroy?.();
-  outputBuffer.destroy?.();
-  paramsBuffer.destroy?.();
-  readBuffer.destroy?.();
-  return output.slice(0, source.length) as T;
-}
-
-async function faGpuReduceI32(input: bigint[], op: string, identity: bigint): Promise<bigint> {
-  const reduced = await faGpuReduceTyped(
-    new Int32Array(input.map(faGpuAssertI32)),
-    Int32Array,
-    "i32",
-    op,
-    faGpuAssertI32(identity),
-  );
-  return BigInt(reduced);
-}
-
-async function faGpuReduceF32(input: number[], op: string, identity: number): Promise<number> {
-  return await faGpuReduceTyped(new Float32Array(input), Float32Array, "f32", op, identity);
-}
-
-async function faGpuRangeMapReduceI32(
-  range: [f0: bigint, f1: bigint, f2: bigint],
-  kernelId: string,
-  mapExpr: string,
-  op: string,
-  identity: bigint,
-): Promise<bigint> {
-  const start = faGpuAssertI32(range[0]);
-  const stop = faGpuAssertI32(range[1]);
-  const step = faGpuAssertI32(range[2]);
-  const identityI32 = faGpuAssertI32(identity);
-  if (step === 0) throw new Error("range_step: step cannot be zero");
-  const len = faGpuRangeCount(range[0], range[1], range[2]);
-  if (len === 0) return identity;
-
-  const device = await faGpuDevice();
-  const usage = (globalThis as any).GPUBufferUsage;
-  const mapMode = (globalThis as any).GPUMapMode;
-  if (!usage || !mapMode) throw new Error("FlowArrow GPU target requires WebGPU buffer constants");
-
-  const shaderId = `${kernelId}_range_map_reduce_i32_${op}`;
-  const module = device.createShaderModule({
-    label: `${shaderId}.wgsl`,
-    code: faGpuRangeMapReduceWgsl(mapExpr),
-  });
-  const pipeline = device.createComputePipeline({
-    label: shaderId,
-    layout: "auto",
-    compute: { module, entryPoint: "main" },
-  });
-  const outputLength = Math.ceil((len + 1) / 2);
-  let currentBuffer = device.createBuffer({
-    label: `${shaderId}.output`,
-    size: Math.max(outputLength * 4, 4),
-    usage: usage.STORAGE | usage.COPY_SRC,
-  });
-  const paramsBuffer = device.createBuffer({
-    label: `${shaderId}.params`,
-    size: 32,
-    usage: usage.UNIFORM | usage.COPY_DST,
-  });
-  const params = new ArrayBuffer(32);
-  const view = new DataView(params);
-  view.setInt32(0, start, true);
-  view.setInt32(4, step, true);
-  view.setUint32(8, len, true);
-  view.setUint32(12, faGpuReduceOp(op), true);
-  view.setInt32(16, identityI32, true);
-  device.queue.writeBuffer(paramsBuffer, 0, params);
-  const bindGroup = device.createBindGroup({
-    label: `${shaderId}.bindings`,
-    layout: pipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: currentBuffer } },
-      { binding: 1, resource: { buffer: paramsBuffer } },
-    ],
-  });
-  const encoder = device.createCommandEncoder({ label: `${shaderId}.commands` });
-  const pass = encoder.beginComputePass({ label: `${shaderId}.pass` });
-  pass.setPipeline(pipeline);
-  pass.setBindGroup(0, bindGroup);
-  pass.dispatchWorkgroups(Math.ceil(outputLength / 64));
-  pass.end();
-  device.queue.submit([encoder.finish()]);
-
-  let currentLength = outputLength;
-  const buffers: any[] = [paramsBuffer];
-  while (currentLength > 1) {
-    const nextLength = Math.ceil(currentLength / 2);
-    const outputBuffer = device.createBuffer({
-      label: `${shaderId}.reduce.output`,
-      size: Math.max(nextLength * 4, 4),
-      usage: usage.STORAGE | usage.COPY_SRC,
-    });
-    const reduceParamsBuffer = device.createBuffer({
-      label: `${shaderId}.reduce.params`,
-      size: 16,
-      usage: usage.UNIFORM | usage.COPY_DST,
-    });
-    const reduceParams = new ArrayBuffer(16);
-    const reduceView = new DataView(reduceParams);
-    reduceView.setUint32(0, currentLength, true);
-    reduceView.setUint32(4, faGpuReduceOp(op), true);
-    reduceView.setInt32(8, identityI32, true);
-    reduceView.setUint32(12, 0, true);
-    device.queue.writeBuffer(reduceParamsBuffer, 0, reduceParams);
-    const reduceModule = device.createShaderModule({
-      label: `${shaderId}.reduce.wgsl`,
-      code: faGpuReduceWgsl("i32"),
-    });
-    const reducePipeline = device.createComputePipeline({
-      label: `${shaderId}.reduce`,
-      layout: "auto",
-      compute: { module: reduceModule, entryPoint: "main" },
-    });
-    const reduceBindGroup = device.createBindGroup({
-      label: `${shaderId}.reduce.bindings`,
-      layout: reducePipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: currentBuffer } },
-        { binding: 1, resource: { buffer: outputBuffer } },
-        { binding: 2, resource: { buffer: reduceParamsBuffer } },
-      ],
-    });
-    const reduceEncoder = device.createCommandEncoder({ label: `${shaderId}.reduce.commands` });
-    const reducePass = reduceEncoder.beginComputePass({ label: `${shaderId}.reduce.pass` });
-    reducePass.setPipeline(reducePipeline);
-    reducePass.setBindGroup(0, reduceBindGroup);
-    reducePass.dispatchWorkgroups(Math.ceil(nextLength / 64));
-    reducePass.end();
-    device.queue.submit([reduceEncoder.finish()]);
-    buffers.push(currentBuffer, reduceParamsBuffer);
-    currentBuffer = outputBuffer;
-    currentLength = nextLength;
-  }
-
-  const readBuffer = device.createBuffer({
-    label: `${shaderId}.readback`,
-    size: 4,
-    usage: usage.COPY_DST | usage.MAP_READ,
-  });
-  const readEncoder = device.createCommandEncoder({ label: `${shaderId}.readback.commands` });
-  readEncoder.copyBufferToBuffer(currentBuffer, 0, readBuffer, 0, 4);
-  device.queue.submit([readEncoder.finish()]);
-  await readBuffer.mapAsync(mapMode.READ);
-  const copied = readBuffer.getMappedRange().slice(0);
-  readBuffer.unmap();
-  buffers.push(currentBuffer, readBuffer);
-  for (const buffer of buffers) buffer.destroy?.();
-  return BigInt(new Int32Array(copied)[0]);
-}
-
-function faGpuRangeCount(start: bigint, stop: bigint, step: bigint): number {
-  if (step === 0n) throw new Error("range_step: step cannot be zero");
-  const count = step > 0n
-    ? start >= stop ? 0n : ((stop - start - 1n) / step) + 1n
-    : start <= stop ? 0n : ((start - stop - 1n) / -step) + 1n;
-  if (count > 4294967295n) throw new Error("FlowArrow GPU range is too large for one dispatch plan");
-  return Number(count);
-}
-
-async function faGpuReduceTyped<T extends Int32Array | Float32Array>(
-  source: T,
-  ArrayType: { new(buffer: ArrayBuffer): T },
-  scalar: "i32" | "f32",
-  op: string,
-  identity: number,
-): Promise<number> {
-  if (source.length === 0) return identity;
-  const device = await faGpuDevice();
-  const usage = (globalThis as any).GPUBufferUsage;
-  const mapMode = (globalThis as any).GPUMapMode;
-  if (!usage || !mapMode) throw new Error("FlowArrow GPU target requires WebGPU buffer constants");
-
-  const shaderId = `fa_gpu_reduce_${scalar}_${op}`;
-  const module = device.createShaderModule({ label: `${shaderId}.wgsl`, code: faGpuReduceWgsl(scalar) });
-  const pipeline = device.createComputePipeline({
-    label: shaderId,
-    layout: "auto",
-    compute: { module, entryPoint: "main" },
-  });
-  let currentLength = source.length;
-  let currentBuffer = device.createBuffer({
-    label: `${shaderId}.input`,
-    size: Math.max(source.byteLength, 4),
-    usage: usage.STORAGE | usage.COPY_DST,
-  });
-  device.queue.writeBuffer(currentBuffer, 0, source);
-  let includeIdentity = true;
-  const buffers: any[] = [currentBuffer];
-
-  while (currentLength > 1 || includeIdentity) {
-    const virtualLength = currentLength + (includeIdentity ? 1 : 0);
-    const outputLength = Math.ceil(virtualLength / 2);
-    const outputBuffer = device.createBuffer({
-      label: `${shaderId}.output`,
-      size: Math.max(outputLength * 4, 4),
-      usage: usage.STORAGE | usage.COPY_SRC,
-    });
-    const paramsBuffer = device.createBuffer({
-      label: `${shaderId}.params`,
-      size: 16,
-      usage: usage.UNIFORM | usage.COPY_DST,
-    });
-    const params = new ArrayBuffer(16);
-    const view = new DataView(params);
-    view.setUint32(0, currentLength, true);
-    view.setUint32(4, faGpuReduceOp(op), true);
-    if (scalar === "i32") view.setInt32(8, identity, true);
-    else view.setFloat32(8, identity, true);
-    view.setUint32(12, includeIdentity ? 1 : 0, true);
-    device.queue.writeBuffer(paramsBuffer, 0, params);
-    const bindGroup = device.createBindGroup({
-      label: `${shaderId}.bindings`,
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: currentBuffer } },
-        { binding: 1, resource: { buffer: outputBuffer } },
-        { binding: 2, resource: { buffer: paramsBuffer } },
-      ],
-    });
-    const encoder = device.createCommandEncoder({ label: `${shaderId}.commands` });
-    const pass = encoder.beginComputePass({ label: `${shaderId}.pass` });
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(Math.ceil(outputLength / 64));
-    pass.end();
-    device.queue.submit([encoder.finish()]);
-    buffers.push(outputBuffer, paramsBuffer);
-    currentBuffer = outputBuffer;
-    currentLength = outputLength;
-    includeIdentity = false;
-  }
-
-  const readBuffer = device.createBuffer({
-    label: `${shaderId}.readback`,
-    size: 4,
-    usage: usage.COPY_DST | usage.MAP_READ,
-  });
-  const encoder = device.createCommandEncoder({ label: `${shaderId}.readback.commands` });
-  encoder.copyBufferToBuffer(currentBuffer, 0, readBuffer, 0, 4);
-  device.queue.submit([encoder.finish()]);
-  await readBuffer.mapAsync(mapMode.READ);
-  const copied = readBuffer.getMappedRange().slice(0);
-  readBuffer.unmap();
-  buffers.push(readBuffer);
-  for (const buffer of buffers) buffer.destroy?.();
-  const result = new ArrayType(copied)[0];
-  return result;
-}
-
 function faGpuReduceOp(op: string): number {
   if (op === "add") return 0;
   if (op === "min") return 1;
@@ -3495,76 +3177,50 @@ function faGpuReduceOp(op: string): number {
   throw new Error(`unsupported GPU reduce op: ${op}`);
 }
 
-function faGpuReduceWgsl(scalar: "i32" | "f32"): string {
-  const identityField = scalar === "i32" ? "i32" : "f32";
-  const minExpr = scalar === "i32" ? "min(left, right)" : "min(left, right)";
-  const maxExpr = scalar === "i32" ? "max(left, right)" : "max(left, right)";
-  return `struct FaGpuReduceParams { len: u32, op: u32, identity: ${identityField}, include_identity: u32 };
-@group(0) @binding(0) var<storage, read> fa_input: array<${scalar}>;
-@group(0) @binding(1) var<storage, read_write> fa_output: array<${scalar}>;
-@group(0) @binding(2) var<uniform> fa_params: FaGpuReduceParams;
-
-fn fa_apply(left: ${scalar}, right: ${scalar}) -> ${scalar} {
-  if (fa_params.op == 0u) { return left + right; }
-  if (fa_params.op == 1u) { return ${minExpr}; }
-  return ${maxExpr};
+async function faGpuMapI32(input: bigint[], _kernelId: string, wgsl: string): Promise<bigint[]> {
+  const runtime = await faGpuRuntime();
+  const mapped = await runtime.fa_gpu_map_i32(wgsl, new Int32Array(input.map(faGpuAssertI32)));
+  return Array.from(mapped, (value) => BigInt(value));
 }
 
-fn fa_value_at(index: u32) -> ${scalar} {
-  if (fa_params.include_identity != 0u && index == 0u) { return fa_params.identity; }
-  let source_index = index - select(0u, 1u, fa_params.include_identity != 0u);
-  return fa_input[source_index];
+async function faGpuMapF32(input: number[], _kernelId: string, wgsl: string): Promise<number[]> {
+  const runtime = await faGpuRuntime();
+  const mapped = await runtime.fa_gpu_map_f64(wgsl, new Float64Array(input));
+  return Array.from(mapped);
 }
 
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
-  let fa_i = fa_gid.x;
-  let virtual_len = fa_params.len + select(0u, 1u, fa_params.include_identity != 0u);
-  let out_len = (virtual_len + 1u) / 2u;
-  if (fa_i >= out_len) { return; }
-  let left_index = fa_i * 2u;
-  let right_index = left_index + 1u;
-  let left = fa_value_at(left_index);
-  let right = select(fa_params.identity, fa_value_at(right_index), right_index < virtual_len);
-  fa_output[fa_i] = fa_apply(left, right);
-}
-`;
+async function faGpuReduceI32(input: bigint[], op: string, identity: bigint): Promise<bigint> {
+  const runtime = await faGpuRuntime();
+  const reduced = await runtime.fa_gpu_reduce_i32(
+    faGpuReduceOp(op),
+    new Int32Array(input.map(faGpuAssertI32)),
+    faGpuAssertI32(identity),
+  );
+  return BigInt(reduced);
 }
 
-function faGpuRangeMapReduceWgsl(mapExpr: string): string {
-  return `struct FaGpuRangeMapReduceParams { start: i32, step: i32, len: u32, op: u32, identity: i32, _pad0: u32, _pad1: u32, _pad2: u32 };
-@group(0) @binding(0) var<storage, read_write> fa_output: array<i32>;
-@group(0) @binding(1) var<uniform> fa_params: FaGpuRangeMapReduceParams;
-
-fn fa_apply(left: i32, right: i32) -> i32 {
-  if (fa_params.op == 0u) { return left + right; }
-  if (fa_params.op == 1u) { return min(left, right); }
-  return max(left, right);
+async function faGpuReduceF32(input: number[], op: string, identity: number): Promise<number> {
+  const runtime = await faGpuRuntime();
+  return await runtime.fa_gpu_reduce_f64(faGpuReduceOp(op), new Float64Array(input), identity);
 }
 
-fn fa_mapped_at(index: u32) -> i32 {
-  let x = fa_params.start + i32(index) * fa_params.step;
-  return ${mapExpr};
-}
-
-fn fa_value_at(index: u32) -> i32 {
-  if (index == 0u) { return fa_params.identity; }
-  return fa_mapped_at(index - 1u);
-}
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
-  let fa_i = fa_gid.x;
-  let virtual_len = fa_params.len + 1u;
-  let out_len = (virtual_len + 1u) / 2u;
-  if (fa_i >= out_len) { return; }
-  let left_index = fa_i * 2u;
-  let right_index = left_index + 1u;
-  let left = fa_value_at(left_index);
-  let right = select(fa_params.identity, fa_value_at(right_index), right_index < virtual_len);
-  fa_output[fa_i] = fa_apply(left, right);
-}
-`;
+async function faGpuRangeMapReduceI32(
+  range: [f0: bigint, f1: bigint, f2: bigint],
+  _kernelId: string,
+  mapExpr: string,
+  op: string,
+  identity: bigint,
+): Promise<bigint> {
+  const runtime = await faGpuRuntime();
+  const reduced = await runtime.fa_gpu_range_map_reduce_i32(
+    mapExpr,
+    faGpuAssertI32(range[0]),
+    faGpuAssertI32(range[1]),
+    faGpuAssertI32(range[2]),
+    faGpuReduceOp(op),
+    faGpuAssertI32(identity),
+  );
+  return BigInt(reduced);
 }
 
 "#;
