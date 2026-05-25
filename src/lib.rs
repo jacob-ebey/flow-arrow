@@ -587,7 +587,12 @@ mod tests {
         assert!(emitted.contains("async function square_plus_one_all"));
         assert!(emitted.contains("faGpuMapF32"));
         assert!(emitted.contains("fa_gpu_map_square_plus_one"));
-        assert!(emitted.contains("flowarrow_gpu_runtime.mjs"));
+        assert!(
+            emitted.starts_with(
+                "import * as faGpuRuntimeModule from \"./flowarrow_gpu_runtime.mjs\";"
+            )
+        );
+        assert!(!emitted.contains("await import(\"./flowarrow_gpu_runtime.mjs\")"));
         assert!(emitted.contains("fa_gpu_map_f64"));
         assert!(!emitted.contains("createShaderModule"));
         assert!(!emitted.contains("GPUBufferUsage"));

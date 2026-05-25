@@ -156,6 +156,9 @@ impl<'a> TypeScriptCodegen<'a> {
     fn emit_artifacts(mut self) -> Result<TypeScriptEmitOutput, String> {
         self.analyze_async_callables()?;
         let mut out = String::new();
+        if self.options.gpu {
+            out.push_str("import * as faGpuRuntimeModule from \"./flowarrow_gpu_runtime.mjs\";\n");
+        }
         self.emit_foreign_js_imports(&mut out);
         out.push_str(TS_PRELUDE);
         if self.options.gpu {
@@ -3335,6 +3338,7 @@ const TS_INTERNAL_VALUE_IDENTS: &[&str] = &[
     "faDispatchScalarWorkerPool",
     "faGrowScalarWorkerPool",
     "faLoadNodeWorkerThreads",
+    "faGpuRuntimeModule",
     "faRejectScalarWorker",
     "faRetireScalarWorkerPool",
     "faRunScalarWorker",
@@ -3947,48 +3951,14 @@ function faRangeStep(input: [f0: bigint, f1: bigint, f2: bigint]): bigint[] {
 "#;
 
 const TS_GPU_WASM_PRELUDE: &str = r#"
-type FaGpuRuntimeModule = {
-  default: (moduleOrPath?: RequestInfo | URL | Response | BufferSource | WebAssembly.Module) => Promise<any>;
-  fa_gpu_require_device: () => Promise<void>;
-  fa_gpu_map_i32: (wgsl: string, input: Int32Array) => Promise<Int32Array>;
-  fa_gpu_map_f64: (wgsl: string, input: Float64Array) => Promise<Float64Array>;
-  fa_gpu_reduce_i32: (op: number, input: Int32Array, identity: number) => Promise<number>;
-  fa_gpu_reduce_f64: (op: number, input: Float64Array, identity: number) => Promise<number>;
-  fa_gpu_range_map_reduce_i32: (
-    mapExpr: string,
-    start: number,
-    stop: number,
-    step: number,
-    op: number,
-    identity: number,
-  ) => Promise<number>;
-  fa_gpu_repeat_vector_accum_f64: (
-    wgsl: string,
-    left: Float64Array,
-    right: Float64Array,
-    score: number,
-    iterations: number,
-  ) => Promise<number>;
-  fa_gpu_repeat_matrix_accum_f64: (
-    wgsl: string,
-    leftValues: Float64Array,
-    leftRows: number,
-    leftCols: number,
-    rightValues: Float64Array,
-    rightRows: number,
-    rightCols: number,
-    vector: Float64Array,
-    score: number,
-    iterations: number,
-  ) => Promise<number>;
-};
+type FaGpuRuntimeModule = typeof faGpuRuntimeModule;
 
 let faGpuRuntimePromise: Promise<FaGpuRuntimeModule> | null = null;
 
 async function faGpuRuntime(): Promise<FaGpuRuntimeModule> {
   if (faGpuRuntimePromise !== null) return faGpuRuntimePromise;
   faGpuRuntimePromise = (async () => {
-    const runtime = await import("./flowarrow_gpu_runtime.mjs") as FaGpuRuntimeModule;
+    const runtime = faGpuRuntimeModule;
     await runtime.default(new URL("./flowarrow_gpu_runtime_bg.wasm", import.meta.url));
     await runtime.fa_gpu_require_device();
     return runtime;
