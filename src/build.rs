@@ -4,6 +4,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const NATIVE_TARGETS: &[&str] = &[
     "x86_64-unknown-linux-gnu",
@@ -265,6 +267,16 @@ struct BuildPlan {
 struct NativeGpuRuntime {
     link_dir: PathBuf,
     link_name: &'static str,
+}
+
+struct GpuRuntimeCacheLock {
+    path: PathBuf,
+}
+
+impl Drop for GpuRuntimeCacheLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.path);
+    }
 }
 
 pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, String> {
@@ -822,7 +834,58 @@ fn add_native_gpu_link_flags(clang: &mut Command, gpu_runtime: Option<&NativeGpu
 }
 
 fn build_native_gpu_runtime(plan: &BuildPlan) -> Result<NativeGpuRuntime, String> {
-    let runtime_dir = plan.cache_dir.join("native-gpu-runtime");
+    let cache_dir = gpu_runtime_cache_dir()?;
+    let cache_key = gpu_runtime_cache_key("native", &host_target(), native_gpu_runtime_manifest());
+    let cache_entry = cache_dir.join(cache_key);
+    let built = cache_entry.join(dynamic_library_name("flowarrow_gpu_runtime"));
+    if should_rebuild_gpu_runtime() || !built.exists() {
+        let _lock = lock_gpu_runtime_cache(&cache_entry)?;
+        if should_rebuild_gpu_runtime() || !built.exists() {
+            build_cached_native_gpu_runtime(&cache_dir, &cache_entry)?;
+        }
+    }
+    let bundled = plan
+        .build_dir
+        .join(dynamic_library_name("flowarrow_gpu_runtime"));
+    fs::copy(&built, &bundled).map_err(|error| {
+        format!(
+            "failed to copy native GPU runtime from `{}` to `{}`: {error}",
+            built.display(),
+            bundled.display()
+        )
+    })?;
+    Ok(NativeGpuRuntime {
+        link_dir: plan.build_dir.clone(),
+        link_name: "flowarrow_gpu_runtime",
+    })
+}
+
+fn build_wasm_gpu_runtime(build_dir: &Path) -> Result<(), String> {
+    let cache_dir = gpu_runtime_cache_dir()?;
+    let cache_key = gpu_runtime_cache_key(
+        "webgpu",
+        "wasm32-unknown-unknown",
+        wasm_gpu_runtime_manifest(),
+    );
+    let cache_entry = cache_dir.join(cache_key);
+    let cached_wasm = cache_entry.join("flowarrow_gpu_runtime_bg.wasm");
+    let cached_mjs = cache_entry.join("flowarrow_gpu_runtime.mjs");
+    if should_rebuild_gpu_runtime() || !cached_wasm.exists() || !cached_mjs.exists() {
+        let _lock = lock_gpu_runtime_cache(&cache_entry)?;
+        if should_rebuild_gpu_runtime() || !cached_wasm.exists() || !cached_mjs.exists() {
+            build_cached_wasm_gpu_runtime(&cache_dir, &cache_entry)?;
+        }
+    }
+    copy_wasm_gpu_runtime_from_cache(&cache_entry, build_dir)
+}
+
+fn build_cached_native_gpu_runtime(cache_dir: &Path, cache_entry: &Path) -> Result<(), String> {
+    let staging = staging_cache_dir(cache_dir, cache_entry);
+    if staging.exists() {
+        fs::remove_dir_all(&staging)
+            .map_err(|error| format!("failed to clear `{}`: {error}", staging.display()))?;
+    }
+    let runtime_dir = staging.join("build");
     let src_dir = runtime_dir.join("src");
     fs::create_dir_all(&src_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", src_dir.display()))?;
@@ -853,14 +916,12 @@ fn build_native_gpu_runtime(plan: &BuildPlan) -> Result<NativeGpuRuntime, String
         .join("target")
         .join("release")
         .join(dynamic_library_name("flowarrow_gpu_runtime"));
-    let bundled = plan
-        .build_dir
-        .join(dynamic_library_name("flowarrow_gpu_runtime"));
-    fs::copy(&built, &bundled).map_err(|error| {
+    let cached = staging.join(dynamic_library_name("flowarrow_gpu_runtime"));
+    fs::copy(&built, &cached).map_err(|error| {
         format!(
             "failed to copy native GPU runtime from `{}` to `{}`: {error}",
             built.display(),
-            bundled.display()
+            cached.display()
         )
     })?;
     if cfg!(target_os = "macos") {
@@ -868,12 +929,12 @@ fn build_native_gpu_runtime(plan: &BuildPlan) -> Result<NativeGpuRuntime, String
         let output = Command::new("install_name_tool")
             .arg("-id")
             .arg(&install_name)
-            .arg(&bundled)
+            .arg(&cached)
             .output()
             .map_err(|error| {
                 format!(
                     "failed to invoke install_name_tool for native GPU runtime `{}`: {error}",
-                    bundled.display()
+                    cached.display()
                 )
             })?;
         if !output.status.success() {
@@ -884,14 +945,17 @@ fn build_native_gpu_runtime(plan: &BuildPlan) -> Result<NativeGpuRuntime, String
             ));
         }
     }
-    Ok(NativeGpuRuntime {
-        link_dir: plan.build_dir.clone(),
-        link_name: "flowarrow_gpu_runtime",
-    })
+    let _ = fs::remove_dir_all(&runtime_dir);
+    publish_gpu_runtime_cache(&staging, cache_entry)
 }
 
-fn build_wasm_gpu_runtime(build_dir: &Path) -> Result<(), String> {
-    let runtime_dir = build_dir.join(".cache").join("wasm-gpu-runtime");
+fn build_cached_wasm_gpu_runtime(cache_dir: &Path, cache_entry: &Path) -> Result<(), String> {
+    let staging = staging_cache_dir(cache_dir, cache_entry);
+    if staging.exists() {
+        fs::remove_dir_all(&staging)
+            .map_err(|error| format!("failed to clear `{}`: {error}", staging.display()))?;
+    }
+    let runtime_dir = staging.join("build");
     let src_dir = runtime_dir.join("src");
     fs::create_dir_all(&src_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", src_dir.display()))?;
@@ -924,7 +988,7 @@ fn build_wasm_gpu_runtime(build_dir: &Path) -> Result<(), String> {
         .join("wasm32-unknown-unknown")
         .join("release")
         .join("flowarrow_gpu_runtime.wasm");
-    let output = run_wasm_bindgen(&runtime_dir, build_dir, &wasm)?;
+    let output = run_wasm_bindgen(cache_dir, &staging, &wasm)?;
     if !output.status.success() {
         return Err(format!(
             "wasm-bindgen failed for WebGPU runtime:\n{}{}",
@@ -932,8 +996,8 @@ fn build_wasm_gpu_runtime(build_dir: &Path) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr)
         ));
     }
-    let js = build_dir.join("flowarrow_gpu_runtime.js");
-    let mjs = build_dir.join("flowarrow_gpu_runtime.mjs");
+    let js = staging.join("flowarrow_gpu_runtime.js");
+    let mjs = staging.join("flowarrow_gpu_runtime.mjs");
     if mjs.exists() {
         fs::remove_file(&mjs)
             .map_err(|error| format!("failed to replace `{}`: {error}", mjs.display()))?;
@@ -945,11 +1009,171 @@ fn build_wasm_gpu_runtime(build_dir: &Path) -> Result<(), String> {
             mjs.display()
         )
     })?;
+    let _ = fs::remove_dir_all(&runtime_dir);
+    publish_gpu_runtime_cache(&staging, cache_entry)
+}
+
+fn copy_wasm_gpu_runtime_from_cache(cache_entry: &Path, build_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(build_dir)
+        .map_err(|error| format!("failed to create `{}`: {error}", build_dir.display()))?;
+    let stale_js = build_dir.join("flowarrow_gpu_runtime.js");
+    if stale_js.exists() {
+        fs::remove_file(&stale_js).map_err(|error| {
+            format!(
+                "failed to remove stale WebGPU runtime glue `{}`: {error}",
+                stale_js.display()
+            )
+        })?;
+    }
+    for file in [
+        "flowarrow_gpu_runtime.mjs",
+        "flowarrow_gpu_runtime_bg.wasm",
+        "flowarrow_gpu_runtime.d.ts",
+        "flowarrow_gpu_runtime_bg.wasm.d.ts",
+    ] {
+        let source = cache_entry.join(file);
+        let destination = build_dir.join(file);
+        fs::copy(&source, &destination).map_err(|error| {
+            format!(
+                "failed to copy WebGPU runtime artifact from `{}` to `{}`: {error}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+    }
     Ok(())
 }
 
+fn gpu_runtime_cache_dir() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("FLOWARROW_GPU_RUNTIME_CACHE") {
+        let path = PathBuf::from(path);
+        fs::create_dir_all(&path)
+            .map_err(|error| format!("failed to create `{}`: {error}", path.display()))?;
+        return Ok(path);
+    }
+
+    let root = if cfg!(target_os = "macos") {
+        home_dir()
+            .map(|home| home.join("Library").join("Caches"))
+            .ok_or_else(|| {
+                "failed to locate home directory for FlowArrow GPU runtime cache".to_string()
+            })?
+    } else if cfg!(target_os = "windows") {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .or_else(|| home_dir().map(|home| home.join("AppData").join("Local")))
+            .ok_or_else(|| {
+                "failed to locate local app data directory for FlowArrow GPU runtime cache"
+                    .to_string()
+            })?
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home_dir().map(|home| home.join(".cache")))
+            .ok_or_else(|| {
+                "failed to locate cache directory for FlowArrow GPU runtime cache".to_string()
+            })?
+    };
+    let path = root.join("flowarrow").join("gpu-runtime");
+    fs::create_dir_all(&path)
+        .map_err(|error| format!("failed to create `{}`: {error}", path.display()))?;
+    Ok(path)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+}
+
+fn gpu_runtime_cache_key(kind: &str, target: &str, manifest: &str) -> String {
+    let hash = fnv_hash(
+        [
+            b"flowarrow-gpu-runtime-cache-v2".as_slice(),
+            env!("CARGO_PKG_VERSION").as_bytes(),
+            kind.as_bytes(),
+            target.as_bytes(),
+            manifest.as_bytes(),
+            gpu_runtime_source().as_bytes(),
+        ]
+        .into_iter(),
+    );
+    format!("{kind}-{target}-{hash:016x}")
+}
+
+fn fnv_hash<'a>(parts: impl Iterator<Item = &'a [u8]>) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET;
+    for part in parts {
+        for byte in part {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+fn should_rebuild_gpu_runtime() -> bool {
+    std::env::var_os("FLOWARROW_REBUILD_GPU_RUNTIME")
+        .map(|value| {
+            let value = value.to_string_lossy();
+            !value.is_empty() && value != "0" && value != "false" && value != "FALSE"
+        })
+        .unwrap_or(false)
+}
+
+fn lock_gpu_runtime_cache(cache_entry: &Path) -> Result<GpuRuntimeCacheLock, String> {
+    let lock = cache_entry.with_extension("lock");
+    let started = Instant::now();
+    loop {
+        match fs::create_dir(&lock) {
+            Ok(()) => return Ok(GpuRuntimeCacheLock { path: lock }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if started.elapsed() > Duration::from_secs(300) {
+                    return Err(format!(
+                        "timed out waiting for FlowArrow GPU runtime cache lock `{}`",
+                        lock.display()
+                    ));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to create FlowArrow GPU runtime cache lock `{}`: {error}",
+                    lock.display()
+                ));
+            }
+        }
+    }
+}
+
+fn staging_cache_dir(cache_dir: &Path, cache_entry: &Path) -> PathBuf {
+    let name = cache_entry
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "runtime".into());
+    cache_dir.join(format!("{name}.staging.{}", std::process::id()))
+}
+
+fn publish_gpu_runtime_cache(staging: &Path, cache_entry: &Path) -> Result<(), String> {
+    if cache_entry.exists() {
+        fs::remove_dir_all(cache_entry)
+            .map_err(|error| format!("failed to replace `{}`: {error}", cache_entry.display()))?;
+    }
+    fs::rename(staging, cache_entry).map_err(|error| {
+        format!(
+            "failed to publish FlowArrow GPU runtime cache `{}` to `{}`: {error}",
+            staging.display(),
+            cache_entry.display()
+        )
+    })
+}
+
 fn run_wasm_bindgen(
-    runtime_dir: &Path,
+    cache_dir: &Path,
     build_dir: &Path,
     wasm: &Path,
 ) -> Result<std::process::Output, String> {
@@ -965,7 +1189,7 @@ fn run_wasm_bindgen(
     match Command::new("wasm-bindgen").args(&args).output() {
         Ok(output) => Ok(output),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            run_cached_wasm_bindgen_cli(runtime_dir, &args)
+            run_cached_wasm_bindgen_cli(cache_dir, &args)
         }
         Err(error) => Err(format!(
             "failed to invoke wasm-bindgen for WebGPU runtime: {error}"

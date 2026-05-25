@@ -290,6 +290,15 @@ WebGPU module (`flowarrow_gpu_runtime.mjs` plus
 runtime. Both packaging paths compile and dispatch WGSL through `wgpu`, and
 neither path falls back to CPU execution when GPU execution is requested.
 
+The generated `wgpu` runtime is cached outside individual project build
+directories. `flowarrow build --gpu` computes a content key from the runtime
+source, runtime manifest, FlowArrow version, target, and runtime kind, then
+reuses the cached native library or WebGPU WASM artifacts when present. Cold
+cache builds are serialized with a cache lock and publish artifacts atomically;
+warm cache builds only copy the runtime into the project build output. Override
+the cache root with `FLOWARROW_GPU_RUNTIME_CACHE`, and force a rebuild with
+`FLOWARROW_REBUILD_GPU_RUNTIME=1`.
+
 ### 2.5 WASM-hosted TypeScript compiler
 
 The compiler crate can also be built as a `wasm32-unknown-unknown`
