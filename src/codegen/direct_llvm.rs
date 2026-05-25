@@ -33,6 +33,7 @@ pub(super) struct DirectLlvm<'ctx, 'a> {
     module: LlvmModule<'ctx>,
     builder: Builder<'ctx>,
     codegen: TypedCodegen<'a>,
+    gpu_plan: gpu::GpuPlan,
     types: LlvmTypeRegistry<'ctx>,
     functions: HashMap<String, FunctionValue<'ctx>>,
     options: DirectLlvmOptions,
@@ -47,6 +48,7 @@ pub(super) struct DirectLlvmOptions {
     pub(super) export_abi: Option<DirectExportAbi>,
     pub(super) emit_object: bool,
     pub(super) optimization: OptimizationLevel,
+    pub(super) gpu: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +66,7 @@ impl Default for DirectLlvmOptions {
             export_abi: None,
             emit_object: false,
             optimization: OptimizationLevel::Aggressive,
+            gpu: false,
         }
     }
 }
@@ -77,6 +80,7 @@ pub(super) struct DirectLlvmEmission {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl<'a> DirectLlvm<'_, 'a> {
+    #[cfg(test)]
     pub(super) fn emit(codegen: TypedCodegen<'a>) -> Result<String, String> {
         Ok(Self::emit_with_options(codegen, DirectLlvmOptions::default())?.llvm)
     }
@@ -92,11 +96,17 @@ impl<'a> DirectLlvm<'_, 'a> {
         }
         let builder = context.create_builder();
         let types = LlvmTypeRegistry::new(&context);
+        let gpu_plan = if options.gpu {
+            gpu::GpuPlan::analyze(codegen.typed)
+        } else {
+            gpu::GpuPlan::empty()
+        };
         let mut direct = DirectLlvm {
             context: &context,
             module,
             builder,
             codegen,
+            gpu_plan,
             types,
             functions: HashMap::new(),
             options,
@@ -163,6 +173,15 @@ fn emit_target_object(
 fn memory_buffer_without_nul(buffer: &MemoryBuffer<'_>) -> Vec<u8> {
     let bytes = buffer.as_slice();
     bytes[..bytes.len().saturating_sub(1)].to_vec()
+}
+
+fn gpu_reduce_op(op: &str) -> u32 {
+    match op {
+        "add" => 0,
+        "min" => 1,
+        "max" => 2,
+        _ => unreachable!("unsupported GPU reduce op"),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1615,6 +1634,45 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let count = self.seq_count(input.value)?;
         let output = self.emit_seq_new(&output_ty, count)?;
 
+        if self.options.gpu {
+            if let Some(kernel) =
+                self.gpu_plan
+                    .kernel_for_map(name, item_ty.as_ref(), &output_item_ty)
+            {
+                let kernel_id = kernel.id.clone();
+                let wgsl_source = kernel.wgsl.clone();
+                let scalar = kernel.scalar;
+                let wgsl = self
+                    .builder
+                    .build_global_string_ptr(&wgsl_source, &format!("{kernel_id}_wgsl"))
+                    .map_err(|error| {
+                        format!("LLVM backend failed to build GPU WGSL string: {error}")
+                    })?
+                    .as_pointer_value();
+                let input_items = self.seq_items(input.value)?;
+                let output_items = self.seq_items(output.value)?;
+                let map_function = match scalar {
+                    gpu::GpuScalarKind::I32 => self.gpu_map_i64_function(),
+                    gpu::GpuScalarKind::F32 => self.gpu_map_f64_function(),
+                };
+                self.builder
+                    .build_call(
+                        map_function,
+                        &[
+                            wgsl.into(),
+                            input_items.into(),
+                            output_items.into(),
+                            count.into(),
+                        ],
+                        "gpu.map",
+                    )
+                    .map_err(|error| {
+                        format!("LLVM backend failed to call native GPU map: {error}")
+                    })?;
+                return Ok(output);
+            }
+        }
+
         let function = self.current_function()?;
         let loop_block = self.context.append_basic_block(function, "map.loop");
         let body_block = self.context.append_basic_block(function, "map.body");
@@ -2580,6 +2638,77 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             return Err(format!("`reduce {op}` expected Seq input"));
         };
         let canonical = self.codegen.canonical_name(op);
+        if self.options.gpu && matches!(canonical.as_str(), "add" | "min" | "max") {
+            match item_ty.as_ref() {
+                Ty::Int => {
+                    let identity = self.coerce_value_to_ty(identity, &Ty::Int)?;
+                    let input_items = self.seq_items(input.value)?;
+                    let count = self.seq_count(input.value)?;
+                    let reduce_fn = self.gpu_reduce_i64_function();
+                    let reduced = self
+                        .builder
+                        .build_call(
+                            reduce_fn,
+                            &[
+                                self.context
+                                    .i32_type()
+                                    .const_int(gpu_reduce_op(&canonical).into(), false)
+                                    .into(),
+                                input_items.into(),
+                                count.into(),
+                                identity.value.into(),
+                            ],
+                            "gpu.reduce.i64",
+                        )
+                        .map_err(|error| {
+                            format!("LLVM backend failed to call native GPU reduce: {error}")
+                        })?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| {
+                            "native GPU Int reduce did not return a value".to_string()
+                        })?;
+                    return Ok(LlvmValue {
+                        value: reduced,
+                        ty: Ty::Int,
+                    });
+                }
+                Ty::Real => {
+                    let identity = self.coerce_value_to_ty(identity, &Ty::Real)?;
+                    let input_items = self.seq_items(input.value)?;
+                    let count = self.seq_count(input.value)?;
+                    let reduce_fn = self.gpu_reduce_f64_function();
+                    let reduced = self
+                        .builder
+                        .build_call(
+                            reduce_fn,
+                            &[
+                                self.context
+                                    .i32_type()
+                                    .const_int(gpu_reduce_op(&canonical).into(), false)
+                                    .into(),
+                                input_items.into(),
+                                count.into(),
+                                identity.value.into(),
+                            ],
+                            "gpu.reduce.f64",
+                        )
+                        .map_err(|error| {
+                            format!("LLVM backend failed to call native GPU reduce: {error}")
+                        })?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| {
+                            "native GPU Real reduce did not return a value".to_string()
+                        })?;
+                    return Ok(LlvmValue {
+                        value: reduced,
+                        ty: Ty::Real,
+                    });
+                }
+                _ => {}
+            }
+        }
         if canonical == "add" {
             return self.emit_reduce_add_llvm(op, input, item_ty.as_ref().clone(), identity);
         }
@@ -3815,6 +3944,84 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         )
     }
 
+    fn gpu_require_device_function(&mut self) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function("fa_gpu_require_device") {
+            return function;
+        }
+        self.module.add_function(
+            "fa_gpu_require_device",
+            self.context.void_type().fn_type(&[], false),
+            None,
+        )
+    }
+
+    fn gpu_map_f64_function(&mut self) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function("fa_gpu_map_f64") {
+            return function;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        self.module.add_function(
+            "fa_gpu_map_f64",
+            self.context.void_type().fn_type(
+                &[ptr_ty.into(), ptr_ty.into(), ptr_ty.into(), i64_ty.into()],
+                false,
+            ),
+            None,
+        )
+    }
+
+    fn gpu_map_i64_function(&mut self) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function("fa_gpu_map_i64") {
+            return function;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        self.module.add_function(
+            "fa_gpu_map_i64",
+            self.context.void_type().fn_type(
+                &[ptr_ty.into(), ptr_ty.into(), ptr_ty.into(), i64_ty.into()],
+                false,
+            ),
+            None,
+        )
+    }
+
+    fn gpu_reduce_i64_function(&mut self) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function("fa_gpu_reduce_i64") {
+            return function;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
+        self.module.add_function(
+            "fa_gpu_reduce_i64",
+            i64_ty.fn_type(
+                &[i32_ty.into(), ptr_ty.into(), i64_ty.into(), i64_ty.into()],
+                false,
+            ),
+            None,
+        )
+    }
+
+    fn gpu_reduce_f64_function(&mut self) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function("fa_gpu_reduce_f64") {
+            return function;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
+        let f64_ty = self.context.f64_type();
+        self.module.add_function(
+            "fa_gpu_reduce_f64",
+            f64_ty.fn_type(
+                &[i32_ty.into(), ptr_ty.into(), i64_ty.into(), f64_ty.into()],
+                false,
+            ),
+            None,
+        )
+    }
+
     fn emit_seq_new(
         &mut self,
         seq_ty: &Ty,
@@ -3959,6 +4166,14 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let flow_main = self.module.add_function("flow_unboxed_main", main_ty, None);
         let block = self.context.append_basic_block(flow_main, "entry");
         self.builder.position_at_end(block);
+        if self.options.gpu {
+            let require_device = self.gpu_require_device_function();
+            self.builder
+                .build_call(require_device, &[], "gpu.require")
+                .map_err(|error| {
+                    format!("LLVM backend failed to require native GPU device: {error}")
+                })?;
+        }
         let argc = flow_main
             .get_nth_param(0)
             .ok_or_else(|| "missing argc".to_string())?;

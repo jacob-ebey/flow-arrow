@@ -43,6 +43,7 @@ pub enum TypeScriptCompileMode {
 pub struct TypeScriptCompileOptions {
     pub mode: TypeScriptCompileMode,
     pub worker_concurrency: bool,
+    pub gpu: bool,
 }
 
 impl Default for TypeScriptCompileOptions {
@@ -50,6 +51,7 @@ impl Default for TypeScriptCompileOptions {
         Self {
             mode: TypeScriptCompileMode::Program,
             worker_concurrency: false,
+            gpu: false,
         }
     }
 }
@@ -99,6 +101,7 @@ pub fn compile_typescript_source_with_options(
         codegen::TypeScriptBackendOptions {
             worker_concurrency: options.worker_concurrency,
             worker_module_specifier: None,
+            gpu: options.gpu,
         },
     )
 }
@@ -120,6 +123,7 @@ pub fn compile_javascript_artifacts_source_with_options(
         codegen::TypeScriptBackendOptions {
             worker_concurrency: options.worker_concurrency,
             worker_module_specifier: None,
+            gpu: options.gpu,
         },
     )?;
     Ok((artifacts.declarations, artifacts.javascript))
@@ -156,7 +160,23 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let build = build_file(path, None)?;
+    run_file_with_options_and_args(path, &BuildOptions::default(), args)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_file_with_options_and_args<I, S>(
+    path: &Path,
+    options: &BuildOptions,
+    args: I,
+) -> Result<u8, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    if options.crate_type != CrateType::Bin {
+        return Err("flowarrow run requires a binary build".to_string());
+    }
+    let build = build_file_with_options(path, options)?;
     let status = std::process::Command::new(&build.executable)
         .args(args)
         .stdin(std::process::Stdio::inherit())
@@ -515,6 +535,7 @@ mod tests {
             TypeScriptCompileOptions {
                 mode: TypeScriptCompileMode::Library,
                 worker_concurrency: true,
+                ..TypeScriptCompileOptions::default()
             },
         )
         .expect("typescript workers");
@@ -536,6 +557,70 @@ mod tests {
         assert!(workers.contains("faScalarWorkerPools"));
         assert!(workers.contains("SharedArrayBuffer"));
         assert!(workers.contains("faParallelMapBigInt"));
+    }
+
+    #[test]
+    fn typescript_gpu_lowering_emits_webgpu_map_kernel() {
+        let source = r#"
+            import std.math { add, mul }
+
+            extern node square_plus_one_all(values: Seq[Real]) -> out: Seq[Real] {
+                $values -> map square_plus_one -> $out
+            }
+
+            node square_plus_one(x: Real) -> y: Real {
+                ($x, $x) -> mul -> $square
+                ($square, 1.0) -> add -> $y
+            }
+        "#;
+
+        let emitted = compile_typescript_source_with_options(
+            source,
+            TypeScriptCompileOptions {
+                mode: TypeScriptCompileMode::Library,
+                gpu: true,
+                ..TypeScriptCompileOptions::default()
+            },
+        )
+        .expect("typescript gpu");
+
+        assert!(emitted.contains("async function square_plus_one_all"));
+        assert!(emitted.contains("faGpuMapF32"));
+        assert!(emitted.contains("fa_gpu_map_square_plus_one"));
+        assert!(emitted.contains("createShaderModule"));
+        assert!(emitted.contains("@compute @workgroup_size(64)"));
+    }
+
+    #[test]
+    fn gpu_lowering_covers_concurrency_int_maps_and_reductions() {
+        let source = include_str!("../examples/concurrency/main.flow");
+
+        let emitted = compile_typescript_source_with_options(
+            source,
+            TypeScriptCompileOptions {
+                gpu: true,
+                ..TypeScriptCompileOptions::default()
+            },
+        )
+        .expect("typescript gpu concurrency");
+        assert!(emitted.contains("faGpuMapI32"));
+        assert!(emitted.contains("faGpuReduceI32"));
+        assert!(emitted.contains("fa_gpu_map_score_job"));
+        assert!(emitted.contains("fa_gpu_map_weight_job"));
+        assert!(emitted.contains("array<i32>"));
+        assert!(!emitted.contains("faParallelMapBigInt"));
+
+        let module = parser::parse(source).expect("parse");
+        let lowered = codegen::lower_module_with_base(&module, Path::new("examples/concurrency"))
+            .expect("lower");
+        let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
+        assert!(llvm.contains("@fa_gpu_map_score_job_wgsl"));
+        assert!(llvm.contains("@fa_gpu_map_weight_job_wgsl"));
+        assert!(llvm.contains("call void @fa_gpu_map_i64"));
+        assert!(llvm.contains("call i64 @fa_gpu_reduce_i64"));
+        assert!(!llvm.contains("map.loop"));
+        assert!(!llvm.contains("reduce.add.loop"));
+        assert!(!llvm.contains("reduce.minmax.loop"));
     }
 
     #[test]

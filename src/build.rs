@@ -22,6 +22,7 @@ pub struct BuildOptions {
     pub linker_flags: Vec<String>,
     pub emit_llvm: Option<PathBuf>,
     pub worker_concurrency: bool,
+    pub gpu: bool,
 }
 
 impl BuildOptions {
@@ -38,6 +39,7 @@ impl BuildOptions {
             linker_flags: Vec::new(),
             emit_llvm: None,
             worker_concurrency: false,
+            gpu: false,
         }
     }
 
@@ -57,6 +59,7 @@ impl Default for BuildOptions {
             linker_flags: Vec::new(),
             emit_llvm: None,
             worker_concurrency: false,
+            gpu: false,
         }
     }
 }
@@ -259,6 +262,11 @@ struct BuildPlan {
     build_hash: String,
 }
 
+struct NativeGpuRuntime {
+    link_dir: PathBuf,
+    link_name: &'static str,
+}
+
 pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, String> {
     let mut options = BuildOptions::default();
     options.emit_llvm = emit_llvm.map(PathBuf::from);
@@ -282,6 +290,16 @@ pub fn build_file_with_options(path: &Path, options: &BuildOptions) -> Result<Bu
     {
         return Err(
             "`--workers` is only supported for TypeScript and JavaScript builds".to_string(),
+        );
+    }
+    if options.gpu
+        && !matches!(
+            options.target,
+            BuildTarget::Typescript | BuildTarget::Javascript | BuildTarget::Native(_)
+        )
+    {
+        return Err(
+            "`--gpu` is supported for native, TypeScript, and JavaScript builds".to_string(),
         );
     }
 
@@ -322,6 +340,7 @@ fn build_typescript(
             worker_module_specifier: options
                 .worker_concurrency
                 .then(|| format!("./{executable_name}.worker.mjs")),
+            gpu: options.gpu,
         },
     )?;
     let artifact = build_dir.join(format!("{executable_name}.ts"));
@@ -367,6 +386,7 @@ fn build_javascript(
             worker_module_specifier: options
                 .worker_concurrency
                 .then(|| format!("./{executable_name}.worker.mjs")),
+            gpu: options.gpu,
         },
     )?;
     let artifact = build_dir.join(format!("{executable_name}.mjs"));
@@ -415,7 +435,7 @@ fn build_native_bin(
     options: &BuildOptions,
 ) -> Result<BuildOutput, String> {
     let lowered = codegen::lower_module_with_base(module, base_dir)?;
-    let llvm = lowered.emit_direct_llvm()?;
+    let llvm = lowered.emit_direct_llvm_with_gpu(options.gpu)?;
     let runtime_c = lowered.emit_runtime_support_c()?;
     let foreign_c_sources = lowered.foreign_c_source_paths(base_dir)?;
     let foreign_c_dependencies = lowered.foreign_c_dependency_paths(base_dir)?;
@@ -430,6 +450,11 @@ fn build_native_bin(
     )?;
     fs::create_dir_all(&plan.cache_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", plan.cache_dir.display()))?;
+    let gpu_runtime = if options.gpu {
+        Some(build_native_gpu_runtime(&plan)?)
+    } else {
+        None
+    };
 
     if plan.is_fresh() {
         copy_emitted_llvm(&plan.llvm_path, options.emit_llvm.as_deref())?;
@@ -446,7 +471,13 @@ fn build_native_bin(
         compile_foreign_c_sources(&foreign_c_sources, &plan.cache_dir, options, false)?;
     copy_emitted_llvm(&plan.llvm_path, options.emit_llvm.as_deref())?;
     remove_stale_runtime_c(&plan.stale_runtime_c_path)?;
-    link_native_executable(&plan, &runtime_c, &foreign_c_objects, options)?;
+    link_native_executable(
+        &plan,
+        &runtime_c,
+        &foreign_c_objects,
+        gpu_runtime.as_ref(),
+        options,
+    )?;
     fs::write(&plan.hash_path, plan.build_hash)
         .map_err(|error| format!("failed to write `{}`: {error}", plan.hash_path.display()))?;
 
@@ -464,7 +495,7 @@ fn build_native_cdylib(
     options: &BuildOptions,
 ) -> Result<BuildOutput, String> {
     let lowered = codegen::lower_module_with_base(module, base_dir)?;
-    let emitted = lowered.emit_native_cdylib_c()?;
+    let emitted = lowered.emit_native_cdylib_c_with_gpu(options.gpu)?;
     if emitted.exports.is_empty() {
         return Err(
             "native cdylib build requires at least one top-level `extern node` export".to_string(),
@@ -483,6 +514,11 @@ fn build_native_cdylib(
     )?;
     fs::create_dir_all(&plan.cache_dir)
         .map_err(|error| format!("failed to create `{}`: {error}", plan.cache_dir.display()))?;
+    let gpu_runtime = if options.gpu {
+        Some(build_native_gpu_runtime(&plan)?)
+    } else {
+        None
+    };
 
     let executable_name = executable_name(path)?;
     let header_path = plan.build_dir.join(format!("{executable_name}.h"));
@@ -511,7 +547,13 @@ fn build_native_cdylib(
         })?;
     }
     remove_stale_runtime_c(&plan.stale_runtime_c_path)?;
-    link_native_cdylib_c(&plan, &c_path, &foreign_c_objects, options)?;
+    link_native_cdylib_c(
+        &plan,
+        &c_path,
+        &foreign_c_objects,
+        gpu_runtime.as_ref(),
+        options,
+    )?;
     fs::write(&plan.hash_path, plan.build_hash)
         .map_err(|error| format!("failed to write `{}`: {error}", plan.hash_path.display()))?;
 
@@ -685,6 +727,7 @@ fn link_native_executable(
     plan: &BuildPlan,
     runtime_c: &str,
     foreign_c_objects: &[PathBuf],
+    gpu_runtime: Option<&NativeGpuRuntime>,
     options: &BuildOptions,
 ) -> Result<(), String> {
     let mut clang = Command::new("clang");
@@ -695,6 +738,7 @@ fn link_native_executable(
         .arg(&plan.llvm_path)
         .arg(&plan.runtime_llvm_path);
     clang.args(foreign_c_objects);
+    add_native_gpu_link_flags(&mut clang, gpu_runtime);
     add_native_compiler_flags(&mut clang, runtime_c)?;
     clang.args(&options.linker_flags);
     let output = clang
@@ -718,6 +762,7 @@ fn link_native_cdylib_c(
     plan: &BuildPlan,
     c_path: &Path,
     foreign_c_objects: &[PathBuf],
+    gpu_runtime: Option<&NativeGpuRuntime>,
     options: &BuildOptions,
 ) -> Result<(), String> {
     let runtime_c = fs::read_to_string(c_path)
@@ -734,6 +779,7 @@ fn link_native_cdylib_c(
     }
     clang.args(&options.compiler_flags).arg(c_path);
     clang.args(foreign_c_objects);
+    add_native_gpu_link_flags(&mut clang, gpu_runtime);
     add_native_compiler_flags(&mut clang, &runtime_c)?;
     clang.args(&options.linker_flags);
     let output = clang
@@ -751,6 +797,91 @@ fn link_native_cdylib_c(
         ));
     }
     Ok(())
+}
+
+fn add_native_gpu_link_flags(clang: &mut Command, gpu_runtime: Option<&NativeGpuRuntime>) {
+    let Some(runtime) = gpu_runtime else {
+        return;
+    };
+    clang
+        .arg("-L")
+        .arg(&runtime.link_dir)
+        .arg(format!("-l{}", runtime.link_name));
+    if cfg!(target_os = "macos") {
+        clang.arg("-Wl,-rpath,@executable_path");
+        clang.arg("-Wl,-rpath,@loader_path");
+    } else if cfg!(target_os = "linux") {
+        clang.arg("-Wl,-rpath,$ORIGIN");
+    }
+}
+
+fn build_native_gpu_runtime(plan: &BuildPlan) -> Result<NativeGpuRuntime, String> {
+    let runtime_dir = plan.cache_dir.join("native-gpu-runtime");
+    let src_dir = runtime_dir.join("src");
+    fs::create_dir_all(&src_dir)
+        .map_err(|error| format!("failed to create `{}`: {error}", src_dir.display()))?;
+    let manifest = runtime_dir.join("Cargo.toml");
+    let source = src_dir.join("lib.rs");
+    fs::write(&manifest, native_gpu_runtime_manifest())
+        .map_err(|error| format!("failed to write `{}`: {error}", manifest.display()))?;
+    fs::write(&source, native_gpu_runtime_source())
+        .map_err(|error| format!("failed to write `{}`: {error}", source.display()))?;
+
+    let output = Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .arg("--offline")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .output()
+        .map_err(|error| format!("failed to invoke cargo for native GPU runtime: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "native GPU runtime build failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let built = runtime_dir
+        .join("target")
+        .join("release")
+        .join(dynamic_library_name("flowarrow_gpu_runtime"));
+    let bundled = plan
+        .build_dir
+        .join(dynamic_library_name("flowarrow_gpu_runtime"));
+    fs::copy(&built, &bundled).map_err(|error| {
+        format!(
+            "failed to copy native GPU runtime from `{}` to `{}`: {error}",
+            built.display(),
+            bundled.display()
+        )
+    })?;
+    if cfg!(target_os = "macos") {
+        let install_name = format!("@rpath/{}", dynamic_library_name("flowarrow_gpu_runtime"));
+        let output = Command::new("install_name_tool")
+            .arg("-id")
+            .arg(&install_name)
+            .arg(&bundled)
+            .output()
+            .map_err(|error| {
+                format!(
+                    "failed to invoke install_name_tool for native GPU runtime `{}`: {error}",
+                    bundled.display()
+                )
+            })?;
+        if !output.status.success() {
+            return Err(format!(
+                "failed to set native GPU runtime install name:\n{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+    Ok(NativeGpuRuntime {
+        link_dir: plan.build_dir.clone(),
+        link_name: "flowarrow_gpu_runtime",
+    })
 }
 
 fn compile_foreign_c_sources(
@@ -1020,6 +1151,568 @@ fn dynamic_library_name(name: &str) -> String {
     }
 }
 
+fn native_gpu_runtime_manifest() -> &'static str {
+    "[package]\n\
+name = \"flowarrow_gpu_runtime\"\n\
+version = \"0.1.0\"\n\
+edition = \"2024\"\n\
+\n\
+[lib]\n\
+crate-type = [\"cdylib\"]\n\
+\n\
+[dependencies]\n\
+wgpu = \"29.0.3\"\n"
+}
+
+fn native_gpu_runtime_source() -> &'static str {
+    r##"use std::ffi::CStr;
+use std::future::Future;
+use std::os::raw::c_char;
+use std::slice;
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::task::{Context, Poll, Wake, Waker};
+use std::thread;
+
+use wgpu::util::DeviceExt;
+
+struct GpuRuntime {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+static GPU: OnceLock<Mutex<GpuRuntime>> = OnceLock::new();
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fa_gpu_require_device() {
+    let _ = runtime();
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fa_gpu_map_i64(
+    wgsl: *const c_char,
+    input: *const i64,
+    output: *mut i64,
+    count: usize,
+) {
+    let wgsl = read_wgsl(wgsl);
+    if count > 0 && (input.is_null() || output.is_null()) {
+        fail("FlowArrow GPU target received null sequence storage");
+    }
+    let input = if count == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(input, count) }
+    };
+    let output = if count == 0 {
+        &mut []
+    } else {
+        unsafe { slice::from_raw_parts_mut(output, count) }
+    };
+    let input_i32 = input.iter().map(|value| checked_i32(*value)).collect::<Vec<_>>();
+    let mut runtime = runtime().lock().unwrap_or_else(|_| {
+        fail("FlowArrow GPU target runtime lock was poisoned");
+    });
+    let mapped = runtime.map_i32(&wgsl, &input_i32);
+    for (dst, src) in output.iter_mut().zip(mapped) {
+        *dst = i64::from(src);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fa_gpu_map_f64(
+    wgsl: *const c_char,
+    input: *const f64,
+    output: *mut f64,
+    count: usize,
+) {
+    let wgsl = read_wgsl(wgsl);
+    if count > 0 && (input.is_null() || output.is_null()) {
+        fail("FlowArrow GPU target received null sequence storage");
+    }
+    let input = if count == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(input, count) }
+    };
+    let output = if count == 0 {
+        &mut []
+    } else {
+        unsafe { slice::from_raw_parts_mut(output, count) }
+    };
+    let mut runtime = runtime().lock().unwrap_or_else(|_| {
+        fail("FlowArrow GPU target runtime lock was poisoned");
+    });
+    runtime.map_f64(&wgsl, input, output);
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fa_gpu_reduce_i64(
+    op: u32,
+    input: *const i64,
+    count: usize,
+    identity: i64,
+) -> i64 {
+    if count > 0 && input.is_null() {
+        fail("FlowArrow GPU target received null reduce input");
+    }
+    let input = if count == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(input, count) }
+    };
+    let input_i32 = input.iter().map(|value| checked_i32(*value)).collect::<Vec<_>>();
+    let mut runtime = runtime().lock().unwrap_or_else(|_| {
+        fail("FlowArrow GPU target runtime lock was poisoned");
+    });
+    i64::from(runtime.reduce_i32(op, &input_i32, checked_i32(identity)))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fa_gpu_reduce_f64(
+    op: u32,
+    input: *const f64,
+    count: usize,
+    identity: f64,
+) -> f64 {
+    if count > 0 && input.is_null() {
+        fail("FlowArrow GPU target received null reduce input");
+    }
+    let input = if count == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(input, count) }
+    };
+    let input_f32 = input.iter().map(|value| *value as f32).collect::<Vec<_>>();
+    let mut runtime = runtime().lock().unwrap_or_else(|_| {
+        fail("FlowArrow GPU target runtime lock was poisoned");
+    });
+    f64::from(runtime.reduce_f32(op, &input_f32, identity as f32))
+}
+
+fn read_wgsl(wgsl: *const c_char) -> String {
+    if wgsl.is_null() {
+        fail("FlowArrow GPU target received a null WGSL kernel");
+    }
+    unsafe { CStr::from_ptr(wgsl) }
+        .to_str()
+        .unwrap_or_else(|_| fail("FlowArrow GPU target received non-UTF-8 WGSL"))
+        .to_string()
+}
+
+fn runtime() -> &'static Mutex<GpuRuntime> {
+    GPU.get_or_init(|| {
+        let runtime = block_on(GpuRuntime::new()).unwrap_or_else(|error| {
+            fail(&format!("FlowArrow GPU target requires a native GPU device: {error}"));
+        });
+        Mutex::new(runtime)
+    })
+}
+
+impl GpuRuntime {
+    async fn new() -> Result<Self, String> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(Self { device, queue })
+    }
+
+    fn map_i32(&mut self, wgsl: &str, input: &[i32]) -> Vec<i32> {
+        let bytes = self.dispatch_map(wgsl, i32_as_bytes(input), input.len());
+        bytes_as_i32(&bytes).to_vec()
+    }
+
+    fn map_f64(&mut self, wgsl: &str, input: &[f64], output: &mut [f64]) {
+        if input.len() != output.len() {
+            fail("FlowArrow GPU map received mismatched input and output lengths");
+        }
+        if input.is_empty() {
+            return;
+        }
+
+        let input_f32 = input.iter().map(|value| *value as f32).collect::<Vec<_>>();
+        let mapped = self.dispatch_map(wgsl, f32_as_bytes(&input_f32), input.len());
+        for (dst, src) in output.iter_mut().zip(bytes_as_f32(&mapped).iter()) {
+            *dst = f64::from(*src);
+        }
+    }
+
+    fn dispatch_map(&mut self, wgsl: &str, input_bytes: &[u8], len: usize) -> Vec<u8> {
+        if len == 0 {
+            return Vec::new();
+        }
+        let input_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.input"),
+            contents: input_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let byte_len = input_bytes.len() as wgpu::BufferAddress;
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("flowarrow.gpu.output"),
+            size: byte_len,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let params_buffer = self.map_params_buffer(len);
+
+        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("flowarrow.gpu.kernel"),
+            source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+        });
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("flowarrow.gpu.pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: None,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flowarrow.gpu.bind_group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("flowarrow.gpu.encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("flowarrow.gpu.pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(len.div_ceil(64) as u32, 1, 1);
+        }
+        let readback = self.readback_buffer(byte_len);
+        encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback, 0, byte_len);
+        self.queue.submit(Some(encoder.finish()));
+        self.read_buffer(&readback)
+    }
+
+    fn reduce_i32(&mut self, op: u32, input: &[i32], identity: i32) -> i32 {
+        let bytes = self.dispatch_reduce("i32", op, i32_as_bytes(input), input.len(), identity);
+        bytes_as_i32(&bytes)[0]
+    }
+
+    fn reduce_f32(&mut self, op: u32, input: &[f32], identity: f32) -> f32 {
+        let bytes = self.dispatch_reduce("f32", op, f32_as_bytes(input), input.len(), identity);
+        bytes_as_f32(&bytes)[0]
+    }
+
+    fn dispatch_reduce<T: GpuParam>(
+        &mut self,
+        scalar: &str,
+        op: u32,
+        input_bytes: &[u8],
+        len: usize,
+        identity: T,
+    ) -> Vec<u8> {
+        if len == 0 {
+            return identity.to_bytes().to_vec();
+        }
+        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("flowarrow.gpu.reduce.kernel"),
+            source: wgpu::ShaderSource::Wgsl(reduce_wgsl(scalar).into()),
+        });
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("flowarrow.gpu.reduce.pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let mut current_len = len;
+        let mut current_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.reduce.input"),
+            contents: input_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let mut keep_alive = Vec::new();
+        let mut include_identity = true;
+        while current_len > 1 || include_identity {
+            let virtual_len = current_len + usize::from(include_identity);
+            let output_len = virtual_len.div_ceil(2);
+            let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("flowarrow.gpu.reduce.output"),
+                size: (output_len * 4).max(4) as wgpu::BufferAddress,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let params_buffer = self.reduce_params_buffer(op, current_len, identity, include_identity);
+            let bind_group_layout = pipeline.get_bind_group_layout(0);
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("flowarrow.gpu.reduce.bind_group"),
+                layout: &bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: current_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: output_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: params_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("flowarrow.gpu.reduce.encoder"),
+                });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("flowarrow.gpu.reduce.pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(output_len.div_ceil(64) as u32, 1, 1);
+            }
+            self.queue.submit(Some(encoder.finish()));
+            keep_alive.push(current_buffer);
+            keep_alive.push(params_buffer);
+            current_buffer = output_buffer;
+            current_len = output_len;
+            include_identity = false;
+        }
+        let readback = self.readback_buffer(4);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("flowarrow.gpu.reduce.readback.encoder"),
+            });
+        encoder.copy_buffer_to_buffer(&current_buffer, 0, &readback, 0, 4);
+        self.queue.submit(Some(encoder.finish()));
+        self.read_buffer(&readback)
+    }
+
+    fn map_params_buffer(&self, len: usize) -> wgpu::Buffer {
+        let mut params = [0u8; 16];
+        params[0..4].copy_from_slice(&(len as u32).to_le_bytes());
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.map.params"),
+            contents: &params,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    }
+
+    fn reduce_params_buffer<T: GpuParam>(
+        &self,
+        op: u32,
+        len: usize,
+        identity: T,
+        include_identity: bool,
+    ) -> wgpu::Buffer {
+        let mut params = [0u8; 16];
+        params[0..4].copy_from_slice(&(len as u32).to_le_bytes());
+        params[4..8].copy_from_slice(&op.to_le_bytes());
+        params[8..12].copy_from_slice(&identity.to_bytes());
+        params[12..16].copy_from_slice(&(u32::from(include_identity)).to_le_bytes());
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.reduce.params"),
+            contents: &params,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    }
+
+    fn readback_buffer(&self, byte_len: wgpu::BufferAddress) -> wgpu::Buffer {
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("flowarrow.gpu.readback"),
+            size: byte_len,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        })
+    }
+
+    fn read_buffer(&mut self, readback: &wgpu::Buffer) -> Vec<u8> {
+        let slice = readback.slice(..);
+        let (tx, rx) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap_or_else(|error| {
+                fail(&format!("FlowArrow GPU target failed while waiting for device: {error}"));
+            });
+        rx.recv()
+            .unwrap_or_else(|_| fail("FlowArrow GPU target readback channel closed"))
+            .unwrap_or_else(|error| {
+                fail(&format!("FlowArrow GPU target failed to map readback: {error}"));
+            });
+        let mapped = slice.get_mapped_range();
+        let out = mapped.to_vec();
+        drop(mapped);
+        readback.unmap();
+        out
+    }
+}
+
+trait GpuParam: Copy {
+    fn to_bytes(self) -> [u8; 4];
+}
+
+impl GpuParam for i32 {
+    fn to_bytes(self) -> [u8; 4] {
+        self.to_le_bytes()
+    }
+}
+
+impl GpuParam for f32 {
+    fn to_bytes(self) -> [u8; 4] {
+        self.to_le_bytes()
+    }
+}
+
+fn checked_i32(value: i64) -> i32 {
+    i32::try_from(value).unwrap_or_else(|_| {
+        fail("FlowArrow GPU Int currently requires signed 32-bit values");
+    })
+}
+
+fn i32_as_bytes(values: &[i32]) -> &[u8] {
+    unsafe {
+        slice::from_raw_parts(
+            values.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(values),
+        )
+    }
+}
+
+fn f32_as_bytes(values: &[f32]) -> &[u8] {
+    unsafe {
+        slice::from_raw_parts(
+            values.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(values),
+        )
+    }
+}
+
+fn bytes_as_i32(values: &[u8]) -> &[i32] {
+    if values.len() % std::mem::size_of::<i32>() != 0 {
+        fail("FlowArrow GPU target read back misaligned i32 data");
+    }
+    unsafe {
+        slice::from_raw_parts(
+            values.as_ptr().cast::<i32>(),
+            values.len() / std::mem::size_of::<i32>(),
+        )
+    }
+}
+
+fn bytes_as_f32(values: &[u8]) -> &[f32] {
+    if values.len() % std::mem::size_of::<f32>() != 0 {
+        fail("FlowArrow GPU target read back misaligned f32 data");
+    }
+    unsafe {
+        slice::from_raw_parts(
+            values.as_ptr().cast::<f32>(),
+            values.len() / std::mem::size_of::<f32>(),
+        )
+    }
+}
+
+fn reduce_wgsl(scalar: &str) -> String {
+    REDUCE_WGSL.replace("__SCALAR__", scalar)
+}
+
+const REDUCE_WGSL: &str = r#"struct FaGpuReduceParams { len: u32, op: u32, identity: __SCALAR__, include_identity: u32 };
+@group(0) @binding(0) var<storage, read> fa_input: array<__SCALAR__>;
+@group(0) @binding(1) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(2) var<uniform> fa_params: FaGpuReduceParams;
+
+fn fa_apply(left: __SCALAR__, right: __SCALAR__) -> __SCALAR__ {
+  if (fa_params.op == 0u) { return left + right; }
+  if (fa_params.op == 1u) { return min(left, right); }
+  return max(left, right);
+}
+
+fn fa_value_at(index: u32) -> __SCALAR__ {
+  if (fa_params.include_identity != 0u && index == 0u) { return fa_params.identity; }
+  let source_index = index - select(0u, 1u, fa_params.include_identity != 0u);
+  return fa_input[source_index];
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let fa_i = fa_gid.x;
+  let virtual_len = fa_params.len + select(0u, 1u, fa_params.include_identity != 0u);
+  let out_len = (virtual_len + 1u) / 2u;
+  if (fa_i >= out_len) { return; }
+  let left_index = fa_i * 2u;
+  let right_index = left_index + 1u;
+  let left = fa_value_at(left_index);
+  let right = select(fa_params.identity, fa_value_at(right_index), right_index < virtual_len);
+  fa_output[fa_i] = fa_apply(left, right);
+}
+"#;
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    struct ThreadWaker(thread::Thread);
+
+    impl Wake for ThreadWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let waker = Waker::from(Arc::new(ThreadWaker(thread::current())));
+    let mut context = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => thread::park(),
+        }
+    }
+}
+
+fn fail(message: &str) -> ! {
+    eprintln!("{message}");
+    std::process::abort();
+}
+"##
+}
+
 fn executable_name(path: &Path) -> Result<String, String> {
     let name = path
         .file_stem()
@@ -1073,8 +1766,12 @@ fn build_hash(
 
     let mut hash = FNV_OFFSET;
     let options_hash = format!(
-        "{:?}:{:?}:{:?}:{:?}",
-        options.crate_type, options.optimization, options.compiler_flags, options.linker_flags
+        "{:?}:{:?}:{:?}:{:?}:{:?}",
+        options.crate_type,
+        options.optimization,
+        options.compiler_flags,
+        options.linker_flags,
+        options.gpu
     );
     for byte in env!("CARGO_PKG_VERSION")
         .as_bytes()
@@ -1086,6 +1783,11 @@ fn build_hash(
         .chain(b":")
         .chain(source.as_bytes())
         .chain(runtime_c.as_bytes())
+        .chain(if options.gpu {
+            native_gpu_runtime_source().as_bytes()
+        } else {
+            b""
+        })
         .chain(foreign_c.as_bytes())
     {
         hash ^= u64::from(*byte);

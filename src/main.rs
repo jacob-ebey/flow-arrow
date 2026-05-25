@@ -17,10 +17,38 @@ fn run_cli() -> Result<u8, String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
         Some("run") => {
-            let path = args
-                .next()
-                .ok_or_else(|| "usage: flowarrow run <path.flow> [args...]".to_string())?;
-            flowarrow::run_file_with_args(PathBuf::from(path).as_path(), args)
+            let mut options = flowarrow::BuildOptions::default();
+            let mut path = None;
+            let mut program_args = Vec::new();
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--gpu" if path.is_none() => options.gpu = true,
+                    "--no-gpu" if path.is_none() => options.gpu = false,
+                    "--" if path.is_none() => {
+                        path = Some(args.next().ok_or_else(|| {
+                            "usage: flowarrow run [--gpu] <path.flow> [args...]".to_string()
+                        })?);
+                        program_args.extend(args);
+                        break;
+                    }
+                    other if other.starts_with("--") && path.is_none() => {
+                        return Err(format!("unknown run option `{other}`"));
+                    }
+                    _ if path.is_none() => {
+                        path = Some(arg);
+                        program_args.extend(args);
+                        break;
+                    }
+                    _ => program_args.push(arg),
+                }
+            }
+            let path = path
+                .ok_or_else(|| "usage: flowarrow run [--gpu] <path.flow> [args...]".to_string())?;
+            flowarrow::run_file_with_options_and_args(
+                PathBuf::from(path).as_path(),
+                &options,
+                program_args,
+            )
         }
         Some("build") => {
             let mut path = None;
@@ -69,6 +97,12 @@ fn run_cli() -> Result<u8, String> {
                     "--no-workers" => {
                         options.worker_concurrency = false;
                     }
+                    "--gpu" => {
+                        options.gpu = true;
+                    }
+                    "--no-gpu" => {
+                        options.gpu = false;
+                    }
                     "--" => {
                         options.compiler_flags.extend(args);
                         break;
@@ -85,7 +119,7 @@ fn run_cli() -> Result<u8, String> {
                 }
             }
             let path = path.ok_or_else(|| {
-                "usage: flowarrow build [--target <target>] [--crate-type <bin|cdylib>] [--workers] [-O0|-O1|-O2|-O3|-Os|-Oz] [--compiler-flag <flag>] [--linker-flag <flag>] [--emit-llvm <path.ll>] <path.flow> [-- <compiler flags...>]"
+                "usage: flowarrow build [--target <target>] [--crate-type <bin|cdylib>] [--workers] [--gpu] [-O0|-O1|-O2|-O3|-Os|-Oz] [--compiler-flag <flag>] [--linker-flag <flag>] [--emit-llvm <path.ll>] <path.flow> [-- <compiler flags...>]"
                     .to_string()
             })?;
             flowarrow::build_file_with_options(PathBuf::from(path).as_path(), &options)?;

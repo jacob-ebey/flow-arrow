@@ -128,6 +128,7 @@ fn compile_typescript_artifacts_for_static(
         codegen::TypeScriptBackendOptions {
             worker_concurrency: true,
             worker_module_specifier: Some("./flowarrow.worker.mjs".to_string()),
+            gpu: false,
         },
     )?;
     Ok((
@@ -161,6 +162,7 @@ fn compile_javascript_artifacts_for_static(
         codegen::TypeScriptBackendOptions {
             worker_concurrency: true,
             worker_module_specifier: Some("./flowarrow.worker.mjs".to_string()),
+            gpu: false,
         },
     )?;
     Ok((
@@ -225,6 +227,7 @@ fn typescript_options(flags: u32) -> Result<TypeScriptCompileOptions, String> {
     Ok(TypeScriptCompileOptions {
         mode,
         worker_concurrency: flags & 0b10 != 0,
+        gpu: false,
     })
 }
 

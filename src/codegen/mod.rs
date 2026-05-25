@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod direct_llvm;
+mod gpu;
 mod llvm_text;
 mod oxc_postprocess;
 mod runtime_c;
@@ -86,9 +87,16 @@ impl LoweredModule {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn emit_direct_llvm(&self) -> Result<String, String> {
+    pub(crate) fn emit_direct_llvm_with_gpu(&self, gpu: bool) -> Result<String, String> {
         self.reject_foreign_js()?;
-        DirectLlvm::emit(self.typed()?)
+        Ok(DirectLlvm::emit_with_options(
+            self.typed()?,
+            DirectLlvmOptions {
+                gpu,
+                ..DirectLlvmOptions::default()
+            },
+        )?
+        .llvm)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -104,9 +112,12 @@ impl LoweredModule {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn emit_native_cdylib_c(&self) -> Result<NativeCdylibOutput, String> {
+    pub(crate) fn emit_native_cdylib_c_with_gpu(
+        &self,
+        gpu: bool,
+    ) -> Result<NativeCdylibOutput, String> {
         self.reject_foreign_js()?;
-        self.typed()?.emit_native_cdylib_c()
+        TypedCodegen::from_typed_with_gpu(&self.typed, gpu)?.emit_native_cdylib_c()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -126,6 +137,7 @@ impl LoweredModule {
                 export_abi: Some(DirectExportAbi::Wasm),
                 emit_object: true,
                 optimization,
+                gpu: false,
             },
         )?;
         Ok(WasmCdylibOutput {
@@ -170,16 +182,21 @@ impl LoweredModule {
     }
 
     fn emit_typescript_source(&self, options: TypeScriptBackendOptions) -> Result<String, String> {
-        let source = if options.worker_concurrency {
+        let source = if options.worker_concurrency || options.gpu {
             typescript::emit_module_with_options(
                 self.typed()?,
                 typescript::TypeScriptEmitOptions {
-                    worker_concurrency: true,
-                    worker_module_specifier: Some(
-                        options
-                            .worker_module_specifier
-                            .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
-                    ),
+                    worker_concurrency: options.worker_concurrency,
+                    worker_module_specifier: if options.worker_concurrency {
+                        Some(
+                            options
+                                .worker_module_specifier
+                                .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
+                        )
+                    } else {
+                        None
+                    },
+                    gpu: options.gpu,
                 },
             )?
         } else {
@@ -209,6 +226,7 @@ impl LoweredModule {
                         .worker_module_specifier
                         .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
                 ),
+                gpu: options.gpu,
             },
         )?;
         Ok(TypeScriptArtifacts {
@@ -225,7 +243,18 @@ impl LoweredModule {
         options: TypeScriptBackendOptions,
     ) -> Result<JavaScriptArtifacts, String> {
         if !options.worker_concurrency {
-            let source = typescript::emit_module(self.typed()?)?;
+            let source = if options.gpu {
+                typescript::emit_module_with_options(
+                    self.typed()?,
+                    typescript::TypeScriptEmitOptions {
+                        worker_concurrency: false,
+                        worker_module_specifier: None,
+                        gpu: true,
+                    },
+                )?
+            } else {
+                typescript::emit_module(self.typed()?)?
+            };
             let artifacts = oxc_postprocess::emit_javascript_artifacts(&source)?;
             return Ok(JavaScriptArtifacts {
                 declarations: artifacts.declarations,
@@ -244,6 +273,7 @@ impl LoweredModule {
                         .worker_module_specifier
                         .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
                 ),
+                gpu: options.gpu,
             },
         )?;
         let artifacts = oxc_postprocess::emit_javascript_artifacts(&emitted.source)?;
@@ -311,6 +341,7 @@ pub fn emit_runtime_c_with_base(module: &Module, base_dir: &Path) -> Result<Stri
 pub struct TypeScriptBackendOptions {
     pub worker_concurrency: bool,
     pub worker_module_specifier: Option<String>,
+    pub gpu: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -478,6 +509,8 @@ struct TypedCodegen<'a> {
     stdlib_names: HashMap<String, String>,
     aliases: HashMap<String, Ty>,
     types: TypeRegistry,
+    gpu_enabled: bool,
+    gpu_plan: gpu::GpuPlan,
 }
 
 #[derive(Debug, Clone)]

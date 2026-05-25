@@ -1,7 +1,20 @@
 use super::*;
 
+fn gpu_reduce_op(op: &str) -> u32 {
+    match op {
+        "add" => 0,
+        "min" => 1,
+        "max" => 2,
+        _ => unreachable!("unsupported GPU reduce op"),
+    }
+}
+
 impl<'a> TypedCodegen<'a> {
     pub(super) fn from_typed(typed: &'a TypedModule) -> Result<Self, String> {
+        Self::from_typed_with_gpu(typed, false)
+    }
+
+    pub(super) fn from_typed_with_gpu(typed: &'a TypedModule, gpu: bool) -> Result<Self, String> {
         let mut codegen = Self {
             module: typed.module(),
             typed,
@@ -16,6 +29,12 @@ impl<'a> TypedCodegen<'a> {
             stdlib_names: HashMap::new(),
             aliases: HashMap::new(),
             types: TypeRegistry::default(),
+            gpu_enabled: gpu,
+            gpu_plan: if gpu {
+                gpu::GpuPlan::analyze(typed)
+            } else {
+                gpu::GpuPlan::empty()
+            },
         };
         codegen.collect_imports()?;
         codegen.collect_type_aliases()?;
@@ -101,6 +120,18 @@ impl<'a> TypedCodegen<'a> {
         if uses_sqlite_runtime {
             stdlib::emit_sqlite_runtime_c(&mut out);
         }
+        if self.gpu_enabled {
+            out.push_str("extern void fa_gpu_require_device(void);\n");
+        }
+        if !self.gpu_plan.is_empty() {
+            out.push_str("extern void fa_gpu_map_i64(const char *wgsl, const int64_t *input, int64_t *output, size_t count);\n");
+            out.push_str("extern void fa_gpu_map_f64(const char *wgsl, const double *input, double *output, size_t count);\n");
+            out.push_str(&self.gpu_plan.emit_c_manifest());
+        }
+        if self.gpu_enabled {
+            out.push_str("extern int64_t fa_gpu_reduce_i64(uint32_t op, const int64_t *input, size_t count, int64_t identity);\n");
+            out.push_str("extern double fa_gpu_reduce_f64(uint32_t op, const double *input, size_t count, double identity);\n");
+        }
         for name in &names {
             let sig = self.signatures.get(name).expect("signature");
             let input = self.types.c_type(&sig.input);
@@ -127,6 +158,9 @@ impl<'a> TypedCodegen<'a> {
   args.argv = argv;\n\
   ",
         );
+        if self.gpu_enabled {
+            out.push_str("fa_gpu_require_device();\n  ");
+        }
         let main_sig = self
             .signatures
             .get("main")
@@ -208,6 +242,18 @@ impl<'a> TypedCodegen<'a> {
         if uses_sqlite_runtime {
             stdlib::emit_sqlite_runtime_c(&mut out);
         }
+        if self.gpu_enabled {
+            out.push_str("extern void fa_gpu_require_device(void);\n");
+        }
+        if !self.gpu_plan.is_empty() {
+            out.push_str("extern void fa_gpu_map_i64(const char *wgsl, const int64_t *input, int64_t *output, size_t count);\n");
+            out.push_str("extern void fa_gpu_map_f64(const char *wgsl, const double *input, double *output, size_t count);\n");
+            out.push_str(&self.gpu_plan.emit_c_manifest());
+        }
+        if self.gpu_enabled {
+            out.push_str("extern int64_t fa_gpu_reduce_i64(uint32_t op, const int64_t *input, size_t count, int64_t identity);\n");
+            out.push_str("extern double fa_gpu_reduce_f64(uint32_t op, const double *input, size_t count, double identity);\n");
+        }
         for name in &names {
             let sig = self.signatures.get(name).expect("signature");
             let input = self.types.c_type(&sig.input);
@@ -225,6 +271,9 @@ impl<'a> TypedCodegen<'a> {
             out.push_str(&format!("extern {output} {symbol}({input} input);\n"));
         }
         out.push('\n');
+        if self.gpu_enabled {
+            out.push_str("#if defined(__GNUC__) || defined(__clang__)\n__attribute__((constructor)) static void fa_gpu_cdylib_init(void) { fa_gpu_require_device(); }\n#endif\n\n");
+        }
         out.push_str(&self.parallel_helpers);
         out.push_str(&bodies);
         out.push_str(&wrappers);
@@ -2358,6 +2407,27 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let item_c_ty = self.types.c_type(&output_item_ty);
         let new_fn = self.types.seq_new_name(&output_ty)?;
         let tmp = self.next_temp();
+        if let Some(kernel) = self
+            .gpu_plan
+            .kernel_for_map(name, item_ty.as_ref(), &output_item_ty)
+        {
+            let map_fn = match kernel.scalar {
+                gpu::GpuScalarKind::I32 => "fa_gpu_map_i64",
+                gpu::GpuScalarKind::F32 => "fa_gpu_map_f64",
+            };
+            out.push_str(&format!(
+                "  {c_ty} {tmp} = {new_fn}({}.count);\n",
+                input.code
+            ));
+            out.push_str(&format!(
+                "  {map_fn}({}_wgsl, {}.items, {tmp}.items, {}.count);\n",
+                kernel.id, input.code, input.code
+            ));
+            return Ok(Value {
+                code: tmp,
+                ty: output_ty,
+            });
+        }
         if self.is_parallel_safe_name(name, &mut HashSet::new()) {
             let worker = self.emit_parallel_map_helper(
                 name,
@@ -2854,6 +2924,39 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             return Err(format!("`reduce {op}` expected Seq input"));
         };
         let canonical = self.canonical_name(op);
+        if self.gpu_enabled && matches!(canonical.as_str(), "add" | "min" | "max") {
+            match item_ty.as_ref() {
+                Ty::Int => {
+                    let tmp = self.next_temp();
+                    out.push_str(&format!(
+                        "  int64_t {tmp} = fa_gpu_reduce_i64({}, {}.items, {}.count, {});\n",
+                        gpu_reduce_op(&canonical),
+                        input.code,
+                        input.code,
+                        identity.code
+                    ));
+                    return Ok(Value {
+                        code: tmp,
+                        ty: Ty::Int,
+                    });
+                }
+                Ty::Real => {
+                    let tmp = self.next_temp();
+                    out.push_str(&format!(
+                        "  double {tmp} = fa_gpu_reduce_f64({}, {}.items, {}.count, {});\n",
+                        gpu_reduce_op(&canonical),
+                        input.code,
+                        input.code,
+                        identity.code
+                    ));
+                    return Ok(Value {
+                        code: tmp,
+                        ty: Ty::Real,
+                    });
+                }
+                _ => {}
+            }
+        }
         if canonical == "add" {
             return self.emit_reduce_add(out, input, *item_ty, identity);
         }

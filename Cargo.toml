@@ -8,6 +8,7 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 oxc = { version = "0.132.0", features = ["transformer", "minifier", "codegen", "semantic", "isolated_declarations"] }
+wgpu = "29.0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 inkwell = { version = "0.9.0", features = ["llvm22-1", "target-webassembly"] }

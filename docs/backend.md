@@ -262,6 +262,31 @@ reuse the range buffer directly and return typed views over worker output
 instead of copying both sides of the worker boundary. Unsupported maps keep the
 sequential lowering.
 
+GPU lowering is also opt-in:
+
+```text
+flowarrow build --target javascript --gpu path/to/main.flow
+flowarrow build --target typescript --gpu path/to/main.flow
+flowarrow build --target native --gpu path/to/main.flow
+flowarrow run --gpu path/to/main.flow
+```
+
+The compiler keeps GPU support in the backend lowering pipeline, not in a
+separate evaluator. A backend-neutral GPU planner walks the typed module and
+recognizes GPU-legal typed regions. The implemented scalar path covers pure
+`Seq[Int] -> Seq[Int]` and `Seq[Real] -> Seq[Real]` `map` kernels plus numeric
+`reduce add`, `reduce min`, and `reduce max` over `Seq[Int]` and `Seq[Real]`.
+The planner lowers map regions to WGSL with explicit storage buffers and a
+workgroup dispatch shape. The TypeScript and JavaScript backends emit WebGPU
+host code that compiles and dispatches the generated WGSL through
+`navigator.gpu`, and reduction lowering emits WebGPU reduction passes.
+GPU-targeted artifacts require WebGPU at runtime and fail if a device cannot be
+acquired. Native/LLVM builds lower eligible maps and reductions to direct calls
+into a generated wgpu runtime library. That runtime is bundled next to the
+native executable, requires a native adapter at startup, compiles the WGSL
+kernels through wgpu, and aborts instead of falling back to CPU execution when
+no GPU device is available.
+
 ### 2.5 WASM-hosted TypeScript compiler
 
 The compiler crate can also be built as a `wasm32-unknown-unknown`
@@ -373,10 +398,12 @@ DAG IR (FlowArrow's own IR; SSA-shaped, matches language semantics)
    │       - lowering choices (sequential / SIMD / parallel / GPU)
    │
    ▼
-LLVM IR lowering
+Backend lowering
    │
    ├──► native target → object files → lld → exe / .a / .so / .dylib / .dll
-   └──► wasm32 target → .wasm → (browser bindings | wasi host)
+   ├──► wasm32 target → .wasm → (browser bindings | wasi host)
+   ├──► TypeScript / JavaScript → source artifacts
+   └──► GPU planner → WGSL kernels consumed by native and TS/JS backends
 ```
 
 The FlowArrow DAG IR is preserved as a first-class artifact (emittable
