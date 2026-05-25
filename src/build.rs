@@ -414,10 +414,11 @@ fn build_native_bin(
     target: &NativeTarget,
     options: &BuildOptions,
 ) -> Result<BuildOutput, String> {
-    let llvm = codegen::emit_direct_llvm_with_base(module, base_dir)?;
-    let runtime_c = codegen::emit_runtime_support_c_with_base(module, base_dir)?;
-    let foreign_c_sources = codegen::foreign_c_source_paths_with_base(module, base_dir)?;
-    let foreign_c_dependencies = codegen::foreign_c_dependency_paths_with_base(module, base_dir)?;
+    let lowered = codegen::lower_module_with_base(module, base_dir)?;
+    let llvm = lowered.emit_direct_llvm()?;
+    let runtime_c = lowered.emit_runtime_support_c()?;
+    let foreign_c_sources = lowered.foreign_c_source_paths(base_dir)?;
+    let foreign_c_dependencies = lowered.foreign_c_dependency_paths(base_dir)?;
     let foreign_c_hash = foreign_c_hash_input(&foreign_c_dependencies)?;
     let plan = BuildPlan::new(
         path,
@@ -462,14 +463,15 @@ fn build_native_cdylib(
     target: &NativeTarget,
     options: &BuildOptions,
 ) -> Result<BuildOutput, String> {
-    let emitted = codegen::emit_native_cdylib_c_with_base(module, base_dir)?;
+    let lowered = codegen::lower_module_with_base(module, base_dir)?;
+    let emitted = lowered.emit_native_cdylib_c()?;
     if emitted.exports.is_empty() {
         return Err(
             "native cdylib build requires at least one top-level `extern node` export".to_string(),
         );
     }
-    let foreign_c_sources = codegen::foreign_c_source_paths_with_base(module, base_dir)?;
-    let foreign_c_dependencies = codegen::foreign_c_dependency_paths_with_base(module, base_dir)?;
+    let foreign_c_sources = lowered.foreign_c_source_paths(base_dir)?;
+    let foreign_c_dependencies = lowered.foreign_c_dependency_paths(base_dir)?;
     let foreign_c_hash = foreign_c_hash_input(&foreign_c_dependencies)?;
     let plan = BuildPlan::new(
         path,
@@ -545,12 +547,9 @@ fn build_wasm(
         );
     }
 
-    let emitted = codegen::emit_wasm_cdylib_llvm_with_base(
-        module,
-        base_dir,
-        target.triple(),
-        options.optimization.llvm_level(),
-    )?;
+    let lowered = codegen::lower_module_with_base(module, base_dir)?;
+    let emitted =
+        lowered.emit_wasm_cdylib_llvm(target.triple(), options.optimization.llvm_level())?;
     if emitted.exports.is_empty() {
         return Err(
             "WASM cdylib build requires at least one top-level `extern node` export".to_string(),

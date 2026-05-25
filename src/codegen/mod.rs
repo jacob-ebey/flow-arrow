@@ -2,6 +2,10 @@ use crate::ast::*;
 use crate::module_resolver;
 use crate::monomorphize;
 use crate::stdlib::{self, RuntimeSupport};
+use crate::types::{
+    Signature, Type as Ty, contains_empty_seq, parse_type, sequence_item_type, stdlib_type_symbol,
+    substitute_partial,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use inkwell::AddressSpace;
 #[cfg(not(target_arch = "wasm32"))]
@@ -48,26 +52,256 @@ pub fn emit_module(_module: &Module) -> Result<String, String> {
     Err("LLVM output is unavailable in the wasm compiler; use TypeScript output".to_string())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub fn emit_direct_llvm_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    if expanded.declarations.iter().any(|decl| {
-        matches!(
-            decl,
-            Decl::Foreign(ForeignBlock {
-                target: ForeignTarget::Js,
-                ..
-            })
-        )
-    }) {
-        return Err(
-            "foreign js declarations are supported only by the TypeScript and JavaScript backends"
-                .to_string(),
-        );
+pub(crate) struct LoweredModule {
+    module: Module,
+}
+
+impl LoweredModule {
+    pub(crate) fn with_stdlib_sources(module: &Module) -> Result<Self, String> {
+        let expanded = module_resolver::expand_stdlib_sources(module)?;
+        Self::from_expanded(expanded)
     }
-    let codegen = TypedCodegen::new(&expanded)?;
-    DirectLlvm::emit(codegen)
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn with_base(module: &Module, base_dir: &Path) -> Result<Self, String> {
+        let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+        Self::from_expanded(expanded)
+    }
+
+    fn from_expanded(module: Module) -> Result<Self, String> {
+        Ok(Self {
+            module: monomorphize::expand_module(&module)?,
+        })
+    }
+
+    fn typed(&self) -> Result<TypedCodegen<'_>, String> {
+        TypedCodegen::new(&self.module)
+    }
+
+    fn has_foreign_js(&self) -> bool {
+        self.module.declarations.iter().any(|decl| {
+            matches!(
+                decl,
+                Decl::Foreign(ForeignBlock {
+                    target: ForeignTarget::Js,
+                    ..
+                })
+            )
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn has_foreign(&self) -> bool {
+        self.module
+            .declarations
+            .iter()
+            .any(|decl| matches!(decl, Decl::Foreign(_)))
+    }
+
+    fn reject_foreign_js(&self) -> Result<(), String> {
+        if self.has_foreign_js() {
+            return Err(
+                "foreign js declarations are supported only by the TypeScript and JavaScript backends"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn emit_direct_llvm(&self) -> Result<String, String> {
+        self.reject_foreign_js()?;
+        DirectLlvm::emit(self.typed()?)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn emit_runtime_c(&self) -> Result<String, String> {
+        self.reject_foreign_js()?;
+        self.typed()?.emit()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn emit_runtime_support_c(&self) -> Result<String, String> {
+        self.reject_foreign_js()?;
+        self.typed()?.emit_runtime_support_c()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn emit_native_cdylib_c(&self) -> Result<NativeCdylibOutput, String> {
+        self.reject_foreign_js()?;
+        self.typed()?.emit_native_cdylib_c()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn emit_wasm_cdylib_llvm(
+        &self,
+        target_triple: &str,
+        optimization: OptimizationLevel,
+    ) -> Result<WasmCdylibOutput, String> {
+        if self.has_foreign() {
+            return Err("foreign declarations are not supported by WASM builds yet".to_string());
+        }
+        let emitted = DirectLlvm::emit_with_options(
+            self.typed()?,
+            DirectLlvmOptions {
+                target_triple: Some(target_triple.to_string()),
+                emit_entrypoint: false,
+                export_abi: Some(DirectExportAbi::Wasm),
+                emit_object: true,
+                optimization,
+            },
+        )?;
+        Ok(WasmCdylibOutput {
+            llvm: emitted.llvm,
+            object: emitted
+                .object
+                .ok_or_else(|| "WASM object emission did not produce an object file".to_string())?,
+            exports: emitted.symbol_exports,
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn foreign_c_source_paths(&self, base_dir: &Path) -> Result<Vec<PathBuf>, String> {
+        let codegen = self.typed()?;
+        let mut paths = codegen
+            .foreign_c
+            .values()
+            .filter_map(|binding| binding.source.as_deref())
+            .map(|path| absolutize_codegen_path(base_dir, path))
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn foreign_c_dependency_paths(
+        &self,
+        base_dir: &Path,
+    ) -> Result<Vec<PathBuf>, String> {
+        let codegen = self.typed()?;
+        let mut paths = Vec::new();
+        for binding in codegen.foreign_c.values() {
+            paths.push(absolutize_codegen_path(base_dir, &binding.header));
+            if let Some(source) = &binding.source {
+                paths.push(absolutize_codegen_path(base_dir, source));
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
+    fn emit_typescript_source(&self, options: TypeScriptBackendOptions) -> Result<String, String> {
+        let source = if options.worker_concurrency {
+            typescript::emit_module_with_options(
+                self.typed()?,
+                typescript::TypeScriptEmitOptions {
+                    worker_concurrency: true,
+                    worker_module_specifier: Some(
+                        options
+                            .worker_module_specifier
+                            .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
+                    ),
+                },
+            )?
+        } else {
+            typescript::emit_module(self.typed()?)?
+        };
+        oxc_postprocess::emit_typescript(&source)
+    }
+
+    fn emit_typescript_artifacts(
+        &self,
+        options: TypeScriptBackendOptions,
+    ) -> Result<TypeScriptArtifacts, String> {
+        if !options.worker_concurrency {
+            return Ok(TypeScriptArtifacts {
+                source: self.emit_typescript_source(options)?,
+                files: Vec::new(),
+            });
+        }
+        let worker_path =
+            worker_module_path_from_specifier(options.worker_module_specifier.as_deref());
+        let emitted = typescript::emit_module_artifacts_with_options(
+            self.typed()?,
+            typescript::TypeScriptEmitOptions {
+                worker_concurrency: true,
+                worker_module_specifier: Some(
+                    options
+                        .worker_module_specifier
+                        .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
+                ),
+            },
+        )?;
+        Ok(TypeScriptArtifacts {
+            source: oxc_postprocess::emit_typescript(&emitted.source)?,
+            files: vec![GeneratedSourceFile {
+                path: worker_path,
+                source: typescript::scalar_worker_module_source(&emitted.worker_mappers),
+            }],
+        })
+    }
+
+    fn emit_javascript_artifacts(
+        &self,
+        options: TypeScriptBackendOptions,
+    ) -> Result<JavaScriptArtifacts, String> {
+        if !options.worker_concurrency {
+            let source = typescript::emit_module(self.typed()?)?;
+            let artifacts = oxc_postprocess::emit_javascript_artifacts(&source)?;
+            return Ok(JavaScriptArtifacts {
+                declarations: artifacts.declarations,
+                javascript: artifacts.javascript,
+                files: Vec::new(),
+            });
+        }
+        let worker_path =
+            worker_module_path_from_specifier(options.worker_module_specifier.as_deref());
+        let emitted = typescript::emit_module_artifacts_with_options(
+            self.typed()?,
+            typescript::TypeScriptEmitOptions {
+                worker_concurrency: true,
+                worker_module_specifier: Some(
+                    options
+                        .worker_module_specifier
+                        .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
+                ),
+            },
+        )?;
+        let artifacts = oxc_postprocess::emit_javascript_artifacts(&emitted.source)?;
+        Ok(JavaScriptArtifacts {
+            declarations: artifacts.declarations,
+            javascript: artifacts.javascript,
+            files: vec![GeneratedSourceFile {
+                path: worker_path,
+                source: typescript::scalar_worker_module_source(&emitted.worker_mappers),
+            }],
+        })
+    }
+
+    fn emit_llvm_ir_preview(&self) -> Result<String, String> {
+        self.reject_foreign_js()?;
+        llvm_text::emit_module(self.typed()?)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn absolutize_codegen_path(base_dir: &Path, path: &str) -> PathBuf {
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        path
+    } else {
+        base_dir.join(path)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn lower_module_with_base(
+    module: &Module,
+    base_dir: &Path,
+) -> Result<LoweredModule, String> {
+    LoweredModule::with_base(module, base_dir)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -84,156 +318,16 @@ pub(crate) struct NativeCdylibOutput {
     pub exports: Vec<String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn emit_native_cdylib_c_with_base(
-    module: &Module,
-    base_dir: &Path,
-) -> Result<NativeCdylibOutput, String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    if expanded.declarations.iter().any(|decl| {
-        matches!(
-            decl,
-            Decl::Foreign(ForeignBlock {
-                target: ForeignTarget::Js,
-                ..
-            })
-        )
-    }) {
-        return Err(
-            "foreign js declarations are supported only by the TypeScript and JavaScript backends"
-                .to_string(),
-        );
-    }
-    let mut codegen = TypedCodegen::new(&expanded)?;
-    codegen.emit_native_cdylib_c()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn emit_wasm_cdylib_llvm_with_base(
-    module: &Module,
-    base_dir: &Path,
-    target_triple: &str,
-    optimization: OptimizationLevel,
-) -> Result<WasmCdylibOutput, String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    if expanded
-        .declarations
-        .iter()
-        .any(|decl| matches!(decl, Decl::Foreign(_)))
-    {
-        return Err("foreign declarations are not supported by WASM builds yet".to_string());
-    }
-    let codegen = TypedCodegen::new(&expanded)?;
-    let emitted = DirectLlvm::emit_with_options(
-        codegen,
-        DirectLlvmOptions {
-            target_triple: Some(target_triple.to_string()),
-            emit_entrypoint: false,
-            export_abi: Some(DirectExportAbi::Wasm),
-            emit_object: true,
-            optimization,
-        },
-    )?;
-    Ok(WasmCdylibOutput {
-        llvm: emitted.llvm,
-        object: emitted
-            .object
-            .ok_or_else(|| "WASM object emission did not produce an object file".to_string())?,
-        exports: emitted.symbol_exports,
-    })
-}
-
 #[allow(dead_code)]
 #[cfg(not(target_arch = "wasm32"))]
 pub fn emit_runtime_c(module: &Module) -> Result<String, String> {
-    let expanded = module_resolver::expand_stdlib_sources(module)?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    TypedCodegen::new(&expanded)?.emit()
+    LoweredModule::with_stdlib_sources(module)?.emit_runtime_c()
 }
 
 #[allow(dead_code)]
 #[cfg(not(target_arch = "wasm32"))]
 pub fn emit_runtime_c_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    TypedCodegen::new(&expanded)?.emit()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn emit_runtime_support_c_with_base(
-    module: &Module,
-    base_dir: &Path,
-) -> Result<String, String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let mut codegen = TypedCodegen::new(&expanded)?;
-    codegen.emit_runtime_support_c()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn foreign_c_source_paths_with_base(
-    module: &Module,
-    base_dir: &Path,
-) -> Result<Vec<PathBuf>, String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let codegen = TypedCodegen::new(&expanded)?;
-    let mut paths = codegen
-        .foreign_c
-        .values()
-        .filter_map(|binding| binding.source.as_deref())
-        .map(|path| {
-            let path = PathBuf::from(path);
-            if path.is_absolute() {
-                path
-            } else {
-                base_dir.join(path)
-            }
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths.dedup();
-    Ok(paths)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn foreign_c_dependency_paths_with_base(
-    module: &Module,
-    base_dir: &Path,
-) -> Result<Vec<PathBuf>, String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let codegen = TypedCodegen::new(&expanded)?;
-    let mut paths = Vec::new();
-    for binding in codegen.foreign_c.values() {
-        paths.push(binding.header.clone());
-        if let Some(source) = &binding.source {
-            paths.push(source.clone());
-        }
-    }
-    let mut paths = paths
-        .into_iter()
-        .map(|path| {
-            let path = PathBuf::from(path);
-            if path.is_absolute() {
-                path
-            } else {
-                base_dir.join(path)
-            }
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths.dedup();
-    Ok(paths)
-}
-
-pub fn emit_typescript(module: &Module) -> Result<String, String> {
-    let expanded = module_resolver::expand_stdlib_sources(module)?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
-    oxc_postprocess::emit_typescript(&source)
+    LoweredModule::with_base(module, base_dir)?.emit_runtime_c()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -272,23 +366,7 @@ pub fn emit_typescript_with_options(
     module: &Module,
     options: TypeScriptBackendOptions,
 ) -> Result<String, String> {
-    if !options.worker_concurrency {
-        return emit_typescript(module);
-    }
-    let expanded = module_resolver::expand_stdlib_sources(module)?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let source = typescript::emit_module_with_options(
-        TypedCodegen::new(&expanded)?,
-        typescript::TypeScriptEmitOptions {
-            worker_concurrency: options.worker_concurrency,
-            worker_module_specifier: Some(
-                options
-                    .worker_module_specifier
-                    .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
-            ),
-        },
-    )?;
-    oxc_postprocess::emit_typescript(&source)
+    LoweredModule::with_stdlib_sources(module)?.emit_typescript_source(options)
 }
 
 #[allow(dead_code)]
@@ -296,105 +374,18 @@ pub fn emit_typescript_artifacts_with_options(
     module: &Module,
     options: TypeScriptBackendOptions,
 ) -> Result<TypeScriptArtifacts, String> {
-    if !options.worker_concurrency {
-        return Ok(TypeScriptArtifacts {
-            source: emit_typescript(module)?,
-            files: Vec::new(),
-        });
-    }
-    let worker_path = worker_module_path_from_specifier(options.worker_module_specifier.as_deref());
-    let expanded = module_resolver::expand_stdlib_sources(module)?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let emitted = typescript::emit_module_artifacts_with_options(
-        TypedCodegen::new(&expanded)?,
-        typescript::TypeScriptEmitOptions {
-            worker_concurrency: options.worker_concurrency,
-            worker_module_specifier: Some(
-                options
-                    .worker_module_specifier
-                    .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
-            ),
-        },
-    )?;
-    Ok(TypeScriptArtifacts {
-        source: oxc_postprocess::emit_typescript(&emitted.source)?,
-        files: vec![GeneratedSourceFile {
-            path: worker_path,
-            source: typescript::scalar_worker_module_source(&emitted.worker_mappers),
-        }],
-    })
-}
-
-pub fn emit_javascript_artifacts(module: &Module) -> Result<JavaScriptArtifacts, String> {
-    let expanded = module_resolver::expand_stdlib_sources(module)?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
-    let artifacts = oxc_postprocess::emit_javascript_artifacts(&source)?;
-    Ok(JavaScriptArtifacts {
-        declarations: artifacts.declarations,
-        javascript: artifacts.javascript,
-        files: Vec::new(),
-    })
+    LoweredModule::with_stdlib_sources(module)?.emit_typescript_artifacts(options)
 }
 
 pub fn emit_javascript_artifacts_with_options(
     module: &Module,
     options: TypeScriptBackendOptions,
 ) -> Result<JavaScriptArtifacts, String> {
-    if !options.worker_concurrency {
-        return emit_javascript_artifacts(module);
-    }
-    let worker_path = worker_module_path_from_specifier(options.worker_module_specifier.as_deref());
-    let expanded = module_resolver::expand_stdlib_sources(module)?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let emitted = typescript::emit_module_artifacts_with_options(
-        TypedCodegen::new(&expanded)?,
-        typescript::TypeScriptEmitOptions {
-            worker_concurrency: options.worker_concurrency,
-            worker_module_specifier: Some(
-                options
-                    .worker_module_specifier
-                    .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
-            ),
-        },
-    )?;
-    let artifacts = oxc_postprocess::emit_javascript_artifacts(&emitted.source)?;
-    Ok(JavaScriptArtifacts {
-        declarations: artifacts.declarations,
-        javascript: artifacts.javascript,
-        files: vec![GeneratedSourceFile {
-            path: worker_path,
-            source: typescript::scalar_worker_module_source(&emitted.worker_mappers),
-        }],
-    })
+    LoweredModule::with_stdlib_sources(module)?.emit_javascript_artifacts(options)
 }
 
 pub fn emit_llvm_ir_preview(module: &Module) -> Result<String, String> {
-    let expanded = module_resolver::expand_stdlib_sources(module)?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    if expanded.declarations.iter().any(|decl| {
-        matches!(
-            decl,
-            Decl::Foreign(ForeignBlock {
-                target: ForeignTarget::Js,
-                ..
-            })
-        )
-    }) {
-        return Err(
-            "foreign js declarations are supported only by the TypeScript and JavaScript backends"
-                .to_string(),
-        );
-    }
-    llvm_text::emit_module(TypedCodegen::new(&expanded)?)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn emit_typescript_with_base(module: &Module, base_dir: &Path) -> Result<String, String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
-    oxc_postprocess::emit_typescript(&source)
+    LoweredModule::with_stdlib_sources(module)?.emit_llvm_ir_preview()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -404,19 +395,7 @@ pub fn emit_typescript_with_base_and_options(
     base_dir: &Path,
     options: TypeScriptBackendOptions,
 ) -> Result<String, String> {
-    if !options.worker_concurrency {
-        return emit_typescript_with_base(module, base_dir);
-    }
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let source = typescript::emit_module_with_options(
-        TypedCodegen::new(&expanded)?,
-        typescript::TypeScriptEmitOptions {
-            worker_concurrency: options.worker_concurrency,
-            worker_module_specifier: options.worker_module_specifier,
-        },
-    )?;
-    oxc_postprocess::emit_typescript(&source)
+    LoweredModule::with_base(module, base_dir)?.emit_typescript_source(options)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -425,49 +404,7 @@ pub fn emit_typescript_artifacts_with_base_and_options(
     base_dir: &Path,
     options: TypeScriptBackendOptions,
 ) -> Result<TypeScriptArtifacts, String> {
-    if !options.worker_concurrency {
-        return Ok(TypeScriptArtifacts {
-            source: emit_typescript_with_base(module, base_dir)?,
-            files: Vec::new(),
-        });
-    }
-    let worker_path = worker_module_path_from_specifier(options.worker_module_specifier.as_deref());
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let emitted = typescript::emit_module_artifacts_with_options(
-        TypedCodegen::new(&expanded)?,
-        typescript::TypeScriptEmitOptions {
-            worker_concurrency: options.worker_concurrency,
-            worker_module_specifier: Some(
-                options
-                    .worker_module_specifier
-                    .unwrap_or_else(|| "./flowarrow.worker.mjs".to_string()),
-            ),
-        },
-    )?;
-    Ok(TypeScriptArtifacts {
-        source: oxc_postprocess::emit_typescript(&emitted.source)?,
-        files: vec![GeneratedSourceFile {
-            path: worker_path,
-            source: typescript::scalar_worker_module_source(&emitted.worker_mappers),
-        }],
-    })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn emit_javascript_artifacts_with_base(
-    module: &Module,
-    base_dir: &Path,
-) -> Result<JavaScriptArtifacts, String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let source = typescript::emit_module(TypedCodegen::new(&expanded)?)?;
-    let artifacts = oxc_postprocess::emit_javascript_artifacts(&source)?;
-    Ok(JavaScriptArtifacts {
-        declarations: artifacts.declarations,
-        javascript: artifacts.javascript,
-        files: Vec::new(),
-    })
+    LoweredModule::with_base(module, base_dir)?.emit_typescript_artifacts(options)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -476,63 +413,7 @@ pub fn emit_javascript_artifacts_with_base_and_options(
     base_dir: &Path,
     options: TypeScriptBackendOptions,
 ) -> Result<JavaScriptArtifacts, String> {
-    if !options.worker_concurrency {
-        return emit_javascript_artifacts_with_base(module, base_dir);
-    }
-    let worker_path = worker_module_path_from_specifier(options.worker_module_specifier.as_deref());
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    let expanded = monomorphize::expand_module(&expanded)?;
-    let emitted = typescript::emit_module_artifacts_with_options(
-        TypedCodegen::new(&expanded)?,
-        typescript::TypeScriptEmitOptions {
-            worker_concurrency: options.worker_concurrency,
-            worker_module_specifier: options.worker_module_specifier,
-        },
-    )?;
-    let artifacts = oxc_postprocess::emit_javascript_artifacts(&emitted.source)?;
-    Ok(JavaScriptArtifacts {
-        declarations: artifacts.declarations,
-        javascript: artifacts.javascript,
-        files: vec![GeneratedSourceFile {
-            path: worker_path,
-            source: typescript::scalar_worker_module_source(&emitted.worker_mappers),
-        }],
-    })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum Ty {
-    Unit,
-    Int,
-    Real,
-    Bool,
-    Bytes,
-    Args,
-    HttpServerConfig,
-    HttpListener,
-    HttpRequest,
-    HttpResponse,
-    SqliteConnection,
-    SqliteRow,
-    SqliteValue,
-    Stream(Box<Ty>),
-    Fault,
-    Faultable(Box<Ty>),
-    Seq(Box<Ty>),
-    Tuple(Vec<Ty>),
-    Struct {
-        name: String,
-        fields: Vec<(String, Ty)>,
-    },
-    OneOf(Vec<Ty>),
-    Var(String),
-    EmptySeq,
-}
-
-#[derive(Debug, Clone)]
-struct Signature {
-    input: Ty,
-    output: Ty,
+    LoweredModule::with_base(module, base_dir)?.emit_javascript_artifacts(options)
 }
 
 #[derive(Debug, Clone)]
@@ -644,7 +525,7 @@ impl<'a> TypedCodegen<'a> {
             aliases: HashMap::new(),
             types: TypeRegistry::default(),
         };
-        codegen.collect_imports();
+        codegen.collect_imports()?;
         codegen.collect_type_aliases()?;
         codegen.collect_foreigns()?;
         codegen.collect_callables()?;
@@ -1203,7 +1084,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         )
     }
 
-    fn collect_imports(&mut self) {
+    fn collect_imports(&mut self) -> Result<(), String> {
         for decl in &self.module.declarations {
             let Decl::Import(import) = decl else {
                 continue;
@@ -1217,7 +1098,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                         if symbol.kind == stdlib::SymbolKind::Type {
                             self.aliases.insert(
                                 format!("{alias}.{}", symbol.name),
-                                self.stdlib_codegen_type(symbol.name),
+                                stdlib_type_symbol(symbol.name)?,
                             );
                         }
                         if symbol.kind == stdlib::SymbolKind::Node
@@ -1239,7 +1120,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                             if symbol.kind == stdlib::SymbolKind::Type {
                                 self.aliases.insert(
                                     item.alias.as_deref().unwrap_or(&item.name).to_string(),
-                                    self.stdlib_codegen_type(symbol.name),
+                                    stdlib_type_symbol(symbol.name)?,
                                 );
                             }
                             if symbol.kind == stdlib::SymbolKind::Node
@@ -1260,22 +1141,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 }
             }
         }
-    }
-
-    fn stdlib_codegen_type(&self, name: &str) -> Ty {
-        match name {
-            "Stream" => Ty::Stream(Box::new(Ty::Var("V".to_string()))),
-            "Args" => Ty::Args,
-            "Fault" => Ty::Fault,
-            "ServerConfig" => Ty::HttpServerConfig,
-            "Listener" => Ty::HttpListener,
-            "Request" => Ty::HttpRequest,
-            "Response" => Ty::HttpResponse,
-            "Connection" => Ty::SqliteConnection,
-            "Row" => Ty::SqliteRow,
-            "Value" => Ty::SqliteValue,
-            _ => parse_type(name).unwrap_or_else(|_| Ty::Var(name.to_string())),
-        }
+        Ok(())
     }
 
     fn collect_type_aliases(&mut self) -> Result<(), String> {
@@ -1403,9 +1269,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     ) -> Result<Ty, String> {
         match ty {
             Ty::Var(name) => {
-                if let Some(known) = builtin_type_alias(&name) {
-                    Ok(known)
-                } else if raw_aliases.contains_key(&name) {
+                if raw_aliases.contains_key(&name) {
                     self.resolve_alias(&name, raw_aliases, raw_structs, resolved, resolving)
                 } else if raw_structs.contains_key(&name) {
                     self.resolve_struct_type(&name, raw_aliases, raw_structs, resolved, resolving)
@@ -1582,7 +1446,6 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 .aliases
                 .get(&name)
                 .cloned()
-                .or_else(|| builtin_type_alias(&name))
                 .ok_or_else(|| format!("unknown type `{name}`")),
             Ty::Faultable(item) => Ok(Ty::Faultable(Box::new(self.resolve_declared_type(*item)?))),
             Ty::Seq(item) => Ok(Ty::Seq(Box::new(self.resolve_declared_type(*item)?))),
@@ -1614,12 +1477,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
 
     fn resolve_signature_type(&self, ty: Ty) -> Result<Ty, String> {
         match ty {
-            Ty::Var(name) => Ok(self
-                .aliases
-                .get(&name)
-                .cloned()
-                .or_else(|| builtin_type_alias(&name))
-                .unwrap_or(Ty::Var(name))),
+            Ty::Var(name) => Ok(self.aliases.get(&name).cloned().unwrap_or(Ty::Var(name))),
             Ty::Faultable(item) => Ok(Ty::Faultable(Box::new(self.resolve_signature_type(*item)?))),
             Ty::Seq(item) => Ok(Ty::Seq(Box::new(self.resolve_signature_type(*item)?))),
             Ty::Stream(item) => Ok(Ty::Stream(Box::new(self.resolve_signature_type(*item)?))),
@@ -5904,9 +5762,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             let mut vars = HashMap::new();
             match match_input_types(&signature.input, actual, &mut vars) {
                 Ok(()) => {
-                    let input = substitute_ty(&signature.input, &vars).ok_or_else(|| {
-                        format!("`{name}` input type contains unresolved type variables")
-                    })?;
+                    let input = substitute_partial(&signature.input, &vars);
                     if contains_type_var(&input) {
                         return Err(
                             "empty sequence literals need a concrete type context".to_string()
@@ -10998,24 +10854,6 @@ fn cv_pixel_seq_ty() -> Ty {
     ])))
 }
 
-fn sequence_item_type(left: &Ty, right: &Ty) -> Result<Ty, String> {
-    if left == right {
-        return Ok(left.clone());
-    }
-    match (left, right) {
-        (Ty::EmptySeq, other) | (other, Ty::EmptySeq) => Ok(other.clone()),
-        (Ty::Faultable(inner), other) | (other, Ty::Faultable(inner))
-            if inner.as_ref() == other =>
-        {
-            Ok(Ty::Faultable(inner.clone()))
-        }
-        (Ty::Int, Ty::Real) | (Ty::Real, Ty::Int) => Ok(Ty::Real),
-        _ => Err(format!(
-            "sequence literal item type mismatch: `{left}` vs `{right}`"
-        )),
-    }
-}
-
 fn match_input_types(
     expected: &Ty,
     actual: &Ty,
@@ -11172,59 +11010,12 @@ fn format_endpoint_for_error_codegen(endpoint: &Endpoint) -> String {
     }
 }
 
-fn substitute_ty(ty: &Ty, vars: &HashMap<String, Ty>) -> Option<Ty> {
-    match ty {
-        Ty::Var(name) => vars
-            .get(name)
-            .cloned()
-            .or_else(|| Some(Ty::Var(name.clone()))),
-        Ty::Faultable(item) => Some(Ty::Faultable(Box::new(substitute_ty(item, vars)?))),
-        Ty::Seq(item) => Some(Ty::Seq(Box::new(substitute_ty(item, vars)?))),
-        Ty::Stream(item) => Some(Ty::Stream(Box::new(substitute_ty(item, vars)?))),
-        Ty::OneOf(items) => {
-            let mut out = Vec::with_capacity(items.len());
-            for item in items {
-                out.push(substitute_ty(item, vars)?);
-            }
-            Some(Ty::OneOf(out))
-        }
-        Ty::Tuple(items) => {
-            let mut out = Vec::with_capacity(items.len());
-            for item in items {
-                out.push(substitute_ty(item, vars)?);
-            }
-            Some(Ty::Tuple(out))
-        }
-        Ty::Struct { name, fields } => {
-            let mut out = Vec::with_capacity(fields.len());
-            for (field, ty) in fields {
-                out.push((field.clone(), substitute_ty(ty, vars)?));
-            }
-            Some(Ty::Struct {
-                name: name.clone(),
-                fields: out,
-            })
-        }
-        other => Some(other.clone()),
-    }
-}
-
 fn contains_type_var(input: &Ty) -> bool {
     match input {
         Ty::Var(_) => true,
         Ty::Faultable(item) | Ty::Seq(item) | Ty::Stream(item) => contains_type_var(item),
         Ty::Tuple(items) | Ty::OneOf(items) => items.iter().any(contains_type_var),
         Ty::Struct { fields, .. } => fields.iter().any(|(_, ty)| contains_type_var(ty)),
-        _ => false,
-    }
-}
-
-fn contains_empty_seq(input: &Ty) -> bool {
-    match input {
-        Ty::EmptySeq => true,
-        Ty::Faultable(item) | Ty::Seq(item) | Ty::Stream(item) => contains_empty_seq(item),
-        Ty::Tuple(items) | Ty::OneOf(items) => items.iter().any(contains_empty_seq),
-        Ty::Struct { fields, .. } => fields.iter().any(|(_, ty)| contains_empty_seq(ty)),
         _ => false,
     }
 }
@@ -11811,152 +11602,6 @@ fn flatten_add_terms(name: &str, additions: &HashMap<String, (String, String)>) 
     }
 }
 
-fn parse_type(text: &str) -> Result<Ty, String> {
-    TypeParser {
-        chars: text.chars().collect(),
-        pos: 0,
-    }
-    .parse()
-}
-
-fn builtin_type_alias(name: &str) -> Option<Ty> {
-    match name {
-        "Number" => Some(Ty::OneOf(vec![Ty::Int, Ty::Real])),
-        _ => None,
-    }
-}
-
-struct TypeParser {
-    chars: Vec<char>,
-    pos: usize,
-}
-
-impl TypeParser {
-    fn parse(&mut self) -> Result<Ty, String> {
-        let mut items = vec![self.parse_atom()?];
-        while self.eat('|') {
-            items.push(self.parse_atom()?);
-        }
-        Ok(if items.len() == 1 {
-            items.remove(0)
-        } else {
-            Ty::OneOf(items)
-        })
-    }
-
-    fn parse_atom(&mut self) -> Result<Ty, String> {
-        self.skip_ws();
-        if self.eat('(') {
-            let mut items = Vec::new();
-            if self.eat(')') {
-                return Ok(Ty::Unit);
-            }
-            loop {
-                items.push(self.parse()?);
-                if self.eat(',') {
-                    continue;
-                }
-                self.expect(')')?;
-                break;
-            }
-            return Ok(Ty::Tuple(items));
-        }
-        let name = self.ident()?;
-        if name == "Seq" && self.eat('[') {
-            let item = self.parse()?;
-            self.expect(']')?;
-            return Ok(Ty::Seq(Box::new(item)));
-        }
-        if name == "Faultable" && self.eat('[') {
-            let item = self.parse()?;
-            self.expect(']')?;
-            return Ok(Ty::Faultable(Box::new(item)));
-        }
-        if name.rsplit('.').next() == Some("Stream") && self.eat('[') {
-            let item = self.parse()?;
-            self.expect(']')?;
-            return Ok(Ty::Stream(Box::new(item)));
-        }
-        if name == "sqlite.Connection" {
-            return Ok(Ty::SqliteConnection);
-        }
-        if name == "sqlite.Row" {
-            return Ok(Ty::SqliteRow);
-        }
-        if name == "sqlite.Value" {
-            return Ok(Ty::SqliteValue);
-        }
-        if name == "http.ServerConfig" {
-            return Ok(Ty::HttpServerConfig);
-        }
-        if name == "http.Listener" {
-            return Ok(Ty::HttpListener);
-        }
-        if name == "http.Request" {
-            return Ok(Ty::HttpRequest);
-        }
-        if name == "http.Response" {
-            return Ok(Ty::HttpResponse);
-        }
-        let base_name = name.rsplit('.').next().unwrap_or(&name);
-        Ok(match base_name {
-            "Unit" | "void" => Ty::Unit,
-            "Int" | "i8" | "i16" | "i32" | "i64" => Ty::Int,
-            "Real" | "f16" | "float" | "double" => Ty::Real,
-            "Bool" | "i1" => Ty::Bool,
-            "Bytes" | "ptr" => Ty::Bytes,
-            "Fault" => Ty::Fault,
-            _ => Ty::Var(name),
-        })
-    }
-
-    fn ident(&mut self) -> Result<String, String> {
-        self.skip_ws();
-        let start = self.pos;
-        while self
-            .chars
-            .get(self.pos)
-            .map(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '.')
-            .unwrap_or(false)
-        {
-            self.pos += 1;
-        }
-        if self.pos == start {
-            return Err("expected type name".to_string());
-        }
-        Ok(self.chars[start..self.pos].iter().collect())
-    }
-
-    fn eat(&mut self, ch: char) -> bool {
-        self.skip_ws();
-        if self.chars.get(self.pos) == Some(&ch) {
-            self.pos += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn expect(&mut self, ch: char) -> Result<(), String> {
-        if self.eat(ch) {
-            Ok(())
-        } else {
-            Err(format!("expected `{ch}` in type"))
-        }
-    }
-
-    fn skip_ws(&mut self) {
-        while self
-            .chars
-            .get(self.pos)
-            .map(|ch| ch.is_whitespace())
-            .unwrap_or(false)
-        {
-            self.pos += 1;
-        }
-    }
-}
-
 fn type_name(ty: &Ty) -> String {
     format!("Fa{}", sanitize_symbol(&type_suffix(ty)))
 }
@@ -12208,51 +11853,6 @@ fn c_string(value: &str) -> String {
         }
     }
     out
-}
-
-impl std::fmt::Display for Ty {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Ty::Unit => write!(f, "Unit"),
-            Ty::Int => write!(f, "Int"),
-            Ty::Real => write!(f, "Real"),
-            Ty::Bool => write!(f, "Bool"),
-            Ty::Bytes => write!(f, "Bytes"),
-            Ty::Args => write!(f, "Args"),
-            Ty::HttpServerConfig => write!(f, "http.ServerConfig"),
-            Ty::HttpListener => write!(f, "http.Listener"),
-            Ty::HttpRequest => write!(f, "http.Request"),
-            Ty::HttpResponse => write!(f, "http.Response"),
-            Ty::SqliteConnection => write!(f, "sqlite.Connection"),
-            Ty::SqliteRow => write!(f, "sqlite.Row"),
-            Ty::SqliteValue => write!(f, "sqlite.Value"),
-            Ty::Stream(item) => write!(f, "Stream[{item}]"),
-            Ty::Fault => write!(f, "Fault"),
-            Ty::Faultable(item) => write!(f, "Faultable[{item}]"),
-            Ty::Seq(item) => write!(f, "Seq[{item}]"),
-            Ty::Tuple(items) => write!(
-                f,
-                "({})",
-                items
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ),
-            Ty::Struct { name, .. } => write!(f, "{name}"),
-            Ty::OneOf(items) => write!(
-                f,
-                "{}",
-                items
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("|")
-            ),
-            Ty::Var(name) => write!(f, "{name}"),
-            Ty::EmptySeq => write!(f, "[]"),
-        }
-    }
 }
 
 #[cfg(test)]

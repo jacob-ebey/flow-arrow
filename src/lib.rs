@@ -24,6 +24,7 @@ mod node_ref;
 mod parser;
 mod stdlib;
 mod typecheck;
+mod types;
 #[cfg(target_arch = "wasm32")]
 mod wasm_api;
 
@@ -1050,6 +1051,24 @@ extern node demo(value: Int) -> out: Int {
         typecheck::check_module(&module).expect("typecheck");
         let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
         assert!(!runtime_c.contains("FaValue"));
+    }
+
+    #[test]
+    fn typechecks_mixed_numeric_sequence_literals() {
+        let source = r#"
+            import std.cli { Args }
+
+            node count(values: Seq[Real]) -> out: Int {
+                2 -> $out
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                [1, 2.5] -> count -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_module(&module).expect("typecheck");
+        codegen::emit_runtime_c(&module).expect("runtime c");
     }
 
     #[test]
