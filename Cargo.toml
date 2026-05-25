@@ -20,3 +20,7 @@ harness = false
 [[bench]]
 name = "matrix"
 harness = false
+
+[[bench]]
+name = "gpu_accumulator"
+harness = false

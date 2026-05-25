@@ -1,0 +1,61 @@
+# gpu-accumulator-benchmark
+#
+# Builds two deterministic vectors, repeatedly scores them, and prints the
+# final scalar score.
+#
+# This mirrors the `gpu_accumulator` benchmark shape:
+#   - immutable vector inputs
+#   - a pure repeated accumulator kernel
+#   - vector dot/squared-distance/squared-norm reductions inside the kernel
+#   - one scalar result crossing back to host I/O
+#
+# Try:
+#   cargo run -- run --gpu examples/gpu-accumulator-benchmark/main.flow
+import std.bytes { concat_bytes }
+import std.cli { Args }
+import std.int { format_int }
+import std.io { write_stdout }
+import std.math { add, rem }
+import std.real { format_real, from_int }
+import std.vector { dot, squared_distance, squared_norm }
+
+program main(args: Args) -> exit_code: Int {
+    (1, 1025, 1)         -> range_step                 -> $indices
+    $indices             -> map left_value             -> $left
+    $indices             -> map right_value            -> $right
+    ($left, $right, 0.0) -> repeat<50000> score_kernel -> final_score -> $score
+
+    $score                                                                                                                           -> format_real  -> $score_bytes
+    1024                                                                                                                             -> format_int   -> $len_bytes
+    50000                                                                                                                            -> format_int   -> $iterations_bytes
+    ["gpu accumulator example\n", "len: ", $len_bytes, "\n", "iterations: ", $iterations_bytes, "\n", "score: ", $score_bytes, "\n"] -> concat_bytes -> $output
+    $output                                                                                                                          -> write_stdout -> $exit_code
+}
+
+node left_value(index: Int) -> value: Real {
+    ($index, 11)  -> rem      -> $wrapped
+    ($wrapped, 1) -> add      -> $offset
+    $offset       -> from_int -> $value
+}
+
+node right_value(index: Int) -> value: Real {
+    ($index, 3)    -> add      -> $shifted
+    ($shifted, 11) -> rem      -> $wrapped
+    ($wrapped, 1)  -> add      -> $offset
+    $offset        -> from_int -> $value
+}
+
+node score_kernel(left: Seq[Real], right: Seq[Real], score: Real) -> (out_left: Seq[Real], out_right: Seq[Real], out_score: Real) {
+    ($left, $right)           -> dot              -> $dot
+    ($left, $right)           -> squared_distance -> $distance_squared
+    $left                     -> squared_norm     -> $norm_squared
+    ($dot, $distance_squared) -> add              -> $partial
+    ($partial, $norm_squared) -> add              -> $delta
+    ($score, $delta)          -> add              -> $out_score
+    $left                     -> $out_left
+    $right                    -> $out_right
+}
+
+node final_score(left: Seq[Real], right: Seq[Real], score: Real) -> out: Real {
+    $score -> $out
+}

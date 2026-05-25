@@ -83,3 +83,31 @@ FLOWARROW_BENCH_GPU=1 \
 FLOWARROW_BENCH_GPU_SAMPLES=3 \
 cargo bench --bench matrix
 ```
+
+## GPU Accumulator
+
+```sh
+cargo bench --bench gpu_accumulator -- --gpu
+```
+
+The GPU accumulator benchmark is intentionally shaped to favor the GPU backend.
+It repeats a pure vector scoring kernel many times over immutable vectors. The
+CPU executable performs the full vector work for every repeat iteration; the
+GPU executable lowers the repeat accumulator to one generated WGSL reduction
+program and applies the repeat count to the scalar score.
+
+Options:
+
+```sh
+cargo bench --bench gpu_accumulator -- --gpu --len 4096 --iterations 20000 --samples 3 --gpu-samples 3
+```
+
+Environment equivalents:
+
+```sh
+FLOWARROW_BENCH_GPU_ACCUMULATOR_LEN=4096 \
+FLOWARROW_BENCH_ITERATIONS=20000 \
+FLOWARROW_BENCH_GPU=1 \
+FLOWARROW_BENCH_GPU_SAMPLES=3 \
+cargo bench --bench gpu_accumulator
+```
