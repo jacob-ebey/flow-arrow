@@ -538,10 +538,10 @@ mod tests {
             import std.math { add }
 
             extern node fib(depth: Int) -> result: Int {
-                (0, 1) -> repeat<$depth> _fib_step -> ($result, $)
+                (0, 1) -> repeat<$depth> fib_step -> ($result, $)
             }
 
-            node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
+            node fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
                 $b       -> $next_a
                 ($a, $b) -> add -> $next_b
             }
@@ -549,8 +549,8 @@ mod tests {
         let llvm = compile_llvm_ir_library_source(fib_source).expect("llvm ir");
         assert!(llvm.starts_with("; FlowArrow LLVM IR preview\n"));
         assert!(llvm.contains("define i64 @flow_node_fib(i64 %input)"));
-        assert!(llvm.contains("@flow_repeat__fib_step"));
-        assert!(llvm.contains("define { i64, i64 } @flow_node__fib_step"));
+        assert!(llvm.contains("@flow_repeat_fib_step"));
+        assert!(llvm.contains("define { i64, i64 } @flow_node_fib_step"));
         assert!(llvm.contains(" add i64 "));
 
         let concurrency_source = r#"

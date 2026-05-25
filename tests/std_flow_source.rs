@@ -315,7 +315,7 @@ fn source_backed_stdlib_reports_unknown_exports() {
 fn source_backed_matrix_helpers_are_private() {
     let source = r#"
         import std.cli { Args }
-        import std.matrix { _row_matmul }
+        import std.matrix { row_matmul }
 
         program main(args: Args) -> exit_code: Int {
             0 -> $exit_code
@@ -325,14 +325,14 @@ fn source_backed_matrix_helpers_are_private() {
     let path = support::source_path("matrix-private-helper");
     fs::write(&path, source).expect("write source");
     let error = build_file(&path, None).expect_err("build should fail");
-    assert!(error.contains("module `std.matrix` does not export `_row_matmul`"));
+    assert!(error.contains("module `std.matrix` does not export `row_matmul`"));
 }
 
 #[test]
 fn source_backed_stdlib_helpers_are_private() {
     let source = r#"
         import std.cli { Args }
-        import std.vector { _dot_pair }
+        import std.vector { dot_pair }
 
         program main(args: Args) -> exit_code: Int {
             0 -> $exit_code
@@ -342,5 +342,5 @@ fn source_backed_stdlib_helpers_are_private() {
     let path = support::source_path("vector-private-helper");
     fs::write(&path, source).expect("write source");
     let error = build_file(&path, None).expect_err("build should fail");
-    assert!(error.contains("module `std.vector` does not export `_dot_pair`"));
+    assert!(error.contains("module `std.vector` does not export `dot_pair`"));
 }

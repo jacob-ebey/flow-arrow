@@ -2405,10 +2405,10 @@ program main(args: Args) -> exit_code: Faultable[Int] {
         let source = r#"import std.math { add }
 
 extern node fib(depth: Int) -> result: Int {
-    (0, 1) -> repeat<$depth> _fib_step -> ($result, $)
+    (0, 1) -> repeat<$depth> fib_step -> ($result, $)
 }
 
-node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
+node fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
     $b       -> $next_a
     ($a, $b) -> add -> $next_b
 }
@@ -2420,8 +2420,8 @@ node _fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
         assert!(result_hover.contains("$result: Int"));
 
         let repeat_hover =
-            hover_result(&analysis, position_of(source, "_fib_step ->")).expect("repeat hover");
-        assert!(repeat_hover.contains("repeat _fib_step: (Int,Int) -> (Int,Int)"));
+            hover_result(&analysis, position_of(source, "fib_step ->")).expect("repeat hover");
+        assert!(repeat_hover.contains("repeat fib_step: (Int,Int) -> (Int,Int)"));
 
         let completions = analysis.completion_symbols();
         let result_completion = completions
