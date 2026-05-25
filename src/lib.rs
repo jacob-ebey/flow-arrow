@@ -1092,7 +1092,22 @@ extern node demo(value: Int) -> out: Int {
             .iter()
             .find(|callable| callable.name == "main")
             .expect("main callable");
+        match &main.chains[0].source.kind {
+            typecheck::TypedEndpointKind::Tuple(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0].ty.to_string(), "Int");
+                assert_eq!(items[1].ty.to_string(), "Int");
+            }
+            other => panic!("expected typed tuple source, found {other:?}"),
+        }
         assert_eq!(main.chains[0].stages[0].symbol, Some(add));
+        match &main.chains[0].stages[0].kind {
+            typecheck::TypedStageKind::Call { name, symbol } => {
+                assert_eq!(name, "add");
+                assert_eq!(*symbol, Some(add));
+            }
+            other => panic!("expected typed call stage, found {other:?}"),
+        }
         assert_eq!(main.chains[0].stages[0].input.to_string(), "(Int,Int)");
         assert_eq!(main.chains[0].stages[0].output.to_string(), "Int");
     }

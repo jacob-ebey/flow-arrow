@@ -49,14 +49,15 @@ module. Native build paths now lower a module once and derive LLVM, runtime C,
 foreign C sources, foreign dependencies, and WASM artifacts from the same
 `LoweredModule`.
 
-A second repair pass introduced the first explicit resolved and typed compiler
-contracts. `module_resolver` now returns `ResolvedModule`, carrying the
-backend-compatible lowered AST plus `ModuleId`/`SymbolId` tables. `typecheck`
-now exposes `TypedModule`, `TypedCallable`, typed ports, typed chains, and typed
-stage input/output facts. Existing `check_*` entry points are wrappers over the
-typed path. `LoweredModule` owns a `TypedModule`, and backend setup consumes
-typed callable/foreign signatures instead of reparsing those signatures from
-syntax when a typed module is available.
+A second repair pass introduced explicit resolved and typed compiler contracts.
+`module_resolver` now returns `ResolvedModule`, carrying the backend-compatible
+lowered AST plus `ModuleId`/`SymbolId` tables. `typecheck` now exposes
+`TypedModule`, `TypedCallable`, typed ports, typed chains, structured typed
+endpoints, structured typed stages, and typed stage input/output facts. Existing
+`check_*` entry points are wrappers over the typed path. `LoweredModule` owns a
+`TypedModule`, and backend setup consumes typed callable/foreign signatures
+instead of reparsing those signatures from syntax when a typed module is
+available.
 
 ## What Is Working
 
@@ -74,10 +75,11 @@ syntax when a typed module is available.
 ## P0: No Canonical Typed IR
 
 Status after repair passes: partially addressed. `TypedModule` now exists and
-contains typed callables, ports, chains, stage input/output types, and symbol
-references where a stage names a callable. The remaining problem is that the
-backend-compatible AST is still carried inside the typed module, and most
-emitters still lower from that AST while consulting typed facts.
+contains typed callables, ports, chains, structured typed endpoints, structured
+typed stages, stage input/output types, and symbol references where a stage
+names a callable. The remaining problem is that the backend-compatible AST is
+still carried inside the typed module, and most emitters still lower from that
+AST while consulting typed facts.
 
 ### Evidence
 

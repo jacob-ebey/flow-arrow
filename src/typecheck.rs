@@ -191,9 +191,37 @@ pub(crate) struct TypedChain {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) struct TypedEndpoint {
     pub label: String,
     pub ty: Type,
+    pub kind: TypedEndpointKind,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) enum TypedEndpointKind {
+    Variable(String),
+    NodeRef {
+        name: String,
+        symbol: Option<SymbolId>,
+    },
+    Int(i64),
+    Real(f64),
+    Bool(bool),
+    String(String),
+    Unit,
+    Tuple(Vec<TypedEndpoint>),
+    Seq(Vec<TypedEndpoint>),
+    Struct {
+        name: String,
+        symbol: Option<SymbolId>,
+        fields: Vec<(String, TypedEndpoint)>,
+    },
+    Eval {
+        source: Box<TypedEndpoint>,
+        stages: Vec<TypedStage>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -203,6 +231,83 @@ pub(crate) struct TypedStage {
     pub input: Type,
     pub output: Type,
     pub symbol: Option<SymbolId>,
+    pub kind: TypedStageKind,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) enum TypedStageKind {
+    Call {
+        name: String,
+        symbol: Option<SymbolId>,
+    },
+    Bind {
+        target: BindingTarget,
+    },
+    Map {
+        name: String,
+        symbol: Option<SymbolId>,
+    },
+    FaultMap {
+        node: String,
+        symbol: Option<SymbolId>,
+        ok: String,
+        fault: String,
+    },
+    Filter {
+        name: String,
+        symbol: Option<SymbolId>,
+    },
+    Field {
+        name: String,
+    },
+    Repeat {
+        node: String,
+        symbol: Option<SymbolId>,
+        count: TypedEndpoint,
+    },
+    Reduce {
+        op: String,
+        symbol: Option<SymbolId>,
+        identity: TypedEndpoint,
+    },
+    Scan {
+        op: String,
+        symbol: Option<SymbolId>,
+        identity: TypedEndpoint,
+    },
+    Match {
+        arms: Vec<TypedMatchArm>,
+    },
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct TypedMatchArm {
+    pub guard: TypedMatchGuard,
+    pub target: TypedMatchTarget,
+    pub output: Type,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) enum TypedMatchGuard {
+    Call {
+        node: String,
+        symbol: Option<SymbolId>,
+        args: Vec<TypedEndpoint>,
+    },
+    Fallback,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) enum TypedMatchTarget {
+    Node {
+        name: String,
+        symbol: Option<SymbolId>,
+    },
+    Value(TypedEndpoint),
 }
 
 impl TypedModule {
@@ -538,117 +643,424 @@ impl<'a> Checker<'a> {
         env: &mut HashMap<String, Type>,
         variables: &mut Vec<TypedPort>,
     ) -> Result<TypedChain, String> {
-        let mut value_type = self.endpoint_type(&chain.source, env)?;
-        let source = TypedEndpoint {
-            label: format_endpoint_for_error(&chain.source),
-            ty: value_type.clone(),
-        };
+        let source = self.type_endpoint(resolved, &chain.source, env)?;
+        let mut value_type = source.ty.clone();
         let mut stages = Vec::new();
         for (index, stage) in chain.stages.iter().enumerate() {
             let is_last = index + 1 == chain.stages.len();
-            let input_type = value_type.clone();
-            let (label, output_type) = match stage {
-                Stage::Bind(target) if is_last => {
-                    let bindings = binding_target_types(target, &value_type)?;
-                    for (name, ty) in bindings {
-                        if contains_empty_seq(&ty) {
-                            return Err("empty sequence literals need a type context".to_string());
-                        }
-                        if env.insert(name.clone(), ty.clone()).is_some() {
-                            return Err(format!("value `{name}` is bound more than once"));
-                        }
-                        variables.push(TypedPort { name, ty });
-                    }
-                    (format_binding_target_for_error(target), value_type.clone())
-                }
-                Stage::Endpoint(Endpoint::Name(name)) => (
-                    name.clone(),
-                    self.apply_node(callable, kind, name, &value_type, false, false)?,
-                ),
-                Stage::Endpoint(Endpoint::Variable(_)) => {
-                    return Err(
-                        "variables may only appear as source values or final bindings".to_string(),
-                    );
-                }
-                Stage::Endpoint(_) => {
-                    return Err("non-name endpoints may only appear as source values".to_string());
-                }
-                Stage::Bind(_) => {
-                    return Err("binding targets may only appear as final stages".to_string());
-                }
-                Stage::Map(name) => (
-                    format!("map {name}"),
-                    self.apply_map(callable, name, &value_type)?,
-                ),
-                Stage::FaultMap { node, ok, fault } => {
-                    if !is_last {
-                        return Err("`fault map` must be the final stage in a chain".to_string());
-                    }
-                    let (ok_type, fault_type) =
-                        self.apply_fault_map(callable, node, &value_type)?;
-                    if env.insert(ok.clone(), ok_type.clone()).is_some() {
-                        return Err(format!("value `{ok}` is bound more than once"));
-                    }
-                    if env.insert(fault.clone(), fault_type.clone()).is_some() {
-                        return Err(format!("value `{fault}` is bound more than once"));
-                    }
-                    variables.push(TypedPort {
-                        name: ok.clone(),
-                        ty: ok_type.clone(),
-                    });
-                    variables.push(TypedPort {
-                        name: fault.clone(),
-                        ty: fault_type.clone(),
-                    });
-                    (
-                        format!("fault map {node}"),
-                        Type::Tuple(vec![ok_type, fault_type]),
-                    )
-                }
-                Stage::Filter(name) => (
-                    format!("filter {name}"),
-                    self.apply_filter(callable, name, &value_type)?,
-                ),
-                Stage::Field(name) => (
-                    format!("field {name}"),
-                    self.apply_field(name, &value_type)?,
-                ),
-                Stage::Repeat { count, node } => {
-                    let count_type = self.endpoint_type(count, env)?;
-                    self.expect_type("repeat count", &count_type, &Type::Int)?;
-                    (
-                        format!("repeat {node}"),
-                        self.apply_repeat(callable, node, &value_type)?,
-                    )
-                }
-                Stage::Reduce { op, identity } => {
-                    let identity_type = self.endpoint_type(identity, env)?;
-                    (
-                        format!("reduce {op}"),
-                        self.apply_reduce(callable, op, &value_type, &identity_type)?,
-                    )
-                }
-                Stage::Scan { op, identity } => {
-                    let identity_type = self.endpoint_type(identity, env)?;
-                    (
-                        format!("scan {op}"),
-                        self.apply_scan(callable, op, &value_type, &identity_type)?,
-                    )
-                }
-                Stage::Match { arms } => (
-                    "match".to_string(),
-                    self.apply_match(callable, kind, arms, &value_type, env)?,
-                ),
-            };
-            value_type = output_type;
-            stages.push(TypedStage {
-                label,
-                input: input_type,
-                output: value_type.clone(),
-                symbol: stage_symbol_id(resolved, stage),
-            });
+            let typed_stage = self.type_stage(
+                resolved,
+                callable,
+                kind,
+                stage,
+                &value_type,
+                is_last,
+                env,
+                variables,
+            )?;
+            value_type = typed_stage.output.clone();
+            stages.push(typed_stage);
         }
         Ok(TypedChain { source, stages })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn type_stage(
+        &self,
+        resolved: &ResolvedModule,
+        callable: &Callable,
+        kind: CallableKind,
+        stage: &Stage,
+        input: &Type,
+        is_last: bool,
+        env: &mut HashMap<String, Type>,
+        variables: &mut Vec<TypedPort>,
+    ) -> Result<TypedStage, String> {
+        let input_type = input.clone();
+        let symbol = stage_symbol_id(resolved, stage);
+        let (label, output, kind) = match stage {
+            Stage::Bind(target) if is_last => {
+                let bindings = binding_target_types(target, input)?;
+                for (name, ty) in bindings {
+                    if contains_empty_seq(&ty) {
+                        return Err("empty sequence literals need a type context".to_string());
+                    }
+                    if env.insert(name.clone(), ty.clone()).is_some() {
+                        return Err(format!("value `{name}` is bound more than once"));
+                    }
+                    variables.push(TypedPort { name, ty });
+                }
+                (
+                    format_binding_target_for_error(target),
+                    input.clone(),
+                    TypedStageKind::Bind {
+                        target: target.clone(),
+                    },
+                )
+            }
+            Stage::Endpoint(Endpoint::Name(name)) => (
+                name.clone(),
+                self.apply_node(callable, kind, name, input, false, false)?,
+                TypedStageKind::Call {
+                    name: name.clone(),
+                    symbol,
+                },
+            ),
+            Stage::Endpoint(Endpoint::Variable(_)) => {
+                return Err(
+                    "variables may only appear as source values or final bindings".to_string(),
+                );
+            }
+            Stage::Endpoint(_) => {
+                return Err("non-name endpoints may only appear as source values".to_string());
+            }
+            Stage::Bind(_) => {
+                return Err("binding targets may only appear as final stages".to_string());
+            }
+            Stage::Map(name) => (
+                format!("map {name}"),
+                self.apply_map(callable, name, input)?,
+                TypedStageKind::Map {
+                    name: name.clone(),
+                    symbol,
+                },
+            ),
+            Stage::FaultMap { node, ok, fault } => {
+                if !is_last {
+                    return Err("`fault map` must be the final stage in a chain".to_string());
+                }
+                let (ok_type, fault_type) = self.apply_fault_map(callable, node, input)?;
+                if env.insert(ok.clone(), ok_type.clone()).is_some() {
+                    return Err(format!("value `{ok}` is bound more than once"));
+                }
+                if env.insert(fault.clone(), fault_type.clone()).is_some() {
+                    return Err(format!("value `{fault}` is bound more than once"));
+                }
+                variables.push(TypedPort {
+                    name: ok.clone(),
+                    ty: ok_type.clone(),
+                });
+                variables.push(TypedPort {
+                    name: fault.clone(),
+                    ty: fault_type.clone(),
+                });
+                (
+                    format!("fault map {node}"),
+                    Type::Tuple(vec![ok_type, fault_type]),
+                    TypedStageKind::FaultMap {
+                        node: node.clone(),
+                        symbol,
+                        ok: ok.clone(),
+                        fault: fault.clone(),
+                    },
+                )
+            }
+            Stage::Filter(name) => (
+                format!("filter {name}"),
+                self.apply_filter(callable, name, input)?,
+                TypedStageKind::Filter {
+                    name: name.clone(),
+                    symbol,
+                },
+            ),
+            Stage::Field(name) => (
+                format!("field {name}"),
+                self.apply_field(name, input)?,
+                TypedStageKind::Field { name: name.clone() },
+            ),
+            Stage::Repeat { count, node } => {
+                let count = self.type_endpoint(resolved, count, env)?;
+                self.expect_type("repeat count", &count.ty, &Type::Int)?;
+                (
+                    format!("repeat {node}"),
+                    self.apply_repeat(callable, node, input)?,
+                    TypedStageKind::Repeat {
+                        node: node.clone(),
+                        symbol,
+                        count,
+                    },
+                )
+            }
+            Stage::Reduce { op, identity } => {
+                let identity = self.type_endpoint(resolved, identity, env)?;
+                (
+                    format!("reduce {op}"),
+                    self.apply_reduce(callable, op, input, &identity.ty)?,
+                    TypedStageKind::Reduce {
+                        op: op.clone(),
+                        symbol,
+                        identity,
+                    },
+                )
+            }
+            Stage::Scan { op, identity } => {
+                let identity = self.type_endpoint(resolved, identity, env)?;
+                (
+                    format!("scan {op}"),
+                    self.apply_scan(callable, op, input, &identity.ty)?,
+                    TypedStageKind::Scan {
+                        op: op.clone(),
+                        symbol,
+                        identity,
+                    },
+                )
+            }
+            Stage::Match { arms } => {
+                let (arms, output) =
+                    self.type_match_arms(resolved, callable, kind, arms, input, env)?;
+                ("match".to_string(), output, TypedStageKind::Match { arms })
+            }
+        };
+        Ok(TypedStage {
+            label,
+            input: input_type,
+            output,
+            symbol,
+            kind,
+        })
+    }
+
+    fn type_endpoint(
+        &self,
+        resolved: &ResolvedModule,
+        endpoint: &Endpoint,
+        env: &HashMap<String, Type>,
+    ) -> Result<TypedEndpoint, String> {
+        let label = format_endpoint_for_error(endpoint);
+        let (ty, kind) = match endpoint {
+            Endpoint::Variable(name) => (
+                env.get(name)
+                    .cloned()
+                    .ok_or_else(|| format!("unknown value `{name}`"))?,
+                TypedEndpointKind::Variable(name.clone()),
+            ),
+            Endpoint::Name(name) => return Err(format!("expected value, found node `{name}`")),
+            Endpoint::Int(value) => (Type::Int, TypedEndpointKind::Int(*value)),
+            Endpoint::Real(value) => (Type::Real, TypedEndpointKind::Real(*value)),
+            Endpoint::Bool(value) => (Type::Bool, TypedEndpointKind::Bool(*value)),
+            Endpoint::String(value) => (Type::Bytes, TypedEndpointKind::String(value.clone())),
+            Endpoint::Unit => (Type::Unit, TypedEndpointKind::Unit),
+            Endpoint::Tuple(items) => {
+                let items = items
+                    .iter()
+                    .map(|item| self.type_endpoint(resolved, item, env))
+                    .collect::<Result<Vec<_>, _>>()?;
+                (
+                    Type::Tuple(items.iter().map(|item| item.ty.clone()).collect()),
+                    TypedEndpointKind::Tuple(items),
+                )
+            }
+            Endpoint::Seq(items) => {
+                let items = items
+                    .iter()
+                    .map(|item| self.type_endpoint(resolved, item, env))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut item_type = None;
+                for item in &items {
+                    if let Some(expected) = &item_type {
+                        item_type =
+                            Some(sequence_item_type(expected, &item.ty).map_err(|error| {
+                                format!("sequence literal item type mismatch: {error}")
+                            })?);
+                    } else {
+                        item_type = Some(item.ty.clone());
+                    }
+                }
+                let ty = match item_type {
+                    Some(item_type) => Type::Seq(Box::new(item_type)),
+                    None => Type::EmptySeq,
+                };
+                (ty, TypedEndpointKind::Seq(items))
+            }
+            Endpoint::Struct { name, fields } => {
+                let ty = self.struct_literal_type(name, fields, env)?;
+                let fields = fields
+                    .iter()
+                    .map(|(field, endpoint)| {
+                        Ok((field.clone(), self.type_endpoint(resolved, endpoint, env)?))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                (
+                    ty,
+                    TypedEndpointKind::Struct {
+                        name: name.clone(),
+                        symbol: resolved.symbol_id(name),
+                        fields,
+                    },
+                )
+            }
+            Endpoint::Eval { source, stages } => {
+                let source = self.type_endpoint(resolved, source, env)?;
+                let stages = self.type_inline_stages(resolved, &source.ty, stages, env)?;
+                let ty = stages
+                    .last()
+                    .map(|stage| stage.output.clone())
+                    .unwrap_or_else(|| source.ty.clone());
+                (
+                    ty,
+                    TypedEndpointKind::Eval {
+                        source: Box::new(source),
+                        stages,
+                    },
+                )
+            }
+        };
+        Ok(TypedEndpoint { label, ty, kind })
+    }
+
+    fn type_inline_stages(
+        &self,
+        resolved: &ResolvedModule,
+        source_ty: &Type,
+        stages: &[Stage],
+        env: &HashMap<String, Type>,
+    ) -> Result<Vec<TypedStage>, String> {
+        let inline_callable = Callable {
+            name: "<inline>".to_string(),
+            is_extern: false,
+            node_params: Vec::new(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            chains: Vec::new(),
+        };
+        let mut env = env.clone();
+        let mut variables = Vec::new();
+        let mut value_type = source_ty.clone();
+        let mut out = Vec::new();
+        for stage in stages {
+            match stage {
+                Stage::Endpoint(Endpoint::Variable(_)) | Stage::Bind(_) => {
+                    return Err("inline evaluations cannot bind values".to_string());
+                }
+                Stage::Endpoint(Endpoint::Name(_)) => {}
+                Stage::Endpoint(_) => {
+                    return Err(
+                        "non-name endpoints may only appear as inline evaluation sources"
+                            .to_string(),
+                    );
+                }
+                Stage::FaultMap { .. } => {
+                    return Err("inline evaluations cannot use `fault map`".to_string());
+                }
+                Stage::Map(_)
+                | Stage::Filter(_)
+                | Stage::Field(_)
+                | Stage::Repeat { .. }
+                | Stage::Reduce { .. }
+                | Stage::Scan { .. }
+                | Stage::Match { .. } => {}
+            }
+            let typed = self.type_stage(
+                resolved,
+                &inline_callable,
+                CallableKind::Node,
+                stage,
+                &value_type,
+                false,
+                &mut env,
+                &mut variables,
+            )?;
+            value_type = typed.output.clone();
+            out.push(typed);
+        }
+        Ok(out)
+    }
+
+    fn type_match_arms(
+        &self,
+        resolved: &ResolvedModule,
+        callable: &Callable,
+        kind: CallableKind,
+        arms: &[MatchArm],
+        input: &Type,
+        env: &HashMap<String, Type>,
+    ) -> Result<(Vec<TypedMatchArm>, Type), String> {
+        if arms.is_empty() {
+            return Err("`match` must contain at least one arm".to_string());
+        }
+        if !matches!(
+            arms.last().map(|arm| &arm.guard),
+            Some(MatchGuard::Fallback)
+        ) {
+            return Err("`match` must end with a `_` fallback arm".to_string());
+        }
+
+        let mut typed_arms = Vec::with_capacity(arms.len());
+        let mut result = None;
+        for (index, arm) in arms.iter().enumerate() {
+            let guard = match &arm.guard {
+                MatchGuard::Fallback if index + 1 != arms.len() => {
+                    return Err("`match` fallback arm must be last".to_string());
+                }
+                MatchGuard::Fallback => TypedMatchGuard::Fallback,
+                MatchGuard::Call { node, args } => {
+                    let guard = self
+                        .symbols
+                        .get(node)
+                        .ok_or_else(|| format!("unknown match guard `{node}`"))?;
+                    if guard.kind == CallableKind::Program {
+                        return Err(format!("program `{node}` cannot be used as a match guard"));
+                    }
+                    if guard.effect != Effect::Pure {
+                        return Err(format!("match guard `{node}` must be pure"));
+                    }
+                    let args = args
+                        .iter()
+                        .map(|arg| self.type_endpoint(resolved, arg, env))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let guard_input = single_or_tuple(
+                        std::iter::once(input.clone())
+                            .chain(args.iter().map(|arg| arg.ty.clone()))
+                            .collect(),
+                    );
+                    let guard_output =
+                        self.apply_node(callable, kind, node, &guard_input, false, false)?;
+                    self.expect_type(
+                        &format!("match guard `{node}` result"),
+                        &guard_output,
+                        &Type::Bool,
+                    )?;
+                    TypedMatchGuard::Call {
+                        node: node.clone(),
+                        symbol: callable_symbol_id(resolved, node),
+                        args,
+                    }
+                }
+            };
+
+            let (target, arm_output) = match &arm.target {
+                MatchTarget::Node(node) => (
+                    TypedMatchTarget::Node {
+                        name: node.clone(),
+                        symbol: callable_symbol_id(resolved, node),
+                    },
+                    self.apply_node(callable, kind, node, input, false, false)?,
+                ),
+                MatchTarget::Value(endpoint) => {
+                    let endpoint = self.type_endpoint(resolved, endpoint, env)?;
+                    let ty = endpoint.ty.clone();
+                    (TypedMatchTarget::Value(endpoint), ty)
+                }
+            };
+            if let Some(expected) = &result {
+                result = Some(common_assignable_type(
+                    expected,
+                    &arm_output,
+                    &format!("match arm `{}` result", format_match_target(&arm.target)),
+                )?);
+            } else {
+                result = Some(arm_output.clone());
+            }
+            typed_arms.push(TypedMatchArm {
+                guard,
+                target,
+                output: arm_output,
+            });
+        }
+        Ok((
+            typed_arms,
+            result.ok_or_else(|| "`match` must contain at least one arm".to_string())?,
+        ))
     }
 
     fn validate_main(&self) -> Result<(), String> {
@@ -2284,6 +2696,10 @@ fn stage_symbol_id(resolved: &ResolvedModule, stage: &Stage) -> Option<SymbolId>
         | Stage::Endpoint(Endpoint::Struct { .. })
         | Stage::Endpoint(Endpoint::Eval { .. }) => return None,
     };
+    callable_symbol_id(resolved, name)
+}
+
+fn callable_symbol_id(resolved: &ResolvedModule, name: &str) -> Option<SymbolId> {
     let node_ref = parse_static_node_ref(name);
     resolved.symbol_id(&node_ref.base)
 }
