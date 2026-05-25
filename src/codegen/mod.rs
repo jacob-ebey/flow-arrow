@@ -26,7 +26,7 @@ use inkwell::targets::{
 use inkwell::types::{AnyType, BasicType, BasicTypeEnum, StructType};
 #[cfg(not(target_arch = "wasm32"))]
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
@@ -539,6 +539,24 @@ struct Signature {
 struct Value {
     code: String,
     ty: Ty,
+}
+
+#[derive(Debug, Clone)]
+struct ParallelChainInput {
+    name: String,
+    field: String,
+    c_ty: String,
+    value: Value,
+}
+
+#[derive(Debug, Clone)]
+struct ParallelChainHelper {
+    worker: String,
+    ctx_ty: String,
+    ctx: String,
+    inputs: Vec<ParallelChainInput>,
+    target: BindingTarget,
+    output_ty: Ty,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1680,8 +1698,20 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         }
 
         let chains = fuse_single_use_chains(callable);
-        for chain in &chains {
-            self.emit_chain(out, chain, &mut env)?;
+        let mut chain_index = 0;
+        while chain_index < chains.len() {
+            let batch_len = self.parallel_chain_batch_len(&chains[chain_index..], &env)?;
+            if batch_len > 1 {
+                self.emit_parallel_chain_batch(
+                    out,
+                    &chains[chain_index..chain_index + batch_len],
+                    &mut env,
+                )?;
+                chain_index += batch_len;
+            } else {
+                self.emit_chain(out, &chains[chain_index], &mut env)?;
+                chain_index += 1;
+            }
         }
 
         let result = self.emit_outputs(out, callable, &env)?;
@@ -1891,6 +1921,338 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         }
         out.push_str(";\n  return out;\n}\n\n");
         Ok(true)
+    }
+
+    fn parallel_chain_batch_len(
+        &self,
+        chains: &[Chain],
+        env: &HashMap<String, Value>,
+    ) -> Result<usize, String> {
+        let mut produced = HashSet::new();
+        let mut len = 0;
+        for chain in chains {
+            let Some(outputs) = self.parallel_chain_outputs(chain, env, &produced)? else {
+                break;
+            };
+            for output in outputs {
+                produced.insert(output);
+            }
+            len += 1;
+        }
+        Ok(if len > 1 { len } else { 0 })
+    }
+
+    fn parallel_chain_outputs(
+        &self,
+        chain: &Chain,
+        env: &HashMap<String, Value>,
+        produced: &HashSet<String>,
+    ) -> Result<Option<Vec<String>>, String> {
+        let Some(Stage::Bind(target)) = chain.stages.last() else {
+            return Ok(None);
+        };
+        let mut outputs = Vec::new();
+        collect_binding_target_vars(target, &mut outputs);
+        if outputs.is_empty()
+            || outputs
+                .iter()
+                .any(|name| env.contains_key(name) || produced.contains(name))
+        {
+            return Ok(None);
+        }
+        let mut inputs = HashMap::new();
+        count_endpoint_vars(&chain.source, &mut inputs);
+        for stage in &chain.stages {
+            count_stage_endpoint_vars(stage, &mut inputs);
+        }
+        if inputs
+            .keys()
+            .any(|name| !env.contains_key(name) || produced.contains(name))
+        {
+            return Ok(None);
+        }
+        if !self.is_parallel_safe_endpoint(&chain.source, &mut HashSet::new())
+            || !chain
+                .stages
+                .iter()
+                .all(|stage| self.is_parallel_safe_stage(stage, &mut HashSet::new()))
+        {
+            return Ok(None);
+        }
+        match self.chain_final_value_type(chain, env) {
+            Ok(Some(_)) => Ok(Some(outputs)),
+            Ok(None) | Err(_) => Ok(None),
+        }
+    }
+
+    fn emit_parallel_chain_batch(
+        &mut self,
+        out: &mut String,
+        chains: &[Chain],
+        env: &mut HashMap<String, Value>,
+    ) -> Result<(), String> {
+        let mut helpers = Vec::new();
+        for chain in chains {
+            helpers.push(self.emit_parallel_chain_helper(chain, env)?);
+        }
+        for helper in &helpers {
+            out.push_str(&format!("  {} {};\n", helper.ctx_ty, helper.ctx));
+            for input in &helper.inputs {
+                out.push_str(&format!(
+                    "  {}.{} = {};\n",
+                    helper.ctx, input.field, input.value.code
+                ));
+            }
+        }
+        let fns = self.next_temp();
+        let ctxs = self.next_temp();
+        out.push_str(&format!(
+            "  FaParallelTaskFn {fns}[{}] = {{ {} }};\n",
+            helpers.len(),
+            helpers
+                .iter()
+                .map(|helper| helper.worker.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str(&format!(
+            "  void *{ctxs}[{}] = {{ {} }};\n",
+            helpers.len(),
+            helpers
+                .iter()
+                .map(|helper| format!("&{}", helper.ctx))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str(&format!(
+            "  fa_parallel_tasks({}, {fns}, {ctxs});\n",
+            helpers.len()
+        ));
+        for helper in helpers {
+            self.emit_bind_target(
+                out,
+                &helper.target,
+                Value {
+                    code: format!("{}.result", helper.ctx),
+                    ty: helper.output_ty,
+                },
+                env,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn emit_parallel_chain_helper(
+        &mut self,
+        chain: &Chain,
+        env: &HashMap<String, Value>,
+    ) -> Result<ParallelChainHelper, String> {
+        let id = self.parallel_helper;
+        self.parallel_helper += 1;
+        let worker = format!("fa_parallel_chain_worker_{id}");
+        let ctx_ty = format!("{worker}_Ctx");
+        let ctx = self.next_temp();
+        let output_ty = self
+            .chain_final_value_type(chain, env)?
+            .ok_or_else(|| "parallel chain expected final binding".to_string())?;
+        let output_c_ty = self.types.c_type(&output_ty);
+        let mut input_names = BTreeSet::new();
+        collect_endpoint_var_names(&chain.source, &mut input_names);
+        for stage in &chain.stages {
+            collect_stage_endpoint_var_names(stage, &mut input_names);
+        }
+        let mut inputs = Vec::new();
+        for (index, name) in input_names.into_iter().enumerate() {
+            let value = env
+                .get(&name)
+                .cloned()
+                .ok_or_else(|| format!("parallel chain input `{name}` is unavailable"))?;
+            inputs.push(ParallelChainInput {
+                name,
+                field: format!("in_{index}"),
+                c_ty: self.types.c_type(&value.ty),
+                value,
+            });
+        }
+
+        let mut helper = String::new();
+        helper.push_str("typedef struct { ");
+        for input in &inputs {
+            helper.push_str(&format!("{} {}; ", input.c_ty, input.field));
+        }
+        helper.push_str(&format!("{output_c_ty} result; }} {ctx_ty};\n"));
+        helper.push_str(&format!(
+            "static void {worker}(void *ctx_ptr) {{\n  {ctx_ty} *ctx = ({ctx_ty} *)ctx_ptr;\n"
+        ));
+        let mut helper_env = HashMap::new();
+        for input in &inputs {
+            helper_env.insert(
+                input.name.clone(),
+                Value {
+                    code: format!("ctx->{}", input.field),
+                    ty: input.value.ty.clone(),
+                },
+            );
+        }
+        let (target, value) = self
+            .emit_chain_final_value(&mut helper, chain, &mut helper_env)?
+            .ok_or_else(|| "parallel chain expected final binding".to_string())?;
+        helper.push_str(&format!("  ctx->result = {};\n}}\n\n", value.code));
+        self.parallel_helpers.push_str(&helper);
+        Ok(ParallelChainHelper {
+            worker,
+            ctx_ty,
+            ctx,
+            inputs,
+            target,
+            output_ty,
+        })
+    }
+
+    fn emit_chain_final_value(
+        &mut self,
+        out: &mut String,
+        chain: &Chain,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<Option<(BindingTarget, Value)>, String> {
+        let Some(Stage::Bind(target)) = chain.stages.last() else {
+            return Ok(None);
+        };
+        let mut value = if endpoint_contains_empty_seq(&chain.source) {
+            if let Some(Stage::Endpoint(Endpoint::Name(name))) = chain.stages.first() {
+                let expected = self.call_input_type_for_endpoint(name, &chain.source, env)?;
+                self.emit_endpoint_expected(out, &chain.source, env, Some(&expected))?
+            } else {
+                self.emit_endpoint_expected(out, &chain.source, env, None)?
+            }
+        } else {
+            self.emit_endpoint(out, &chain.source, env)?
+        };
+        for stage in &chain.stages[..chain.stages.len() - 1] {
+            match stage {
+                Stage::Endpoint(Endpoint::Name(name)) => {
+                    value = self.emit_call(out, name, value.clone())?;
+                }
+                Stage::Map(name) => {
+                    value = self.emit_map(out, name, value.clone())?;
+                }
+                Stage::Filter(name) => {
+                    value = self.emit_filter(out, name, value.clone())?;
+                }
+                Stage::Field(name) => {
+                    value = self.emit_field(name, value.clone())?;
+                }
+                Stage::Repeat { count, node } => {
+                    let count_value = self.emit_endpoint(out, count, env)?;
+                    value = self.emit_repeat(out, node, value.clone(), count_value)?;
+                }
+                Stage::Reduce { op, identity } => {
+                    let identity_value = self.emit_endpoint(out, identity, env)?;
+                    value = self.emit_reduce(out, op, value.clone(), identity_value)?;
+                }
+                Stage::Scan { op, identity } => {
+                    let identity_value = self.emit_endpoint(out, identity, env)?;
+                    value = self.emit_scan(out, op, value.clone(), identity_value)?;
+                }
+                Stage::Match { arms } => {
+                    value = self.emit_match(out, arms, value.clone(), env)?;
+                }
+                Stage::Endpoint(_) | Stage::Bind(_) | Stage::FaultMap { .. } => return Ok(None),
+            }
+        }
+        Ok(Some((target.clone(), value)))
+    }
+
+    fn chain_final_value_type(
+        &self,
+        chain: &Chain,
+        env: &HashMap<String, Value>,
+    ) -> Result<Option<Ty>, String> {
+        if !matches!(chain.stages.last(), Some(Stage::Bind(_))) {
+            return Ok(None);
+        }
+        let mut value_ty = self.endpoint_value_type(&chain.source, env)?;
+        for stage in &chain.stages[..chain.stages.len() - 1] {
+            match stage {
+                Stage::Endpoint(Endpoint::Name(name)) => {
+                    value_ty = self.call_output_type(name, &value_ty)?;
+                }
+                Stage::Map(name) => {
+                    let output_item_ty = match &value_ty {
+                        Ty::Seq(item_ty) | Ty::Stream(item_ty) => {
+                            self.call_output_type(name, item_ty)?
+                        }
+                        Ty::Faultable(inner) => match inner.as_ref() {
+                            Ty::Seq(item_ty) | Ty::Stream(item_ty) => {
+                                self.call_output_type(name, item_ty)?
+                            }
+                            _ => return Ok(None),
+                        },
+                        _ => return Ok(None),
+                    };
+                    value_ty = match value_ty {
+                        Ty::Seq(_) => Ty::Seq(Box::new(output_item_ty)),
+                        Ty::Stream(_) => Ty::Stream(Box::new(output_item_ty)),
+                        Ty::Faultable(inner) => match inner.as_ref() {
+                            Ty::Seq(_) => {
+                                Ty::Faultable(Box::new(Ty::Seq(Box::new(output_item_ty))))
+                            }
+                            Ty::Stream(_) => {
+                                Ty::Faultable(Box::new(Ty::Stream(Box::new(output_item_ty))))
+                            }
+                            _ => return Ok(None),
+                        },
+                        _ => return Ok(None),
+                    };
+                }
+                Stage::Filter(name) => {
+                    let item_ty = match &value_ty {
+                        Ty::Seq(item_ty) => item_ty.as_ref(),
+                        Ty::Faultable(inner) => match inner.as_ref() {
+                            Ty::Seq(item_ty) => item_ty.as_ref(),
+                            _ => return Ok(None),
+                        },
+                        _ => return Ok(None),
+                    };
+                    if self.call_output_type(name, item_ty)? != Ty::Bool {
+                        return Ok(None);
+                    }
+                }
+                Stage::Field(name) => {
+                    value_ty = self.field_value_type(name, &value_ty)?;
+                }
+                Stage::Repeat { node, .. } => {
+                    value_ty = self.call_output_type(node, &value_ty)?;
+                }
+                Stage::Reduce { op: _, identity } => {
+                    let Ty::Seq(item_ty) = &value_ty else {
+                        return Ok(None);
+                    };
+                    let identity_ty = self.endpoint_value_type(identity, env)?;
+                    if item_ty.as_ref() != &identity_ty {
+                        return Ok(None);
+                    }
+                    value_ty = match item_ty.as_ref() {
+                        Ty::Faultable(inner) => Ty::Faultable(inner.clone()),
+                        other => other.clone(),
+                    };
+                }
+                Stage::Scan { op: _, identity } => {
+                    let Ty::Seq(item_ty) = &value_ty else {
+                        return Ok(None);
+                    };
+                    let identity_ty = self.endpoint_value_type(identity, env)?;
+                    if item_ty.as_ref() != &identity_ty {
+                        return Ok(None);
+                    }
+                }
+                Stage::Match { arms } => {
+                    value_ty = self.match_output_type(arms, &value_ty, env)?;
+                }
+                Stage::Endpoint(_) | Stage::Bind(_) | Stage::FaultMap { .. } => return Ok(None),
+            }
+        }
+        Ok(Some(value_ty))
     }
 
     fn emit_chain(
@@ -11284,6 +11646,108 @@ fn count_endpoint_vars(endpoint: &Endpoint, uses: &mut HashMap<String, usize>) {
     }
 }
 
+fn count_stage_endpoint_vars(stage: &Stage, uses: &mut HashMap<String, usize>) {
+    match stage {
+        Stage::Endpoint(endpoint) => count_endpoint_vars(endpoint, uses),
+        Stage::Repeat { count, .. }
+        | Stage::Reduce {
+            identity: count, ..
+        }
+        | Stage::Scan {
+            identity: count, ..
+        } => count_endpoint_vars(count, uses),
+        Stage::Match { arms } => {
+            for arm in arms {
+                if let MatchGuard::Call { args, .. } = &arm.guard {
+                    for arg in args {
+                        count_endpoint_vars(arg, uses);
+                    }
+                }
+                if let MatchTarget::Value(endpoint) = &arm.target {
+                    count_endpoint_vars(endpoint, uses);
+                }
+            }
+        }
+        Stage::Bind(_)
+        | Stage::Map(_)
+        | Stage::Filter(_)
+        | Stage::FaultMap { .. }
+        | Stage::Field(_) => {}
+    }
+}
+
+fn collect_endpoint_var_names(endpoint: &Endpoint, names: &mut BTreeSet<String>) {
+    match endpoint {
+        Endpoint::Variable(name) => {
+            names.insert(name.clone());
+        }
+        Endpoint::Tuple(items) | Endpoint::Seq(items) => {
+            for item in items {
+                collect_endpoint_var_names(item, names);
+            }
+        }
+        Endpoint::Struct { fields, .. } => {
+            for (_, item) in fields {
+                collect_endpoint_var_names(item, names);
+            }
+        }
+        Endpoint::Eval { source, stages } => {
+            collect_endpoint_var_names(source, names);
+            for stage in stages {
+                collect_stage_endpoint_var_names(stage, names);
+            }
+        }
+        Endpoint::Name(_)
+        | Endpoint::Int(_)
+        | Endpoint::Real(_)
+        | Endpoint::Bool(_)
+        | Endpoint::String(_)
+        | Endpoint::Unit => {}
+    }
+}
+
+fn collect_stage_endpoint_var_names(stage: &Stage, names: &mut BTreeSet<String>) {
+    match stage {
+        Stage::Endpoint(endpoint) => collect_endpoint_var_names(endpoint, names),
+        Stage::Repeat { count, .. }
+        | Stage::Reduce {
+            identity: count, ..
+        }
+        | Stage::Scan {
+            identity: count, ..
+        } => collect_endpoint_var_names(count, names),
+        Stage::Match { arms } => {
+            for arm in arms {
+                if let MatchGuard::Call { args, .. } = &arm.guard {
+                    for arg in args {
+                        collect_endpoint_var_names(arg, names);
+                    }
+                }
+                if let MatchTarget::Value(endpoint) = &arm.target {
+                    collect_endpoint_var_names(endpoint, names);
+                }
+            }
+        }
+        Stage::Bind(_)
+        | Stage::Map(_)
+        | Stage::Filter(_)
+        | Stage::FaultMap { .. }
+        | Stage::Field(_) => {}
+    }
+}
+
+fn collect_binding_target_vars(target: &BindingTarget, names: &mut Vec<String>) {
+    match target {
+        BindingTarget::Discard => {}
+        BindingTarget::Variable(name) => names.push(name.clone()),
+        BindingTarget::Tuple(items) => {
+            for item in items {
+                collect_binding_target_vars(item, names);
+            }
+        }
+    }
+}
+
 fn endpoint_contains_empty_seq(endpoint: &Endpoint) -> bool {
     match endpoint {
         Endpoint::Seq(items) => items.is_empty() || items.iter().any(endpoint_contains_empty_seq),
@@ -11962,8 +12426,60 @@ mod tests {
 
         let runtime_c = emit_runtime_c(&module).expect("runtime c");
 
-        assert!(runtime_c.contains("fa_parallel_map_worker_0"));
+        assert!(runtime_c.contains("fa_parallel_map_worker_"));
         assert!(runtime_c.contains("fa_parallel_for(0,"));
+    }
+
+    #[test]
+    fn independent_pure_chains_emit_parallel_tasks() {
+        let module = parser::parse(
+            r#"
+                import std.math { add, max, mul }
+
+                struct JobSummary {
+                    total_score: Int,
+                    peak_score: Int,
+                    total_weight: Int,
+                    peak_weight: Int,
+                }
+
+                extern node score_batch(width: Int) -> summary: JobSummary {
+                    (1, $width, 1) -> range_step              -> $jobs
+                    $jobs        -> map score_job           -> $scores
+                    $jobs        -> map weight_job          -> $weights
+                    $scores      -> reduce add(identity: 0) -> $total_score
+                    $scores      -> reduce max(identity: 0) -> $peak_score
+                    $weights     -> reduce add(identity: 0) -> $total_weight
+                    $weights     -> reduce max(identity: 0) -> $peak_weight
+                    JobSummary {
+                        total_score: $total_score,
+                        peak_score: $peak_score,
+                        total_weight: $total_weight,
+                        peak_weight: $peak_weight
+                    } -> $summary
+                }
+
+                node score_job(n: Int) -> score: Int {
+                    ($n, $n)      -> mul -> $square
+                    ($square, $n) -> add -> $score
+                }
+
+                node weight_job(n: Int) -> weight: Int {
+                    ($n, 2)       -> mul -> $doubled
+                    ($doubled, 1) -> add -> $weight
+                }
+            "#,
+        )
+        .expect("parse");
+
+        let mut codegen = TypedCodegen::new(&module).expect("typed codegen");
+        let emitted = codegen.emit_native_cdylib_c().expect("native c");
+
+        assert!(emitted.source.contains("fa_parallel_tasks"));
+        assert!(emitted.source.contains("fa_parallel_chain_worker_0"));
+        assert!(emitted.source.contains("fa_parallel_chain_worker_2"));
+        assert!(emitted.source.contains("fa_parallel_tasks(2,"));
+        assert!(emitted.source.contains("fa_parallel_tasks(4,"));
     }
 
     #[test]
@@ -12028,8 +12544,8 @@ mod tests {
         let runtime_c = emit_runtime_c(&module).expect("runtime c");
 
         assert!(runtime_c.contains("typedef struct { int64_t v_x; int64_t v_y; } FaStruct_Point;"));
-        assert!(runtime_c.contains("v_point.v_x"));
-        assert!(runtime_c.contains("v_point.v_y"));
+        assert!(runtime_c.contains(".v_x"));
+        assert!(runtime_c.contains(".v_y"));
     }
 
     #[test]

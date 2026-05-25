@@ -518,6 +518,8 @@ mod tests {
         assert!(workers.contains("const __flowarrow_worker_mapper_ids"));
         assert!(workers.contains("faUseSharedNumericSequences = true"));
         assert!(workers.contains("function faScalarInputBuffer"));
+        assert!(workers.contains("await Promise.all([faParallelMapBigInt"));
+        assert!(workers.contains("Math.max(1, Math.floor("));
         assert!(workers.contains("Promise<Array<bigint>>"));
         assert!(workers.contains("new runtime.Worker(runtime.workerUrl, { type: \"module\" })"));
         assert!(workers.contains("node:worker_threads"));

@@ -76,12 +76,23 @@ typedef struct {
   size_t next;
   size_t end;
   size_t grain;
+  size_t worker_limit;
   pthread_mutex_t lock;
 } FaParallelForState;
 
-static _Thread_local int fa_parallel_depth = 0;
+typedef struct {
+  FaParallelTaskFn *fns;
+  void **ctxs;
+  size_t next;
+  size_t count;
+  size_t worker_limit;
+  pthread_mutex_t lock;
+} FaParallelTaskState;
 
-static size_t fa_parallel_worker_count(void) {
+static _Thread_local int fa_parallel_depth = 0;
+static _Thread_local size_t fa_parallel_worker_limit = 0;
+
+static size_t fa_parallel_available_worker_count(void) {
   const char *env = getenv("FLOWARROW_THREADS");
   if (env && *env) {
     char *end = NULL;
@@ -96,8 +107,18 @@ static size_t fa_parallel_worker_count(void) {
   return cpus > FA_PARALLEL_FOR_MAX_WORKERS ? FA_PARALLEL_FOR_MAX_WORKERS : (size_t)cpus;
 }
 
+static size_t fa_parallel_worker_count(void) {
+  size_t workers = fa_parallel_available_worker_count();
+  if (fa_parallel_worker_limit > 0 && workers > fa_parallel_worker_limit) {
+    workers = fa_parallel_worker_limit;
+  }
+  return workers;
+}
+
 static void *fa_parallel_for_worker(void *arg) {
   FaParallelForState *state = (FaParallelForState *)arg;
+  size_t previous_worker_limit = fa_parallel_worker_limit;
+  if (state->worker_limit > 0) fa_parallel_worker_limit = state->worker_limit;
   fa_parallel_depth++;
   for (;;) {
     size_t start;
@@ -115,6 +136,7 @@ static void *fa_parallel_for_worker(void *arg) {
     state->fn(state->ctx, start, end);
   }
   fa_parallel_depth--;
+  fa_parallel_worker_limit = previous_worker_limit;
   return NULL;
 }
 
@@ -136,6 +158,7 @@ static void fa_parallel_for(size_t start, size_t end, size_t grain, FaParallelFo
   state.next = start;
   state.end = end;
   state.grain = grain;
+  state.worker_limit = fa_parallel_worker_limit;
   if (pthread_mutex_init(&state.lock, NULL) != 0) {
     fn(ctx, start, end);
     return;
@@ -147,6 +170,58 @@ static void fa_parallel_for(size_t start, size_t end, size_t grain, FaParallelFo
     if (pthread_create(&threads[spawned], NULL, fa_parallel_for_worker, &state) != 0) break;
   }
   fa_parallel_for_worker(&state);
+  for (size_t i = 0; i < spawned; i++) pthread_join(threads[i], NULL);
+  pthread_mutex_destroy(&state.lock);
+}
+
+static void *fa_parallel_tasks_worker(void *arg) {
+  FaParallelTaskState *state = (FaParallelTaskState *)arg;
+  size_t previous_worker_limit = fa_parallel_worker_limit;
+  fa_parallel_worker_limit = state->worker_limit;
+  for (;;) {
+    size_t index;
+    pthread_mutex_lock(&state->lock);
+    index = state->next;
+    if (index >= state->count) {
+      pthread_mutex_unlock(&state->lock);
+      break;
+    }
+    state->next++;
+    pthread_mutex_unlock(&state->lock);
+    state->fns[index](state->ctxs[index]);
+  }
+  fa_parallel_worker_limit = previous_worker_limit;
+  return NULL;
+}
+
+static void fa_parallel_tasks(size_t count, FaParallelTaskFn *fns, void **ctxs) {
+  if (count == 0) return;
+  size_t workers = fa_parallel_worker_count();
+  if (fa_parallel_depth > 0 || workers <= 1 || count <= 1) {
+    for (size_t i = 0; i < count; i++) fns[i](ctxs[i]);
+    return;
+  }
+  if (workers > count) workers = count;
+  size_t per_task_workers = fa_parallel_worker_count() / workers;
+  if (per_task_workers < 1) per_task_workers = 1;
+
+  FaParallelTaskState state;
+  state.fns = fns;
+  state.ctxs = ctxs;
+  state.next = 0;
+  state.count = count;
+  state.worker_limit = per_task_workers;
+  if (pthread_mutex_init(&state.lock, NULL) != 0) {
+    for (size_t i = 0; i < count; i++) fns[i](ctxs[i]);
+    return;
+  }
+
+  pthread_t threads[FA_PARALLEL_FOR_MAX_WORKERS];
+  size_t spawned = 0;
+  for (; spawned + 1 < workers; spawned++) {
+    if (pthread_create(&threads[spawned], NULL, fa_parallel_tasks_worker, &state) != 0) break;
+  }
+  fa_parallel_tasks_worker(&state);
   for (size_t i = 0; i < spawned; i++) pthread_join(threads[i], NULL);
   pthread_mutex_destroy(&state.lock);
 }

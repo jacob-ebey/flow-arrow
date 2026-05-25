@@ -350,6 +350,8 @@ fn build_javascript_with_worker_concurrency_and_run_node_workers() {
     assert!(generated.contains("const faScalarWorkerPools = new Map"));
     assert!(generated.contains("faUseSharedNumericSequences = true"));
     assert!(generated.contains("function faScalarInputBuffer"));
+    assert!(generated.contains("await Promise.all([faParallelMapBigInt"));
+    assert!(generated.contains("Math.max(1, Math.floor("));
     assert!(generated.contains("node:worker_threads"));
     assert!(generated.contains("new runtime.Worker(new URL(runtime.workerUrl)"));
     assert!(generated.contains("execArgv: []"));
@@ -667,6 +669,8 @@ fn typescript_concurrency_benchmark_example_builds_and_runs() {
     assert!(workers_ts.contains("new runtime.Worker(runtime.workerUrl, { type: \"module\" })"));
     assert!(workers_ts.contains("faUseSharedNumericSequences = true"));
     assert!(workers_ts.contains("function faScalarInputBuffer"));
+    assert!(workers_ts.contains("await Promise.all([faParallelMapBigInt"));
+    assert!(workers_ts.contains("Math.max(1, Math.floor("));
     assert!(workers_ts.contains("node:worker_threads"));
     assert!(workers_ts.contains("new runtime.Worker(new URL(runtime.workerUrl)"));
     assert!(workers_ts.contains("execArgv: []"));

@@ -133,8 +133,11 @@ executable. Native `--crate-type cdylib` emits a platform shared library
 plus a generated C header for top-level `extern node` exports using the
 same C ABI type model as the native runtime: primitives, bytes, tuples,
 structs, sequences, faultables, streams, and the current runtime-backed
-HTTP/SQLite/CV shapes. `wasm32-unknown-unknown` supports an initial
-`--crate-type cdylib` reactor-module path for pure scalar node exports.
+HTTP/SQLite/CV shapes. The generated native C runtime uses pthread-backed
+task batches for independent pure dataflow chains and pthread-backed
+parallel loops for safe sequence maps. `wasm32-unknown-unknown` supports
+an initial `--crate-type cdylib` reactor-module path for pure scalar node
+exports.
 `typescript` emits TypeScript source under `build/typescript/`, and
 `javascript` emits JavaScript plus TypeScript declarations under
 `build/javascript/`.
