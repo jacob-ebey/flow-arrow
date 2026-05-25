@@ -2,7 +2,10 @@ use crate::ast::*;
 use crate::module_resolver;
 use crate::monomorphize;
 use crate::stdlib::{self, RuntimeSupport};
-use crate::typecheck::{self, CheckMode, TypedModule};
+use crate::typecheck::{
+    self, CheckMode, TypedCallable, TypedChain, TypedEndpoint, TypedEndpointKind, TypedMatchArm,
+    TypedMatchGuard, TypedMatchTarget, TypedModule, TypedStage, TypedStageKind,
+};
 use crate::types::{
     Signature, Type as Ty, contains_empty_seq, parse_type, sequence_item_type, stdlib_type_symbol,
     substitute_partial,
@@ -907,10 +910,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     }
 
     fn uses_cv_runtime(&self) -> bool {
-        self.module.declarations.iter().any(|decl| {
-            let (Decl::Node(callable) | Decl::Program(callable)) = decl else {
-                return false;
-            };
+        self.typed.callables.iter().any(|callable| {
             callable
                 .chains
                 .iter()
@@ -920,10 +920,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     }
 
     fn uses_http_runtime(&self) -> bool {
-        self.module.declarations.iter().any(|decl| {
-            let (Decl::Node(callable) | Decl::Program(callable)) = decl else {
-                return false;
-            };
+        self.typed.callables.iter().any(|callable| {
             callable
                 .chains
                 .iter()
@@ -932,24 +929,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         })
     }
 
-    fn stage_uses_cv_runtime(&self, stage: &Stage) -> bool {
-        match stage {
-            Stage::Endpoint(Endpoint::Name(name))
-            | Stage::Map(name)
-            | Stage::Filter(name)
-            | Stage::Repeat { node: name, .. }
-            | Stage::FaultMap { node: name, .. } => self.is_cv_runtime_name(name),
-            Stage::Reduce { op, .. } | Stage::Scan { op, .. } => self.is_cv_runtime_name(op),
-            Stage::Match { arms } => arms.iter().any(|arm| {
-                matches!(&arm.target, MatchTarget::Node(node) if self.is_cv_runtime_name(node))
-                    || matches!(
-                        &arm.guard,
-                        MatchGuard::Call { node, .. } if self.is_cv_runtime_name(node)
-                    )
-            }),
-            Stage::Bind(_) | Stage::Field(_) => false,
-            Stage::Endpoint(_) => false,
-        }
+    fn stage_uses_cv_runtime(&self, stage: &TypedStage) -> bool {
+        self.typed_stage_uses_runtime(stage, |this, name| this.is_cv_runtime_name(name))
     }
 
     fn is_cv_runtime_name(&self, name: &str) -> bool {
@@ -968,24 +949,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         )
     }
 
-    fn stage_uses_http_runtime(&self, stage: &Stage) -> bool {
-        match stage {
-            Stage::Endpoint(Endpoint::Name(name))
-            | Stage::Map(name)
-            | Stage::Filter(name)
-            | Stage::Repeat { node: name, .. }
-            | Stage::FaultMap { node: name, .. } => self.is_http_runtime_name(name),
-            Stage::Reduce { op, .. } | Stage::Scan { op, .. } => self.is_http_runtime_name(op),
-            Stage::Match { arms } => arms.iter().any(|arm| {
-                matches!(&arm.target, MatchTarget::Node(node) if self.is_http_runtime_name(node))
-                    || matches!(
-                        &arm.guard,
-                        MatchGuard::Call { node, .. } if self.is_http_runtime_name(node)
-                    )
-            }),
-            Stage::Bind(_) | Stage::Field(_) => false,
-            Stage::Endpoint(_) => false,
-        }
+    fn stage_uses_http_runtime(&self, stage: &TypedStage) -> bool {
+        self.typed_stage_uses_runtime(stage, |this, name| this.is_http_runtime_name(name))
     }
 
     fn is_http_runtime_name(&self, name: &str) -> bool {
@@ -1011,10 +976,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     }
 
     fn uses_sqlite_runtime(&self) -> bool {
-        self.module.declarations.iter().any(|decl| {
-            let (Decl::Node(callable) | Decl::Program(callable)) = decl else {
-                return false;
-            };
+        self.typed.callables.iter().any(|callable| {
             callable
                 .chains
                 .iter()
@@ -1023,23 +985,32 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         })
     }
 
-    fn stage_uses_sqlite_runtime(&self, stage: &Stage) -> bool {
-        match stage {
-            Stage::Endpoint(Endpoint::Name(name))
-            | Stage::Map(name)
-            | Stage::Filter(name)
-            | Stage::Repeat { node: name, .. }
-            | Stage::FaultMap { node: name, .. } => self.is_sqlite_runtime_name(name),
-            Stage::Reduce { op, .. } | Stage::Scan { op, .. } => self.is_sqlite_runtime_name(op),
-            Stage::Match { arms } => arms.iter().any(|arm| {
-                matches!(&arm.target, MatchTarget::Node(node) if self.is_sqlite_runtime_name(node))
+    fn stage_uses_sqlite_runtime(&self, stage: &TypedStage) -> bool {
+        self.typed_stage_uses_runtime(stage, |this, name| this.is_sqlite_runtime_name(name))
+    }
+
+    fn typed_stage_uses_runtime(
+        &self,
+        stage: &TypedStage,
+        uses_name: impl Fn(&Self, &str) -> bool,
+    ) -> bool {
+        match &stage.kind {
+            TypedStageKind::Call { name, .. }
+            | TypedStageKind::Map { name, .. }
+            | TypedStageKind::Filter { name, .. }
+            | TypedStageKind::Repeat { node: name, .. }
+            | TypedStageKind::FaultMap { node: name, .. } => uses_name(self, name),
+            TypedStageKind::Reduce { op, .. } | TypedStageKind::Scan { op, .. } => {
+                uses_name(self, op)
+            }
+            TypedStageKind::Match { arms } => arms.iter().any(|arm| {
+                matches!(&arm.target, TypedMatchTarget::Node { name, .. } if uses_name(self, name))
                     || matches!(
                         &arm.guard,
-                        MatchGuard::Call { node, .. } if self.is_sqlite_runtime_name(node)
+                        TypedMatchGuard::Call { node, .. } if uses_name(self, node)
                     )
             }),
-            Stage::Bind(_) | Stage::Field(_) => false,
-            Stage::Endpoint(_) => false,
+            TypedStageKind::Bind { .. } | TypedStageKind::Field { .. } => false,
         }
     }
 
@@ -5983,14 +5954,9 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     }
 
     fn emit_callables(&mut self) -> Result<(), String> {
-        let mut names = self.codegen.callables.keys().cloned().collect::<Vec<_>>();
-        names.sort();
-        for name in names {
-            let callable = *self
-                .codegen
-                .callables
-                .get(&name)
-                .ok_or_else(|| format!("missing callable `{name}`"))?;
+        let mut callables = self.codegen.typed.callables.iter().collect::<Vec<_>>();
+        callables.sort_by(|left, right| left.name.cmp(&right.name));
+        for callable in callables {
             self.emit_callable(callable)?;
         }
         Ok(())
@@ -6012,21 +5978,18 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
 
     fn exported_node_names(&self) -> Vec<String> {
         self.codegen
-            .module
-            .declarations
+            .typed
+            .callables
             .iter()
-            .filter_map(|decl| match decl {
-                Decl::Node(callable)
-                    if callable.is_extern && !callable.name.starts_with("__flow_") =>
+            .filter_map(|callable| {
+                if matches!(callable.kind, crate::typecheck::TypedCallableKind::Node)
+                    && callable.is_extern
+                    && !callable.name.starts_with("__flow_")
                 {
                     Some(callable.name.clone())
+                } else {
+                    None
                 }
-                Decl::TypeAlias(_)
-                | Decl::Struct(_)
-                | Decl::Import(_)
-                | Decl::Foreign(_)
-                | Decl::Program(_) => None,
-                Decl::Node(_) => None,
             })
             .collect()
     }
@@ -6196,7 +6159,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         }
     }
 
-    fn emit_callable(&mut self, callable: &Callable) -> Result<(), String> {
+    fn emit_callable(&mut self, callable: &TypedCallable) -> Result<(), String> {
         let function = *self
             .functions
             .get(&callable.name)
@@ -6267,7 +6230,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
 
     fn emit_outputs(
         &mut self,
-        callable: &Callable,
+        callable: &TypedCallable,
         env: &HashMap<String, LlvmValue<'ctx>>,
         expected_ty: &Ty,
     ) -> Result<LlvmValue<'ctx>, String> {
@@ -6339,55 +6302,59 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
 
     fn emit_chain(
         &mut self,
-        chain: &Chain,
+        chain: &TypedChain,
         env: &mut HashMap<String, LlvmValue<'ctx>>,
     ) -> Result<(), String> {
-        let mut value = if endpoint_contains_empty_seq(&chain.source) {
-            if let Some(Stage::Endpoint(Endpoint::Name(name))) = chain.stages.first() {
-                let actual = self.endpoint_type(&chain.source, env)?;
-                let expected = self.codegen.call_input_type_for_value(name, &actual)?;
-                self.emit_endpoint_expected(&chain.source, env, Some(&expected))?
-            } else {
-                self.emit_endpoint(&chain.source, env)?
+        let source_expected = if contains_empty_seq(&chain.source.ty) {
+            match chain.stages.first().map(|stage| &stage.kind) {
+                Some(TypedStageKind::Call { name, .. }) => Some(
+                    self.codegen
+                        .call_input_type_for_value(name, &chain.source.ty)?,
+                ),
+                Some(_) => chain.stages.first().map(|stage| stage.input.clone()),
+                None => None,
             }
         } else {
-            self.emit_endpoint(&chain.source, env)?
+            None
         };
+        let mut value =
+            self.emit_endpoint_expected(&chain.source, env, source_expected.as_ref())?;
         for (index, stage) in chain.stages.iter().enumerate() {
             let is_last = index + 1 == chain.stages.len();
-            match stage {
-                Stage::Bind(target) if is_last => self.bind_target(target, value.clone(), env)?,
-                Stage::Endpoint(Endpoint::Name(name)) => {
+            match &stage.kind {
+                TypedStageKind::Bind { target } if is_last => {
+                    self.bind_target(target, value.clone(), env)?
+                }
+                TypedStageKind::Call { name, .. } => {
                     value = self.emit_call(name, value)?;
                 }
-                Stage::Map(name) => {
+                TypedStageKind::Map { name, .. } => {
                     value = self.emit_map(name, value)?;
                 }
-                Stage::Filter(name) => {
+                TypedStageKind::Filter { name, .. } => {
                     value = self.emit_filter(name, value)?;
                 }
-                Stage::Field(name) => {
+                TypedStageKind::Field { name } => {
                     value = self.extract_struct_field(value, name)?;
                 }
-                Stage::Reduce { op, identity } => {
+                TypedStageKind::Reduce { op, identity, .. } => {
                     let identity = self.emit_endpoint(identity, env)?;
                     value = self.emit_reduce(op, value, identity)?;
                 }
-                Stage::Scan { op, identity } => {
+                TypedStageKind::Scan { op, identity, .. } => {
                     let identity = self.emit_endpoint(identity, env)?;
                     value = self.emit_scan(op, value, identity)?;
                 }
-                Stage::Repeat { count, node } => {
+                TypedStageKind::Repeat { count, node, .. } => {
                     let count = self.emit_endpoint(count, env)?;
                     value = self.emit_repeat(node, value, count)?;
                 }
-                Stage::Match { arms } => {
-                    value = self.emit_match(arms, value, env)?;
+                TypedStageKind::Match { arms } => {
+                    value = self.emit_match(arms, stage.output.clone(), value, env)?;
                 }
-                Stage::FaultMap { node, ok, fault } => {
-                    if !is_last {
-                        return Err("`fault map` must be the final stage in a chain".to_string());
-                    }
+                TypedStageKind::FaultMap {
+                    node, ok, fault, ..
+                } => {
                     let (ok_value, fault_value) = self.emit_fault_map(node, value.clone())?;
                     if env.insert(ok.clone(), ok_value).is_some() {
                         return Err(format!("value `{ok}` is bound more than once"));
@@ -6396,10 +6363,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                         return Err(format!("value `{fault}` is bound more than once"));
                     }
                 }
-                Stage::Endpoint(_) => {
-                    return Err("non-name endpoints may only appear as source values".to_string());
-                }
-                Stage::Bind(_) => {
+                TypedStageKind::Bind { .. } => {
                     return Err("binding targets may only appear as final stages".to_string());
                 }
             }
@@ -6409,7 +6373,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
 
     fn emit_endpoint(
         &mut self,
-        endpoint: &Endpoint,
+        endpoint: &TypedEndpoint,
         env: &HashMap<String, LlvmValue<'ctx>>,
     ) -> Result<LlvmValue<'ctx>, String> {
         self.emit_endpoint_expected(endpoint, env, None)
@@ -6417,41 +6381,43 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
 
     fn emit_endpoint_expected(
         &mut self,
-        endpoint: &Endpoint,
+        endpoint: &TypedEndpoint,
         env: &HashMap<String, LlvmValue<'ctx>>,
         expected: Option<&Ty>,
     ) -> Result<LlvmValue<'ctx>, String> {
-        match endpoint {
-            Endpoint::Variable(name) => env
+        match &endpoint.kind {
+            TypedEndpointKind::Variable(name) => env
                 .get(name)
                 .cloned()
                 .ok_or_else(|| format!("unknown value `{name}`")),
-            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
-            Endpoint::Int(value) => Ok(LlvmValue {
+            TypedEndpointKind::NodeRef { name, .. } => {
+                Err(format!("expected value, found node `{name}`"))
+            }
+            TypedEndpointKind::Int(value) => Ok(LlvmValue {
                 value: self
                     .context
                     .i64_type()
                     .const_int(*value as u64, true)
                     .into(),
-                ty: Ty::Int,
+                ty: endpoint.ty.clone(),
             }),
-            Endpoint::Real(value) => Ok(LlvmValue {
+            TypedEndpointKind::Real(value) => Ok(LlvmValue {
                 value: self.context.f64_type().const_float(*value).into(),
-                ty: Ty::Real,
+                ty: endpoint.ty.clone(),
             }),
-            Endpoint::Bool(value) => Ok(LlvmValue {
+            TypedEndpointKind::Bool(value) => Ok(LlvmValue {
                 value: self
                     .context
                     .i8_type()
                     .const_int(if *value { 1 } else { 0 }, false)
                     .into(),
-                ty: Ty::Bool,
+                ty: endpoint.ty.clone(),
             }),
-            Endpoint::Unit => Ok(LlvmValue {
+            TypedEndpointKind::Unit => Ok(LlvmValue {
                 value: self.types.basic_type(&Ty::Unit)?.const_zero(),
-                ty: Ty::Unit,
+                ty: endpoint.ty.clone(),
             }),
-            Endpoint::Tuple(items) => {
+            TypedEndpointKind::Tuple(items) => {
                 let values = items
                     .iter()
                     .enumerate()
@@ -6463,9 +6429,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                         self.emit_endpoint_expected(item, env, expected)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ty = expected.cloned().unwrap_or_else(|| {
-                    Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect())
-                });
+                let ty = expected.cloned().unwrap_or_else(|| endpoint.ty.clone());
                 let mut out = self.types.basic_type(&ty)?.into_struct_type().const_zero();
                 let Ty::Tuple(expected_items) = &ty else {
                     return Err(format!("tuple literal expected tuple type, found `{ty}`"));
@@ -6487,20 +6451,22 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     ty,
                 })
             }
-            Endpoint::String(_) | Endpoint::Seq(_) => {
+            TypedEndpointKind::String(_) | TypedEndpointKind::Seq(_) => {
                 self.emit_literal_endpoint_expected(endpoint, env, expected)
             }
-            Endpoint::Struct { name, fields } => {
+            TypedEndpointKind::Struct { name, fields, .. } => {
                 self.emit_struct_endpoint(name, fields, env, expected)
             }
-            Endpoint::Eval { source, stages } => self.emit_inline_eval(source, stages, env),
+            TypedEndpointKind::Eval { source, stages } => {
+                self.emit_inline_eval(source, stages, env)
+            }
         }
     }
 
     fn emit_struct_endpoint(
         &mut self,
         name: &str,
-        fields: &[(String, Endpoint)],
+        fields: &[(String, TypedEndpoint)],
         env: &HashMap<String, LlvmValue<'ctx>>,
         expected: Option<&Ty>,
     ) -> Result<LlvmValue<'ctx>, String> {
@@ -6539,55 +6505,50 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
 
     fn emit_inline_eval(
         &mut self,
-        source: &Endpoint,
-        stages: &[Stage],
+        source: &TypedEndpoint,
+        stages: &[TypedStage],
         env: &HashMap<String, LlvmValue<'ctx>>,
     ) -> Result<LlvmValue<'ctx>, String> {
-        let mut value = if endpoint_contains_empty_seq(source) {
-            if let Some(Stage::Endpoint(Endpoint::Name(name))) = stages.first() {
-                let actual = self.endpoint_type(source, env)?;
-                let expected = self.codegen.call_input_type_for_value(name, &actual)?;
-                self.emit_endpoint_expected(source, env, Some(&expected))?
-            } else {
-                self.emit_endpoint(source, env)?
+        let source_expected = if contains_empty_seq(&source.ty) {
+            match stages.first().map(|stage| &stage.kind) {
+                Some(TypedStageKind::Call { name, .. }) => {
+                    Some(self.codegen.call_input_type_for_value(name, &source.ty)?)
+                }
+                Some(_) => stages.first().map(|stage| stage.input.clone()),
+                None => None,
             }
         } else {
-            self.emit_endpoint(source, env)?
+            None
         };
+        let mut value = self.emit_endpoint_expected(source, env, source_expected.as_ref())?;
         for stage in stages {
-            match stage {
-                Stage::Endpoint(Endpoint::Name(name)) => {
+            match &stage.kind {
+                TypedStageKind::Call { name, .. } => {
                     value = self.emit_call(name, value)?;
                 }
-                Stage::Endpoint(Endpoint::Variable(_)) | Stage::Bind(_) => {
+                TypedStageKind::Bind { .. } => {
                     return Err("inline evaluations cannot bind values".to_string());
                 }
-                Stage::Endpoint(_) => {
-                    return Err(
-                        "non-name endpoints may only appear as inline evaluation sources"
-                            .to_string(),
-                    );
-                }
-                Stage::Map(name) => value = self.emit_map(name, value)?,
-                Stage::FaultMap { .. } => {
+                TypedStageKind::Map { name, .. } => value = self.emit_map(name, value)?,
+                TypedStageKind::FaultMap { .. } => {
                     return Err("inline evaluations cannot use `fault map`".to_string());
                 }
-                Stage::Filter(name) => value = self.emit_filter(name, value)?,
-                Stage::Field(name) => value = self.extract_struct_field(value, name)?,
-                Stage::Reduce { op, identity } => {
+                TypedStageKind::Filter { name, .. } => value = self.emit_filter(name, value)?,
+                TypedStageKind::Field { name } => value = self.extract_struct_field(value, name)?,
+                TypedStageKind::Reduce { op, identity, .. } => {
                     let identity = self.emit_endpoint(identity, env)?;
                     value = self.emit_reduce(op, value, identity)?;
                 }
-                Stage::Scan { op, identity } => {
+                TypedStageKind::Scan { op, identity, .. } => {
                     let identity = self.emit_endpoint(identity, env)?;
                     value = self.emit_scan(op, value, identity)?;
                 }
-                Stage::Repeat { count, node } => {
+                TypedStageKind::Repeat { count, node, .. } => {
                     let count = self.emit_endpoint(count, env)?;
                     value = self.emit_repeat(node, value, count)?;
                 }
-                Stage::Match { arms } => {
-                    value = self.emit_match(arms, value, env)?;
+                TypedStageKind::Match { arms } => {
+                    value = self.emit_match(arms, stage.output.clone(), value, env)?;
                 }
             }
         }
@@ -6596,12 +6557,12 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
 
     fn emit_literal_endpoint_expected(
         &mut self,
-        endpoint: &Endpoint,
+        endpoint: &TypedEndpoint,
         env: &HashMap<String, LlvmValue<'ctx>>,
         expected: Option<&Ty>,
     ) -> Result<LlvmValue<'ctx>, String> {
-        match endpoint {
-            Endpoint::String(value) => {
+        match &endpoint.kind {
+            TypedEndpointKind::String(value) => {
                 let global =
                     self.builder
                         .build_global_string_ptr(value, "str")
@@ -6637,10 +6598,19 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     ty: Ty::Bytes,
                 })
             }
-            Endpoint::Seq(items) => {
+            TypedEndpointKind::Seq(items) => {
                 if items.is_empty() {
-                    let Some(seq_ty @ Ty::Seq(_)) = expected else {
-                        return Err("empty sequence literals need a type context".to_string());
+                    let seq_ty = match expected {
+                        Some(seq_ty @ Ty::Seq(_)) => seq_ty,
+                        Some(other) => {
+                            return Err(format!(
+                                "empty sequence literal expected Seq context, found `{other}`"
+                            ));
+                        }
+                        None if matches!(endpoint.ty, Ty::Seq(_)) => &endpoint.ty,
+                        None => {
+                            return Err("empty sequence literals need a type context".to_string());
+                        }
                     };
                     return self.emit_seq_new(seq_ty, self.context.i64_type().const_zero());
                 }
@@ -6679,154 +6649,13 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         }
     }
 
-    fn endpoint_type(
-        &self,
-        endpoint: &Endpoint,
-        env: &HashMap<String, LlvmValue<'ctx>>,
-    ) -> Result<Ty, String> {
-        match endpoint {
-            Endpoint::Variable(name) => env
-                .get(name)
-                .map(|value| value.ty.clone())
-                .ok_or_else(|| format!("unknown value `{name}`")),
-            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
-            Endpoint::Int(_) => Ok(Ty::Int),
-            Endpoint::Real(_) => Ok(Ty::Real),
-            Endpoint::Bool(_) => Ok(Ty::Bool),
-            Endpoint::String(_) => Ok(Ty::Bytes),
-            Endpoint::Unit => Ok(Ty::Unit),
-            Endpoint::Tuple(items) => items
-                .iter()
-                .map(|item| self.endpoint_type(item, env))
-                .collect::<Result<Vec<_>, _>>()
-                .map(Ty::Tuple),
-            Endpoint::Seq(items) => {
-                let mut item_ty = None;
-                for item in items {
-                    let ty = self.endpoint_type(item, env)?;
-                    item_ty = Some(if let Some(current) = item_ty {
-                        sequence_item_type(&current, &ty)?
-                    } else {
-                        ty
-                    });
-                }
-                Ok(item_ty
-                    .map(|ty| Ty::Seq(Box::new(ty)))
-                    .unwrap_or(Ty::EmptySeq))
-            }
-            Endpoint::Struct { name, .. } => self
-                .codegen
-                .aliases
-                .get(name)
-                .cloned()
-                .ok_or_else(|| format!("unknown struct `{name}`")),
-            Endpoint::Eval { source, stages } => self.inline_eval_type(source, stages, env),
-        }
-    }
-
-    fn inline_eval_type(
-        &self,
-        source: &Endpoint,
-        stages: &[Stage],
-        env: &HashMap<String, LlvmValue<'ctx>>,
-    ) -> Result<Ty, String> {
-        let mut value_ty = self.endpoint_type(source, env)?;
-        for stage in stages {
-            match stage {
-                Stage::Endpoint(Endpoint::Name(name)) => {
-                    value_ty = self.codegen.call_output_type(name, &value_ty)?;
-                }
-                Stage::Endpoint(Endpoint::Variable(_)) | Stage::Bind(_) => {
-                    return Err("inline evaluations cannot bind values".to_string());
-                }
-                Stage::Endpoint(_) => {
-                    return Err(
-                        "non-name endpoints may only appear as inline evaluation sources"
-                            .to_string(),
-                    );
-                }
-                Stage::Map(name) => {
-                    value_ty = match &value_ty {
-                        Ty::Seq(item_ty) => {
-                            Ty::Seq(Box::new(self.codegen.call_output_type(name, item_ty)?))
-                        }
-                        Ty::Stream(item_ty) => {
-                            Ty::Stream(Box::new(self.codegen.call_output_type(name, item_ty)?))
-                        }
-                        _ => return Err(format!("`map {name}` expected Seq or Stream input")),
-                    };
-                }
-                Stage::FaultMap { .. } => {
-                    return Err("inline evaluations cannot use `fault map`".to_string());
-                }
-                Stage::Filter(name) => {
-                    let Ty::Seq(item_ty) = &value_ty else {
-                        return Err(format!("`filter {name}` expected Seq input"));
-                    };
-                    let predicate_ty = self.codegen.call_output_type(name, item_ty)?;
-                    if predicate_ty != Ty::Bool {
-                        return Err(format!(
-                            "`filter {name}` predicate expected `Bool`, found `{predicate_ty}`"
-                        ));
-                    }
-                }
-                Stage::Field(name) => {
-                    let Ty::Struct {
-                        name: ty_name,
-                        fields,
-                    } = &value_ty
-                    else {
-                        return Err(format!(
-                            "field `{name}` expected struct input, found `{value_ty}`"
-                        ));
-                    };
-                    value_ty = fields
-                        .iter()
-                        .find(|(field, _)| field == name)
-                        .map(|(_, ty)| ty.clone())
-                        .ok_or_else(|| format!("struct `{ty_name}` has no field `{name}`"))?;
-                }
-                Stage::Reduce { op, identity } => {
-                    let Ty::Seq(item_ty) = &value_ty else {
-                        return Err(format!("`reduce {op}` expected Seq input"));
-                    };
-                    let identity_ty = self.endpoint_type(identity, env)?;
-                    if item_ty.as_ref() != &identity_ty {
-                        return Err(format!(
-                            "`reduce {op}` identity expected `{item_ty}`, found `{identity_ty}`"
-                        ));
-                    }
-                    value_ty = self.codegen.call_output_type(op, item_ty)?;
-                }
-                Stage::Scan { op, identity } => {
-                    let Ty::Seq(item_ty) = &value_ty else {
-                        return Err(format!("`scan {op}` expected Seq input"));
-                    };
-                    let identity_ty = self.endpoint_type(identity, env)?;
-                    if item_ty.as_ref() != &identity_ty {
-                        return Err(format!(
-                            "`scan {op}` identity expected `{item_ty}`, found `{identity_ty}`"
-                        ));
-                    }
-                }
-                Stage::Repeat { node, .. } => {
-                    value_ty = self.codegen.call_output_type(node, &value_ty)?;
-                }
-                Stage::Match { arms } => {
-                    value_ty = self.match_output_type_llvm(arms, &value_ty, env)?;
-                }
-            }
-        }
-        Ok(value_ty)
-    }
-
     fn emit_match(
         &mut self,
-        arms: &[MatchArm],
+        arms: &[TypedMatchArm],
+        output_ty: Ty,
         subject: LlvmValue<'ctx>,
         env: &HashMap<String, LlvmValue<'ctx>>,
     ) -> Result<LlvmValue<'ctx>, String> {
-        let output_ty = self.match_output_type_llvm(arms, &subject.ty, env)?;
         let output_llvm_ty = self.types.basic_type(&output_ty)?;
         let out_ptr = self
             .builder
@@ -6838,7 +6667,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         for (index, arm) in arms.iter().enumerate() {
             let arm_block = self.context.append_basic_block(function, "match.arm");
             let next_block = match &arm.guard {
-                MatchGuard::Fallback => {
+                TypedMatchGuard::Fallback => {
                     if index + 1 != arms.len() {
                         return Err("`match` fallback arm must be last".to_string());
                     }
@@ -6849,7 +6678,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                         })?;
                     None
                 }
-                MatchGuard::Call { node, args } => {
+                TypedMatchGuard::Call { node, args, .. } => {
                     let next_block = self.context.append_basic_block(function, "match.next");
                     let guard_input = self.emit_match_guard_input(subject.clone(), args, env)?;
                     let guard = self.emit_call(node, guard_input)?;
@@ -6909,47 +6738,22 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         })
     }
 
-    fn match_output_type_llvm(
-        &self,
-        arms: &[MatchArm],
-        subject_ty: &Ty,
-        env: &HashMap<String, LlvmValue<'ctx>>,
-    ) -> Result<Ty, String> {
-        let mut output = None;
-        for arm in arms {
-            let arm_ty = match &arm.target {
-                MatchTarget::Node(node) => self.codegen.call_output_type(node, subject_ty)?,
-                MatchTarget::Value(endpoint) => self.endpoint_type(endpoint, env)?,
-            };
-            output = Some(if let Some(current) = output {
-                common_assignable_output_ty(
-                    &current,
-                    &arm_ty,
-                    &format!("match arm `{}` result", format_match_target(&arm.target)),
-                )?
-            } else {
-                arm_ty
-            });
-        }
-        output.ok_or_else(|| "`match` must contain at least one arm".to_string())
-    }
-
     fn emit_match_target(
         &mut self,
-        target: &MatchTarget,
+        target: &TypedMatchTarget,
         subject: LlvmValue<'ctx>,
         env: &HashMap<String, LlvmValue<'ctx>>,
     ) -> Result<LlvmValue<'ctx>, String> {
         match target {
-            MatchTarget::Node(node) => self.emit_call(node, subject),
-            MatchTarget::Value(endpoint) => self.emit_endpoint(endpoint, env),
+            TypedMatchTarget::Node { name, .. } => self.emit_call(name, subject),
+            TypedMatchTarget::Value(endpoint) => self.emit_endpoint(endpoint, env),
         }
     }
 
     fn emit_match_guard_input(
         &mut self,
         subject: LlvmValue<'ctx>,
-        args: &[Endpoint],
+        args: &[TypedEndpoint],
         env: &HashMap<String, LlvmValue<'ctx>>,
     ) -> Result<LlvmValue<'ctx>, String> {
         if args.is_empty() {

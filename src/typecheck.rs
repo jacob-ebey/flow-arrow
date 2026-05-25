@@ -112,6 +112,7 @@ pub(crate) struct TypedCallable {
     pub id: Option<SymbolId>,
     pub name: String,
     pub kind: TypedCallableKind,
+    pub is_extern: bool,
     pub signature: Signature,
     pub effect: Effect,
     pub node_params: Vec<TypedNodeParam>,
@@ -506,6 +507,7 @@ impl<'a> Checker<'a> {
                 CallableKind::Node => TypedCallableKind::Node,
                 CallableKind::Program => TypedCallableKind::Program,
             },
+            is_extern: callable.is_extern,
             signature: info
                 .signatures
                 .first()

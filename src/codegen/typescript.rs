@@ -1,11 +1,11 @@
 use super::{
     Ty, TypedCodegen, assignable_output_ty, binding_target_is_discard, builtin_output_type_plain,
-    common_assignable_output_ty, endpoint_contains_empty_seq, format_binding_target_for_error,
-    format_match_target, sequence_item_type,
+    contains_empty_seq, format_binding_target_for_error, sequence_item_type,
 };
-use crate::ast::{
-    BindingTarget, Callable, Chain, Decl, Endpoint, ForeignSource, MatchArm, MatchGuard,
-    MatchTarget, Stage,
+use crate::ast::{BindingTarget, Decl, ForeignSource};
+use crate::typecheck::{
+    TypedCallable, TypedChain, TypedEndpoint, TypedEndpointKind, TypedMatchArm, TypedMatchGuard,
+    TypedMatchTarget, TypedStageKind,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -54,7 +54,8 @@ struct TypeScriptCodegen<'a> {
 }
 
 struct WorkerMapBatchItem {
-    source: Endpoint,
+    source: TypedEndpoint,
+    source_key: String,
     target: String,
     output_ty: Ty,
     worker_fn: &'static str,
@@ -94,23 +95,14 @@ impl<'a> TypeScriptCodegen<'a> {
         out.push_str(TS_PRELUDE);
         self.emit_foreign_js_wrappers(&mut out)?;
 
-        let callables = self
-            .codegen
-            .module
-            .declarations
-            .iter()
-            .filter_map(|decl| match decl {
-                Decl::Node(callable) => Some((callable.clone(), false)),
-                Decl::Program(callable) => Some((callable.clone(), true)),
-                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) | Decl::Foreign(_) => None,
-            })
-            .collect::<Vec<_>>();
-        let has_program_main = callables
-            .iter()
-            .any(|(callable, is_program)| *is_program && callable.name == "main");
+        let callables = self.codegen.typed.callables.clone();
+        let has_program_main = callables.iter().any(|callable| {
+            matches!(callable.kind, crate::typecheck::TypedCallableKind::Program)
+                && callable.name == "main"
+        });
 
-        for (callable, is_program) in &callables {
-            self.emit_callable(&mut out, callable, *is_program)?;
+        for callable in &callables {
+            self.emit_callable(&mut out, callable)?;
         }
 
         if self.options.worker_concurrency {
@@ -256,12 +248,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         Ok(())
     }
 
-    fn emit_callable(
-        &mut self,
-        out: &mut String,
-        callable: &Callable,
-        is_program: bool,
-    ) -> Result<(), String> {
+    fn emit_callable(&mut self, out: &mut String, callable: &TypedCallable) -> Result<(), String> {
         self.temp = 0;
         self.used_idents.clear();
         self.reserve_internal_idents();
@@ -281,6 +268,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             .get(&callable.name)
             .cloned()
             .ok_or_else(|| format!("missing signature for `{}`", callable.name))?;
+        let is_program = matches!(callable.kind, crate::typecheck::TypedCallableKind::Program);
         let export = if is_program || (callable.is_extern && !callable.name.starts_with("__flow_"))
         {
             "export "
@@ -301,10 +289,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             .map(|port| {
                 let name = ts_ident(&port.name);
                 self.reserve_ident(&name);
-                Ok(format!(
-                    "{name}: {}",
-                    ts_type(&self.codegen.parse_declared_type(&port.ty)?)
-                ))
+                Ok(format!("{name}: {}", ts_type(&port.ty)))
             })
             .collect::<Result<Vec<_>, String>>()?
             .join(", ");
@@ -320,8 +305,10 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
 
         let mut env = HashMap::new();
         for port in &callable.inputs {
-            let ty = self.codegen.parse_declared_type(&port.ty)?;
-            env.insert(port.name.clone(), ts_value(ts_ident(&port.name), ty));
+            env.insert(
+                port.name.clone(),
+                ts_value(ts_ident(&port.name), port.ty.clone()),
+            );
         }
 
         let mut chain_index = 0;
@@ -349,7 +336,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
 
     fn emit_outputs(
         &mut self,
-        callable: &Callable,
+        callable: &TypedCallable,
         env: &HashMap<String, TsValue>,
     ) -> Result<TsValue, String> {
         match callable.outputs.as_slice() {
@@ -370,8 +357,8 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 let ty = Ty::Tuple(
                     outputs
                         .iter()
-                        .map(|output| self.codegen.parse_declared_type(&output.ty))
-                        .collect::<Result<Vec<_>, _>>()?,
+                        .map(|output| output.ty.clone())
+                        .collect::<Vec<_>>(),
                 );
                 Ok(ts_tuple_value(values, ty))
             }
@@ -381,48 +368,43 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     fn emit_chain(
         &mut self,
         out: &mut String,
-        chain: &Chain,
+        chain: &TypedChain,
         env: &mut HashMap<String, TsValue>,
         indent: &str,
     ) -> Result<(), String> {
-        let mut value = if endpoint_contains_empty_seq(&chain.source) {
-            if let Some(Stage::Endpoint(Endpoint::Name(name))) = chain.stages.first() {
-                let actual = self.endpoint_type(&chain.source, env)?;
-                let expected = self.codegen.call_input_type_for_value(name, &actual)?;
-                self.emit_endpoint_expected(out, &chain.source, env, Some(&expected), indent)?
-            } else {
-                self.emit_endpoint(out, &chain.source, env, indent)?
+        let source_expected = if contains_empty_seq(&chain.source.ty) {
+            match chain.stages.first().map(|stage| &stage.kind) {
+                Some(TypedStageKind::Call { name, .. }) => Some(
+                    self.codegen
+                        .call_input_type_for_value(name, &chain.source.ty)?,
+                ),
+                Some(_) => chain.stages.first().map(|stage| stage.input.clone()),
+                None => None,
             }
         } else {
-            self.emit_endpoint(out, &chain.source, env, indent)?
+            None
         };
+        let mut value =
+            self.emit_endpoint_expected(out, &chain.source, env, source_expected.as_ref(), indent)?;
 
         for (index, stage) in chain.stages.iter().enumerate() {
-            let is_last = index + 1 == chain.stages.len();
-            match stage {
-                Stage::Bind(target) if is_last => {
+            match &stage.kind {
+                TypedStageKind::Bind { target } => {
                     self.bind_target(out, target, value.clone(), env, indent)?;
                 }
-                Stage::Endpoint(Endpoint::Name(name)) => {
-                    let preferred =
-                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                TypedStageKind::Call { name, .. } => {
+                    let preferred = typed_final_bind_target_for_stage(chain, index)
+                        .and_then(binding_target_name);
                     value = self.emit_call_preferred(out, name, value, indent, preferred)?;
                 }
-                Stage::Endpoint(_) => {
-                    return Err("non-name endpoints may only appear as source values".to_string());
-                }
-                Stage::Bind(_) => {
-                    return Err("binding targets may only appear as final stages".to_string());
-                }
-                Stage::Map(name) => {
-                    let preferred =
-                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                TypedStageKind::Map { name, .. } => {
+                    let preferred = typed_final_bind_target_for_stage(chain, index)
+                        .and_then(binding_target_name);
                     value = self.emit_map(out, name, value, indent, preferred)?;
                 }
-                Stage::FaultMap { node, ok, fault } => {
-                    if !is_last {
-                        return Err("`fault map` must be the final stage in a chain".to_string());
-                    }
+                TypedStageKind::FaultMap {
+                    node, ok, fault, ..
+                } => {
                     let (ok_value, fault_value) =
                         self.emit_fault_map(out, node, value.clone(), indent, ok, fault)?;
                     if env.insert(ok.clone(), ok_value).is_some() {
@@ -432,36 +414,44 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                         return Err(format!("value `{fault}` is bound more than once"));
                     }
                 }
-                Stage::Filter(name) => {
-                    let preferred =
-                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                TypedStageKind::Filter { name, .. } => {
+                    let preferred = typed_final_bind_target_for_stage(chain, index)
+                        .and_then(binding_target_name);
                     value = self.emit_filter(out, name, value, indent, preferred)?;
                 }
-                Stage::Field(name) => {
+                TypedStageKind::Field { name } => {
                     value = self.emit_field(name, value)?;
                 }
-                Stage::Repeat { count, node } => {
+                TypedStageKind::Repeat { count, node, .. } => {
                     let count = self.emit_endpoint(out, count, env, indent)?;
                     let preferred_target =
-                        final_bind_target_for_stage(chain, index).map(|target| target as &_);
+                        typed_final_bind_target_for_stage(chain, index).map(|target| target as &_);
                     value = self.emit_repeat(out, node, value, count, indent, preferred_target)?;
                 }
-                Stage::Reduce { op, identity } => {
+                TypedStageKind::Reduce { op, identity, .. } => {
                     let identity = self.emit_endpoint(out, identity, env, indent)?;
-                    let preferred =
-                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                    let preferred = typed_final_bind_target_for_stage(chain, index)
+                        .and_then(binding_target_name);
                     value = self.emit_reduce(out, op, value, identity, indent, preferred)?;
                 }
-                Stage::Scan { op, identity } => {
+                TypedStageKind::Scan { op, identity, .. } => {
                     let identity = self.emit_endpoint(out, identity, env, indent)?;
-                    let preferred =
-                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
+                    let preferred = typed_final_bind_target_for_stage(chain, index)
+                        .and_then(binding_target_name);
                     value = self.emit_scan(out, op, value, identity, indent, preferred)?;
                 }
-                Stage::Match { arms } => {
-                    let preferred =
-                        final_bind_target_for_stage(chain, index).and_then(binding_target_name);
-                    value = self.emit_match(out, arms, value, env, indent, preferred)?;
+                TypedStageKind::Match { arms } => {
+                    let preferred = typed_final_bind_target_for_stage(chain, index)
+                        .and_then(binding_target_name);
+                    value = self.emit_match(
+                        out,
+                        arms,
+                        stage.output.clone(),
+                        value,
+                        env,
+                        indent,
+                        preferred,
+                    )?;
                 }
             }
         }
@@ -470,19 +460,19 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
 
     fn worker_map_batch_len(
         &mut self,
-        chains: &[Chain],
+        chains: &[TypedChain],
         env: &HashMap<String, TsValue>,
     ) -> Result<usize, String> {
         let Some(first) = self.worker_map_batch_item(&chains[0], env)? else {
             return Ok(0);
         };
-        let source = first.source;
+        let source_key = first.source_key;
         let mut len = 1;
         for chain in chains.iter().skip(1) {
             let Some(item) = self.worker_map_batch_item(chain, env)? else {
                 break;
             };
-            if item.source != source {
+            if item.source_key != source_key {
                 break;
             }
             len += 1;
@@ -492,17 +482,22 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
 
     fn worker_map_batch_item(
         &mut self,
-        chain: &Chain,
-        env: &HashMap<String, TsValue>,
+        chain: &TypedChain,
+        _env: &HashMap<String, TsValue>,
     ) -> Result<Option<WorkerMapBatchItem>, String> {
-        let [
-            Stage::Map(name),
-            Stage::Bind(BindingTarget::Variable(target)),
-        ] = chain.stages.as_slice()
+        let [first, second] = chain.stages.as_slice() else {
+            return Ok(None);
+        };
+        let TypedStageKind::Map { name, .. } = &first.kind else {
+            return Ok(None);
+        };
+        let TypedStageKind::Bind {
+            target: BindingTarget::Variable(target),
+        } = &second.kind
         else {
             return Ok(None);
         };
-        let input = self.endpoint_type(&chain.source, env)?;
+        let input = chain.source.ty.clone();
         let Ty::Seq(item_ty) = input else {
             return Ok(None);
         };
@@ -515,6 +510,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         };
         Ok(Some(WorkerMapBatchItem {
             source: chain.source.clone(),
+            source_key: chain.source.label.clone(),
             target: target.clone(),
             output_ty,
             worker_fn,
@@ -525,7 +521,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     fn emit_worker_map_batch(
         &mut self,
         out: &mut String,
-        chains: &[Chain],
+        chains: &[TypedChain],
         env: &mut HashMap<String, TsValue>,
         indent: &str,
     ) -> Result<(), String> {
@@ -591,7 +587,10 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         {
             out.push_str(&format!("{indent}{temp} = {batch}[{index}];\n"));
             let value = ts_value(temp.clone(), item.output_ty.clone());
-            let Some(Stage::Bind(target)) = chain.stages.last() else {
+            let Some(last) = chain.stages.last() else {
+                return Err("expected worker map batch binding".to_string());
+            };
+            let TypedStageKind::Bind { target } = &last.kind else {
                 return Err("expected worker map batch binding".to_string());
             };
             self.bind_target(out, target, value, env, indent)?;
@@ -602,7 +601,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     fn emit_endpoint(
         &mut self,
         out: &mut String,
-        endpoint: &Endpoint,
+        endpoint: &TypedEndpoint,
         env: &HashMap<String, TsValue>,
         indent: &str,
     ) -> Result<TsValue, String> {
@@ -612,23 +611,27 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     fn emit_endpoint_expected(
         &mut self,
         out: &mut String,
-        endpoint: &Endpoint,
+        endpoint: &TypedEndpoint,
         env: &HashMap<String, TsValue>,
         expected: Option<&Ty>,
         indent: &str,
     ) -> Result<TsValue, String> {
-        match endpoint {
-            Endpoint::Variable(name) => env
+        match &endpoint.kind {
+            TypedEndpointKind::Variable(name) => env
                 .get(name)
                 .cloned()
                 .ok_or_else(|| format!("unknown value `{name}`")),
-            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
-            Endpoint::Int(value) => Ok(ts_value(format!("{value}n"), Ty::Int)),
-            Endpoint::Real(value) => Ok(ts_value(format!("{value:.17e}"), Ty::Real)),
-            Endpoint::Bool(value) => Ok(ts_value(value.to_string(), Ty::Bool)),
-            Endpoint::String(value) => Ok(ts_value(ts_string(value), Ty::Bytes)),
-            Endpoint::Unit => Ok(ts_value("undefined", Ty::Unit)),
-            Endpoint::Tuple(items) => {
+            TypedEndpointKind::NodeRef { name, .. } => {
+                Err(format!("expected value, found node `{name}`"))
+            }
+            TypedEndpointKind::Int(value) => Ok(ts_value(format!("{value}n"), endpoint.ty.clone())),
+            TypedEndpointKind::Real(value) => {
+                Ok(ts_value(format!("{value:.17e}"), endpoint.ty.clone()))
+            }
+            TypedEndpointKind::Bool(value) => Ok(ts_value(value.to_string(), endpoint.ty.clone())),
+            TypedEndpointKind::String(value) => Ok(ts_value(ts_string(value), endpoint.ty.clone())),
+            TypedEndpointKind::Unit => Ok(ts_value("undefined", endpoint.ty.clone())),
+            TypedEndpointKind::Tuple(items) => {
                 let expected_items = match expected {
                     Some(Ty::Tuple(expected_items)) if expected_items.len() == items.len() => {
                         Some(expected_items.as_slice())
@@ -645,17 +648,24 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                         indent,
                     )?);
                 }
-                let ty = expected.cloned().unwrap_or_else(|| {
-                    Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect())
-                });
+                let ty = expected.cloned().unwrap_or_else(|| endpoint.ty.clone());
                 Ok(ts_tuple_value(values, ty))
             }
-            Endpoint::Seq(items) => {
+            TypedEndpointKind::Seq(items) => {
                 if items.is_empty() {
-                    let Some(seq_ty @ Ty::Seq(_)) = expected else {
-                        return Err("empty sequence literals need a type context".to_string());
+                    let seq_ty = match expected {
+                        Some(seq_ty @ Ty::Seq(_)) => seq_ty.clone(),
+                        Some(other) => {
+                            return Err(format!(
+                                "empty sequence literal expected Seq context, found `{other}`"
+                            ));
+                        }
+                        None if matches!(endpoint.ty, Ty::Seq(_)) => endpoint.ty.clone(),
+                        None => {
+                            return Err("empty sequence literals need a type context".to_string());
+                        }
                     };
-                    return Ok(ts_value("[]", seq_ty.clone()));
+                    return Ok(ts_value("[]", seq_ty));
                 }
                 let expected_item = match expected {
                     Some(Ty::Seq(item)) => Some(item.as_ref()),
@@ -699,11 +709,28 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 );
                 Ok(ts_value(code, ty))
             }
-            Endpoint::Struct { name, fields } => {
+            TypedEndpointKind::Struct { name, fields, .. } => {
                 self.emit_struct_endpoint(out, name, fields, env, indent)
             }
-            Endpoint::Eval { source, stages } => {
-                let mut value = self.emit_endpoint(out, source, env, indent)?;
+            TypedEndpointKind::Eval { source, stages } => {
+                let source_expected = if contains_empty_seq(&source.ty) {
+                    match stages.first().map(|stage| &stage.kind) {
+                        Some(TypedStageKind::Call { name, .. }) => {
+                            Some(self.codegen.call_input_type_for_value(name, &source.ty)?)
+                        }
+                        Some(_) => stages.first().map(|stage| stage.input.clone()),
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+                let mut value = self.emit_endpoint_expected(
+                    out,
+                    source,
+                    env,
+                    source_expected.as_ref(),
+                    indent,
+                )?;
                 for stage in stages {
                     value = self.emit_inline_stage(out, stage, value, env, indent)?;
                 }
@@ -716,7 +743,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         &mut self,
         out: &mut String,
         name: &str,
-        fields: &[(String, Endpoint)],
+        fields: &[(String, TypedEndpoint)],
         env: &HashMap<String, TsValue>,
         indent: &str,
     ) -> Result<TsValue, String> {
@@ -748,36 +775,35 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     fn emit_inline_stage(
         &mut self,
         out: &mut String,
-        stage: &Stage,
+        stage: &crate::typecheck::TypedStage,
         value: TsValue,
         env: &HashMap<String, TsValue>,
         indent: &str,
     ) -> Result<TsValue, String> {
-        match stage {
-            Stage::Endpoint(Endpoint::Name(name)) => self.emit_call(out, name, value, indent),
-            Stage::Endpoint(Endpoint::Variable(_)) | Stage::Bind(_) => {
-                Err("inline evaluations cannot bind values".to_string())
+        match &stage.kind {
+            TypedStageKind::Call { name, .. } => self.emit_call(out, name, value, indent),
+            TypedStageKind::Bind { .. } => Err("inline evaluations cannot bind values".to_string()),
+            TypedStageKind::Map { name, .. } => self.emit_map(out, name, value, indent, None),
+            TypedStageKind::FaultMap { .. } => {
+                Err("inline evaluations cannot use `fault map`".to_string())
             }
-            Stage::Endpoint(_) => {
-                Err("non-name endpoints may only appear as inline evaluation sources".to_string())
-            }
-            Stage::Map(name) => self.emit_map(out, name, value, indent, None),
-            Stage::FaultMap { .. } => Err("inline evaluations cannot use `fault map`".to_string()),
-            Stage::Filter(name) => self.emit_filter(out, name, value, indent, None),
-            Stage::Field(name) => self.emit_field(name, value),
-            Stage::Repeat { count, node } => {
+            TypedStageKind::Filter { name, .. } => self.emit_filter(out, name, value, indent, None),
+            TypedStageKind::Field { name } => self.emit_field(name, value),
+            TypedStageKind::Repeat { count, node, .. } => {
                 let count = self.emit_endpoint(out, count, env, indent)?;
                 self.emit_repeat(out, node, value, count, indent, None)
             }
-            Stage::Reduce { op, identity } => {
+            TypedStageKind::Reduce { op, identity, .. } => {
                 let identity = self.emit_endpoint(out, identity, env, indent)?;
                 self.emit_reduce(out, op, value, identity, indent, None)
             }
-            Stage::Scan { op, identity } => {
+            TypedStageKind::Scan { op, identity, .. } => {
                 let identity = self.emit_endpoint(out, identity, env, indent)?;
                 self.emit_scan(out, op, value, identity, indent, None)
             }
-            Stage::Match { arms } => self.emit_match(out, arms, value, env, indent, None),
+            TypedStageKind::Match { arms } => {
+                self.emit_match(out, arms, stage.output.clone(), value, env, indent, None)
+            }
         }
     }
 
@@ -1595,18 +1621,18 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     fn emit_match(
         &mut self,
         out: &mut String,
-        arms: &[MatchArm],
+        arms: &[TypedMatchArm],
+        output_ty: Ty,
         subject: TsValue,
         env: &HashMap<String, TsValue>,
         indent: &str,
         preferred: Option<&str>,
     ) -> Result<TsValue, String> {
-        let output_ty = self.match_output_type(arms, &subject.ty, env)?;
         let tmp = self.next_temp_or_preferred(preferred);
         out.push_str(&format!("{indent}let {tmp}: {};\n", ts_type(&output_ty)));
         for (index, arm) in arms.iter().enumerate() {
             match &arm.guard {
-                MatchGuard::Fallback => {
+                TypedMatchGuard::Fallback => {
                     if index + 1 != arms.len() {
                         return Err("`match` fallback arm must be last".to_string());
                     }
@@ -1616,7 +1642,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                         out.push_str(&format!("{indent}else {{\n"));
                     }
                 }
-                MatchGuard::Call { node, args } => {
+                TypedMatchGuard::Call { node, args, .. } => {
                     if index == 0 {
                         out.push_str(&format!("{indent}{{\n"));
                     } else {
@@ -1635,21 +1661,21 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 }
             }
             let arm_indent = match &arm.guard {
-                MatchGuard::Fallback => format!("{indent}  "),
-                MatchGuard::Call { .. } => format!("{indent}    "),
+                TypedMatchGuard::Fallback => format!("{indent}  "),
+                TypedMatchGuard::Call { .. } => format!("{indent}    "),
             };
             let value =
                 self.emit_match_target(out, &arm.target, subject.clone(), env, &arm_indent)?;
             let value = self.coerce_value(out, value, &output_ty, &arm_indent)?;
             out.push_str(&format!("{arm_indent}{tmp} = {};\n", value.code));
             match &arm.guard {
-                MatchGuard::Fallback => out.push_str(&format!("{indent}}}\n")),
-                MatchGuard::Call { .. } => out.push_str(&format!("{indent}  }}\n")),
+                TypedMatchGuard::Fallback => out.push_str(&format!("{indent}}}\n")),
+                TypedMatchGuard::Call { .. } => out.push_str(&format!("{indent}  }}\n")),
             }
         }
         for _ in arms
             .iter()
-            .filter(|arm| !matches!(arm.guard, MatchGuard::Fallback))
+            .filter(|arm| !matches!(arm.guard, TypedMatchGuard::Fallback))
         {
             out.push_str(&format!("{indent}}}\n"));
         }
@@ -1659,14 +1685,14 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     fn emit_match_target(
         &mut self,
         out: &mut String,
-        target: &MatchTarget,
+        target: &TypedMatchTarget,
         subject: TsValue,
         env: &HashMap<String, TsValue>,
         indent: &str,
     ) -> Result<TsValue, String> {
         match target {
-            MatchTarget::Node(node) => self.emit_call(out, node, subject, indent),
-            MatchTarget::Value(endpoint) => self.emit_endpoint(out, endpoint, env, indent),
+            TypedMatchTarget::Node { name, .. } => self.emit_call(out, name, subject, indent),
+            TypedMatchTarget::Value(endpoint) => self.emit_endpoint(out, endpoint, env, indent),
         }
     }
 
@@ -1674,7 +1700,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         &mut self,
         out: &mut String,
         subject: TsValue,
-        args: &[Endpoint],
+        args: &[TypedEndpoint],
         env: &HashMap<String, TsValue>,
         indent: &str,
     ) -> Result<TsValue, String> {
@@ -1740,142 +1766,6 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             ts_value(ok_tmp, ok_seq_ty),
             ts_value(fault_tmp, fault_seq_ty),
         ))
-    }
-
-    fn match_output_type(
-        &self,
-        arms: &[MatchArm],
-        subject_ty: &Ty,
-        env: &HashMap<String, TsValue>,
-    ) -> Result<Ty, String> {
-        let mut output = None;
-        for arm in arms {
-            let arm_ty = match &arm.target {
-                MatchTarget::Node(node) => self.codegen.call_output_type(node, subject_ty)?,
-                MatchTarget::Value(endpoint) => self.endpoint_type(endpoint, env)?,
-            };
-            output = Some(if let Some(current) = output {
-                common_assignable_output_ty(
-                    &current,
-                    &arm_ty,
-                    &format!("match arm `{}` result", format_match_target(&arm.target)),
-                )?
-            } else {
-                arm_ty
-            });
-        }
-        output.ok_or_else(|| "`match` must contain at least one arm".to_string())
-    }
-
-    fn endpoint_type(
-        &self,
-        endpoint: &Endpoint,
-        env: &HashMap<String, TsValue>,
-    ) -> Result<Ty, String> {
-        match endpoint {
-            Endpoint::Variable(name) => env
-                .get(name)
-                .map(|value| value.ty.clone())
-                .ok_or_else(|| format!("unknown value `{name}`")),
-            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
-            Endpoint::Int(_) => Ok(Ty::Int),
-            Endpoint::Real(_) => Ok(Ty::Real),
-            Endpoint::Bool(_) => Ok(Ty::Bool),
-            Endpoint::String(_) => Ok(Ty::Bytes),
-            Endpoint::Unit => Ok(Ty::Unit),
-            Endpoint::Tuple(items) => items
-                .iter()
-                .map(|item| self.endpoint_type(item, env))
-                .collect::<Result<Vec<_>, _>>()
-                .map(Ty::Tuple),
-            Endpoint::Seq(items) => {
-                let mut item_ty = None;
-                for item in items {
-                    let ty = self.endpoint_type(item, env)?;
-                    item_ty = Some(if let Some(current) = item_ty {
-                        sequence_item_type(&current, &ty)?
-                    } else {
-                        ty
-                    });
-                }
-                Ok(item_ty
-                    .map(|ty| Ty::Seq(Box::new(ty)))
-                    .unwrap_or(Ty::EmptySeq))
-            }
-            Endpoint::Struct { name, .. } => self
-                .codegen
-                .aliases
-                .get(name)
-                .cloned()
-                .ok_or_else(|| format!("unknown struct `{name}`")),
-            Endpoint::Eval { source, stages } => {
-                let mut value_ty = self.endpoint_type(source, env)?;
-                for stage in stages {
-                    value_ty = match stage {
-                        Stage::Endpoint(Endpoint::Name(name)) => {
-                            self.codegen.call_output_type(name, &value_ty)?
-                        }
-                        Stage::Map(name) => match value_ty {
-                            Ty::Seq(item) => {
-                                Ty::Seq(Box::new(self.codegen.call_output_type(name, &item)?))
-                            }
-                            _ => return Err(format!("`map {name}` expected Seq input")),
-                        },
-                        Stage::Filter(_) => value_ty,
-                        Stage::Field(name) => {
-                            let Ty::Struct {
-                                name: ty_name,
-                                fields,
-                            } = &value_ty
-                            else {
-                                return Err(format!(
-                                    "field `{name}` expected struct input, found `{value_ty}`"
-                                ));
-                            };
-                            fields
-                                .iter()
-                                .find(|(field, _)| field == name)
-                                .map(|(_, ty)| ty.clone())
-                                .ok_or_else(|| {
-                                    format!("struct `{ty_name}` has no field `{name}`")
-                                })?
-                        }
-                        Stage::Repeat { node, .. } => {
-                            self.codegen.call_output_type(node, &value_ty)?
-                        }
-                        Stage::Reduce { op, identity } => {
-                            let Ty::Seq(item_ty) = &value_ty else {
-                                return Err(format!("`reduce {op}` expected Seq input"));
-                            };
-                            let identity_ty = self.endpoint_type(identity, env)?;
-                            if item_ty.as_ref() != &identity_ty {
-                                return Err(format!(
-                                    "`reduce {op}` identity expected `{item_ty}`, found `{identity_ty}`"
-                                ));
-                            }
-                            self.codegen.call_output_type(op, item_ty)?
-                        }
-                        Stage::Scan { op, identity } => {
-                            let Ty::Seq(item_ty) = &value_ty else {
-                                return Err(format!("`scan {op}` expected Seq input"));
-                            };
-                            let identity_ty = self.endpoint_type(identity, env)?;
-                            if item_ty.as_ref() != &identity_ty {
-                                return Err(format!(
-                                    "`scan {op}` identity expected `{item_ty}`, found `{identity_ty}`"
-                                ));
-                            }
-                            value_ty
-                        }
-                        Stage::Match { arms } => self.match_output_type(arms, &value_ty, env)?,
-                        Stage::Endpoint(_) | Stage::Bind(_) | Stage::FaultMap { .. } => {
-                            return Err("unsupported inline evaluation stage".to_string());
-                        }
-                    };
-                }
-                Ok(value_ty)
-            }
-        }
     }
 
     fn coerce_value(
@@ -1962,7 +1852,13 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         )? {
             return Ok(Some(format!("function(input) {{ return {expr}; }}")));
         }
-        let Some(callable) = self.codegen.callables.get(name) else {
+        let Some(callable) = self
+            .codegen
+            .typed
+            .callables
+            .iter()
+            .find(|callable| callable.name == name)
+        else {
             return Ok(None);
         };
         if callable.inputs.len() != 1 || callable.outputs.len() != 1 {
@@ -1987,15 +1883,15 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             };
             for (index, stage) in chain.stages.iter().enumerate() {
                 let is_last = index + 1 == chain.stages.len();
-                match stage {
-                    Stage::Endpoint(Endpoint::Name(name)) => {
+                match &stage.kind {
+                    TypedStageKind::Call { name, .. } => {
                         let output_ty = self.codegen.call_output_type(name, &value.ty)?;
                         value = match self.worker_call_expr(name, &value, &output_ty)? {
                             Some(value) => value,
                             None => return Ok(None),
                         };
                     }
-                    Stage::Bind(target) if is_last => {
+                    TypedStageKind::Bind { target } if is_last => {
                         if !self.worker_bind_target(&mut lines, target, value.clone(), &mut env)? {
                             return Ok(None);
                         }
@@ -2019,15 +1915,21 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
 
     fn worker_endpoint_expr(
         &self,
-        endpoint: &Endpoint,
+        endpoint: &TypedEndpoint,
         env: &HashMap<String, TsValue>,
     ) -> Result<Option<TsValue>, String> {
-        match endpoint {
-            Endpoint::Variable(name) => Ok(env.get(name).cloned()),
-            Endpoint::Int(value) => Ok(Some(ts_value(format!("{value}n"), Ty::Int))),
-            Endpoint::Real(value) => Ok(Some(ts_value(format!("{value:.17e}"), Ty::Real))),
-            Endpoint::Bool(value) => Ok(Some(ts_value(value.to_string(), Ty::Bool))),
-            Endpoint::Tuple(items) => {
+        match &endpoint.kind {
+            TypedEndpointKind::Variable(name) => Ok(env.get(name).cloned()),
+            TypedEndpointKind::Int(value) => {
+                Ok(Some(ts_value(format!("{value}n"), endpoint.ty.clone())))
+            }
+            TypedEndpointKind::Real(value) => {
+                Ok(Some(ts_value(format!("{value:.17e}"), endpoint.ty.clone())))
+            }
+            TypedEndpointKind::Bool(value) => {
+                Ok(Some(ts_value(value.to_string(), endpoint.ty.clone())))
+            }
+            TypedEndpointKind::Tuple(items) => {
                 let values = items
                     .iter()
                     .map(|item| self.worker_endpoint_expr(item, env))
@@ -2037,12 +1939,12 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                     ts_tuple_value(values, ty)
                 }))
             }
-            Endpoint::Name(_)
-            | Endpoint::String(_)
-            | Endpoint::Unit
-            | Endpoint::Seq(_)
-            | Endpoint::Struct { .. }
-            | Endpoint::Eval { .. } => Ok(None),
+            TypedEndpointKind::NodeRef { .. }
+            | TypedEndpointKind::String(_)
+            | TypedEndpointKind::Unit
+            | TypedEndpointKind::Seq(_)
+            | TypedEndpointKind::Struct { .. }
+            | TypedEndpointKind::Eval { .. } => Ok(None),
         }
     }
 
@@ -2166,13 +2068,16 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     }
 }
 
-fn final_bind_target_for_stage(chain: &Chain, index: usize) -> Option<&BindingTarget> {
+fn typed_final_bind_target_for_stage(chain: &TypedChain, index: usize) -> Option<&BindingTarget> {
     if index + 2 != chain.stages.len() {
         return None;
     }
     match chain.stages.last() {
-        Some(Stage::Bind(target)) => Some(target),
-        _ => None,
+        Some(stage) => match &stage.kind {
+            TypedStageKind::Bind { target } => Some(target),
+            _ => None,
+        },
+        None => None,
     }
 }
 

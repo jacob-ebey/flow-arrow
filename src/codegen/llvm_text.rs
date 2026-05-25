@@ -1,5 +1,8 @@
-use super::{Ty, TypedCodegen, sanitize_symbol, sequence_item_type, user_fn_name};
-use crate::ast::{BindingTarget, Callable, Endpoint, MatchTarget, Stage};
+use super::{Ty, TypedCodegen, sanitize_symbol, user_fn_name};
+use crate::ast::BindingTarget;
+use crate::typecheck::{
+    TypedCallable, TypedEndpoint, TypedEndpointKind, TypedMatchArm, TypedStageKind,
+};
 use std::collections::{BTreeSet, HashMap};
 
 pub(super) fn emit_module(codegen: TypedCodegen<'_>) -> Result<String, String> {
@@ -29,15 +32,10 @@ impl<'a> LlvmText<'a> {
 
     fn emit(mut self) -> Result<String, String> {
         let mut body = String::new();
-        let mut names = self.codegen.callables.keys().cloned().collect::<Vec<_>>();
-        names.sort();
+        let mut callables = self.codegen.typed.callables.iter().collect::<Vec<_>>();
+        callables.sort_by(|left, right| left.name.cmp(&right.name));
 
-        for name in names {
-            let callable = *self
-                .codegen
-                .callables
-                .get(&name)
-                .ok_or_else(|| format!("missing callable `{name}`"))?;
+        for callable in callables {
             self.emit_callable(&mut body, callable)?;
         }
 
@@ -58,7 +56,7 @@ impl<'a> LlvmText<'a> {
         Ok(out)
     }
 
-    fn emit_callable(&mut self, out: &mut String, callable: &Callable) -> Result<(), String> {
+    fn emit_callable(&mut self, out: &mut String, callable: &TypedCallable) -> Result<(), String> {
         self.temp = 0;
         let signature = self
             .codegen
@@ -107,33 +105,34 @@ impl<'a> LlvmText<'a> {
         }
 
         for chain in &callable.chains {
-            let mut value = self.emit_endpoint(out, &chain.source, &env, None)?;
-            for (index, stage) in chain.stages.iter().enumerate() {
-                let is_last = index + 1 == chain.stages.len();
-                match stage {
-                    Stage::Bind(target) if is_last => {
+            let source_expected = if super::contains_empty_seq(&chain.source.ty) {
+                match chain.stages.first().map(|stage| &stage.kind) {
+                    Some(TypedStageKind::Call { name, .. }) => Some(
+                        self.codegen
+                            .call_input_type_for_value(name, &chain.source.ty)?,
+                    ),
+                    Some(_) => chain.stages.first().map(|stage| stage.input.clone()),
+                    None => None,
+                }
+            } else {
+                None
+            };
+            let mut value =
+                self.emit_endpoint(out, &chain.source, &env, source_expected.as_ref())?;
+            for stage in &chain.stages {
+                match &stage.kind {
+                    TypedStageKind::Bind { target } => {
                         self.bind_target(out, target, value.clone(), &mut env)?;
                     }
-                    Stage::Endpoint(Endpoint::Name(name)) => {
+                    TypedStageKind::Call { name, .. } => {
                         value = self.emit_call(out, name, value)?;
                     }
-                    Stage::Endpoint(_) => {
-                        return Err(
-                            "non-name endpoints may only appear as source values".to_string()
-                        );
-                    }
-                    Stage::Bind(_) => {
-                        return Err("binding targets may only appear as final stages".to_string());
-                    }
-                    Stage::Map(name) => {
+                    TypedStageKind::Map { name, .. } => {
                         value = self.emit_map(out, name, value)?;
                     }
-                    Stage::FaultMap { node, ok, fault } => {
-                        if !is_last {
-                            return Err(
-                                "`fault map` must be the final stage in a chain".to_string()
-                            );
-                        }
+                    TypedStageKind::FaultMap {
+                        node, ok, fault, ..
+                    } => {
                         let partitioned = self.emit_fault_map(out, node, value.clone())?;
                         let [ok_ty, fault_ty] = tuple_items(&partitioned.ty)? else {
                             return Err("fault map helper expected tuple output".to_string());
@@ -155,29 +154,29 @@ impl<'a> LlvmText<'a> {
                             },
                         );
                     }
-                    Stage::Filter(name) => {
+                    TypedStageKind::Filter { name, .. } => {
                         value = self.emit_filter(out, name, value)?;
                     }
-                    Stage::Field(_) => {
+                    TypedStageKind::Field { .. } => {
                         return Err(
                             "LLVM text backend does not support struct field projection yet"
                                 .to_string(),
                         );
                     }
-                    Stage::Repeat { count, node } => {
+                    TypedStageKind::Repeat { count, node, .. } => {
                         let count = self.emit_endpoint(out, count, &env, Some(&Ty::Int))?;
                         value = self.emit_repeat(out, node, value, count)?;
                     }
-                    Stage::Reduce { op, identity } => {
+                    TypedStageKind::Reduce { op, identity, .. } => {
                         let identity = self.emit_endpoint(out, identity, &env, None)?;
                         value = self.emit_reduce(out, op, value, identity)?;
                     }
-                    Stage::Scan { op, identity } => {
+                    TypedStageKind::Scan { op, identity, .. } => {
                         let identity = self.emit_endpoint(out, identity, &env, None)?;
                         value = self.emit_scan(out, op, value, identity)?;
                     }
-                    Stage::Match { arms } => {
-                        value = self.emit_match(out, arms, value, &env)?;
+                    TypedStageKind::Match { arms } => {
+                        value = self.emit_match(out, arms, stage.output.clone(), value)?;
                     }
                 }
             }
@@ -195,7 +194,7 @@ impl<'a> LlvmText<'a> {
     fn emit_outputs(
         &mut self,
         out: &mut String,
-        callable: &Callable,
+        callable: &TypedCallable,
         env: &HashMap<String, TextValue>,
         expected_ty: &Ty,
     ) -> Result<TextValue, String> {
@@ -242,43 +241,45 @@ impl<'a> LlvmText<'a> {
     fn emit_endpoint(
         &mut self,
         out: &mut String,
-        endpoint: &Endpoint,
+        endpoint: &TypedEndpoint,
         env: &HashMap<String, TextValue>,
         expected: Option<&Ty>,
     ) -> Result<TextValue, String> {
-        match endpoint {
-            Endpoint::Variable(name) => env
+        match &endpoint.kind {
+            TypedEndpointKind::Variable(name) => env
                 .get(name)
                 .cloned()
                 .ok_or_else(|| format!("unknown value `{name}`")),
-            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
-            Endpoint::Int(value) => Ok(TextValue {
+            TypedEndpointKind::NodeRef { name, .. } => {
+                Err(format!("expected value, found node `{name}`"))
+            }
+            TypedEndpointKind::Int(value) => Ok(TextValue {
                 operand: value.to_string(),
-                ty: Ty::Int,
+                ty: endpoint.ty.clone(),
             }),
-            Endpoint::Real(value) => Ok(TextValue {
+            TypedEndpointKind::Real(value) => Ok(TextValue {
                 operand: format!("{value:.17e}"),
-                ty: Ty::Real,
+                ty: endpoint.ty.clone(),
             }),
-            Endpoint::Bool(value) => Ok(TextValue {
+            TypedEndpointKind::Bool(value) => Ok(TextValue {
                 operand: if *value { "1" } else { "0" }.to_string(),
-                ty: Ty::Bool,
+                ty: endpoint.ty.clone(),
             }),
-            Endpoint::String(value) => {
+            TypedEndpointKind::String(value) => {
                 out.push_str(&format!(
                     "  ; bytes literal {:?} is represented as a runtime value in native lowering\n",
                     value
                 ));
                 Ok(TextValue {
                     operand: default_value(&Ty::Bytes),
-                    ty: Ty::Bytes,
+                    ty: endpoint.ty.clone(),
                 })
             }
-            Endpoint::Unit => Ok(TextValue {
-                operand: default_value(&Ty::Unit),
-                ty: Ty::Unit,
+            TypedEndpointKind::Unit => Ok(TextValue {
+                operand: default_value(&endpoint.ty),
+                ty: endpoint.ty.clone(),
             }),
-            Endpoint::Tuple(items) => {
+            TypedEndpointKind::Tuple(items) => {
                 let expected_items = match expected {
                     Some(Ty::Tuple(expected_items)) if expected_items.len() == items.len() => {
                         Some(expected_items.as_slice())
@@ -294,13 +295,12 @@ impl<'a> LlvmText<'a> {
                         expected_items.and_then(|items| items.get(index)),
                     )?);
                 }
-                let ty = Ty::Tuple(values.iter().map(|value| value.ty.clone()).collect());
                 let mut current = "poison".to_string();
                 for (index, value) in values.iter().enumerate() {
                     let temp = self.next_temp();
                     out.push_str(&format!(
                         "  {temp} = insertvalue {} {current}, {} {}, {index}\n",
-                        llvm_ty(&ty),
+                        llvm_ty(&endpoint.ty),
                         llvm_ty(&value.ty),
                         value.operand
                     ));
@@ -308,60 +308,68 @@ impl<'a> LlvmText<'a> {
                 }
                 Ok(TextValue {
                     operand: current,
-                    ty,
+                    ty: endpoint.ty.clone(),
                 })
             }
-            Endpoint::Seq(items) => {
-                let item_ty = expected
-                    .and_then(|ty| match ty {
-                        Ty::Seq(item) => Some(item.as_ref().clone()),
-                        _ => None,
-                    })
-                    .or_else(|| infer_seq_item_ty(items, env));
-                let ty = Ty::Seq(Box::new(item_ty.unwrap_or(Ty::Unit)));
+            TypedEndpointKind::Seq(items) => {
                 out.push_str(&format!(
                     "  ; sequence literal with {} item(s) is represented as a runtime value in native lowering\n",
                     items.len()
                 ));
                 Ok(TextValue {
-                    operand: default_value(&ty),
-                    ty,
+                    operand: default_value(&endpoint.ty),
+                    ty: endpoint.ty.clone(),
                 })
             }
-            Endpoint::Struct { .. } => {
+            TypedEndpointKind::Struct { .. } => {
                 Err("LLVM text backend does not support struct literals yet".to_string())
             }
-            Endpoint::Eval { source, stages } => {
-                let mut value = self.emit_endpoint(out, source, env, expected)?;
+            TypedEndpointKind::Eval { source, stages } => {
+                let source_expected = if super::contains_empty_seq(&source.ty) {
+                    match stages.first().map(|stage| &stage.kind) {
+                        Some(TypedStageKind::Call { name, .. }) => {
+                            Some(self.codegen.call_input_type_for_value(name, &source.ty)?)
+                        }
+                        Some(_) => stages.first().map(|stage| stage.input.clone()),
+                        None => None,
+                    }
+                } else {
+                    expected.cloned()
+                };
+                let mut value = self.emit_endpoint(out, source, env, source_expected.as_ref())?;
                 for stage in stages {
-                    match stage {
-                        Stage::Endpoint(Endpoint::Name(name)) => {
+                    match &stage.kind {
+                        TypedStageKind::Call { name, .. } => {
                             value = self.emit_call(out, name, value)?;
                         }
-                        Stage::Map(name) => value = self.emit_map(out, name, value)?,
-                        Stage::Filter(name) => value = self.emit_filter(out, name, value)?,
-                        Stage::Field(_) => {
+                        TypedStageKind::Map { name, .. } => {
+                            value = self.emit_map(out, name, value)?
+                        }
+                        TypedStageKind::Filter { name, .. } => {
+                            value = self.emit_filter(out, name, value)?
+                        }
+                        TypedStageKind::Field { .. } => {
                             return Err(
                                 "LLVM text backend does not support struct field projection yet"
                                     .to_string(),
                             );
                         }
-                        Stage::Reduce { op, identity } => {
+                        TypedStageKind::Reduce { op, identity, .. } => {
                             let identity = self.emit_endpoint(out, identity, env, None)?;
                             value = self.emit_reduce(out, op, value, identity)?;
                         }
-                        Stage::Scan { op, identity } => {
+                        TypedStageKind::Scan { op, identity, .. } => {
                             let identity = self.emit_endpoint(out, identity, env, None)?;
                             value = self.emit_scan(out, op, value, identity)?;
                         }
-                        Stage::Repeat { count, node } => {
+                        TypedStageKind::Repeat { count, node, .. } => {
                             let count = self.emit_endpoint(out, count, env, Some(&Ty::Int))?;
                             value = self.emit_repeat(out, node, value, count)?;
                         }
-                        Stage::Match { arms } => {
-                            value = self.emit_match(out, arms, value, env)?;
+                        TypedStageKind::Match { arms } => {
+                            value = self.emit_match(out, arms, stage.output.clone(), value)?;
                         }
-                        Stage::Endpoint(_) | Stage::Bind(_) | Stage::FaultMap { .. } => {
+                        TypedStageKind::Bind { .. } | TypedStageKind::FaultMap { .. } => {
                             return Err("unsupported inline evaluation stage".to_string());
                         }
                     }
@@ -706,23 +714,10 @@ impl<'a> LlvmText<'a> {
     fn emit_match(
         &mut self,
         out: &mut String,
-        arms: &[crate::ast::MatchArm],
+        arms: &[TypedMatchArm],
+        output_ty: Ty,
         subject: TextValue,
-        env: &HashMap<String, TextValue>,
     ) -> Result<TextValue, String> {
-        let mut output_ty = None;
-        for arm in arms {
-            let arm_ty = match &arm.target {
-                MatchTarget::Node(node) => self.codegen.call_output_type(node, &subject.ty)?,
-                MatchTarget::Value(endpoint) => self.endpoint_type(endpoint, env)?,
-            };
-            output_ty = Some(if let Some(current) = output_ty {
-                sequence_item_type(&current, &arm_ty)?
-            } else {
-                arm_ty
-            });
-        }
-        let output_ty = output_ty.unwrap_or(Ty::Unit);
         let symbol = "@flow_match";
         self.declare(symbol, &output_ty, &[subject.ty.clone()]);
         let temp = self.next_temp();
@@ -780,96 +775,6 @@ impl<'a> LlvmText<'a> {
         }
     }
 
-    fn endpoint_type(
-        &self,
-        endpoint: &Endpoint,
-        env: &HashMap<String, TextValue>,
-    ) -> Result<Ty, String> {
-        match endpoint {
-            Endpoint::Variable(name) => env
-                .get(name)
-                .map(|value| value.ty.clone())
-                .ok_or_else(|| format!("unknown value `{name}`")),
-            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
-            Endpoint::Int(_) => Ok(Ty::Int),
-            Endpoint::Real(_) => Ok(Ty::Real),
-            Endpoint::Bool(_) => Ok(Ty::Bool),
-            Endpoint::String(_) => Ok(Ty::Bytes),
-            Endpoint::Unit => Ok(Ty::Unit),
-            Endpoint::Tuple(items) => items
-                .iter()
-                .map(|item| self.endpoint_type(item, env))
-                .collect::<Result<Vec<_>, _>>()
-                .map(Ty::Tuple),
-            Endpoint::Seq(items) => Ok(infer_seq_item_ty(items, env)
-                .map(|ty| Ty::Seq(Box::new(ty)))
-                .unwrap_or(Ty::EmptySeq)),
-            Endpoint::Struct { name, .. } => self
-                .codegen
-                .aliases
-                .get(name)
-                .cloned()
-                .ok_or_else(|| format!("unknown struct `{name}`")),
-            Endpoint::Eval { source, stages } => {
-                let mut ty = self.endpoint_type(source, env)?;
-                for stage in stages {
-                    match stage {
-                        Stage::Endpoint(Endpoint::Name(name)) => {
-                            ty = self.codegen.call_output_type(name, &ty)?;
-                        }
-                        Stage::Map(name) => {
-                            let (Ty::Seq(item_ty) | Ty::Stream(item_ty)) = &ty else {
-                                return Err(format!("`map {name}` expected Seq or Stream input"));
-                            };
-                            ty = Ty::Seq(Box::new(self.codegen.call_output_type(name, item_ty)?));
-                        }
-                        Stage::Filter(_) => {}
-                        Stage::Field(name) => {
-                            let Ty::Struct {
-                                name: ty_name,
-                                fields,
-                            } = &ty
-                            else {
-                                return Err(format!(
-                                    "field `{name}` expected struct input, found `{ty}`"
-                                ));
-                            };
-                            ty = fields
-                                .iter()
-                                .find(|(field, _)| field == name)
-                                .map(|(_, ty)| ty.clone())
-                                .ok_or_else(|| {
-                                    format!("struct `{ty_name}` has no field `{name}`")
-                                })?;
-                        }
-                        Stage::Reduce { op, .. } => {
-                            let Ty::Seq(item_ty) = &ty else {
-                                return Err(format!("`reduce {op}` expected Seq input"));
-                            };
-                            ty = self.codegen.call_output_type(op, item_ty)?;
-                        }
-                        Stage::Scan { op, .. } => {
-                            let Ty::Seq(item_ty) = &ty else {
-                                return Err(format!("`scan {op}` expected Seq input"));
-                            };
-                            ty = Ty::Seq(Box::new(self.codegen.call_output_type(op, item_ty)?));
-                        }
-                        Stage::Repeat { node, .. } => {
-                            ty = self.codegen.call_output_type(node, &ty)?;
-                        }
-                        Stage::Match { .. }
-                        | Stage::Endpoint(_)
-                        | Stage::Bind(_)
-                        | Stage::FaultMap { .. } => {
-                            return Err("unsupported inline evaluation stage".to_string());
-                        }
-                    }
-                }
-                Ok(ty)
-            }
-        }
-    }
-
     fn extract_tuple_field(
         &mut self,
         out: &mut String,
@@ -899,50 +804,6 @@ impl<'a> LlvmText<'a> {
         self.temp += 1;
         temp
     }
-}
-
-fn infer_seq_item_ty(items: &[Endpoint], env: &HashMap<String, TextValue>) -> Option<Ty> {
-    let mut item_ty = None;
-    for item in items {
-        let ty = match item {
-            Endpoint::Variable(name) => env.get(name).map(|value| value.ty.clone())?,
-            Endpoint::Int(_) => Ty::Int,
-            Endpoint::Real(_) => Ty::Real,
-            Endpoint::Bool(_) => Ty::Bool,
-            Endpoint::String(_) => Ty::Bytes,
-            Endpoint::Unit => Ty::Unit,
-            Endpoint::Tuple(items) => Ty::Tuple(infer_tuple_items(items, env)?),
-            Endpoint::Seq(_)
-            | Endpoint::Struct { .. }
-            | Endpoint::Eval { .. }
-            | Endpoint::Name(_) => return None,
-        };
-        item_ty = Some(if let Some(current) = item_ty {
-            sequence_item_type(&current, &ty).ok()?
-        } else {
-            ty
-        });
-    }
-    item_ty
-}
-
-fn infer_tuple_items(items: &[Endpoint], env: &HashMap<String, TextValue>) -> Option<Vec<Ty>> {
-    items
-        .iter()
-        .map(|item| match item {
-            Endpoint::Variable(name) => env.get(name).map(|value| value.ty.clone()),
-            Endpoint::Int(_) => Some(Ty::Int),
-            Endpoint::Real(_) => Some(Ty::Real),
-            Endpoint::Bool(_) => Some(Ty::Bool),
-            Endpoint::String(_) => Some(Ty::Bytes),
-            Endpoint::Unit => Some(Ty::Unit),
-            Endpoint::Tuple(items) => infer_tuple_items(items, env).map(Ty::Tuple),
-            Endpoint::Seq(_)
-            | Endpoint::Struct { .. }
-            | Endpoint::Eval { .. }
-            | Endpoint::Name(_) => None,
-        })
-        .collect()
 }
 
 fn tuple_items(ty: &Ty) -> Result<&[Ty], String> {
