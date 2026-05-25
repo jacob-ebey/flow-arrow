@@ -11,6 +11,71 @@ static void fa_die_alloc(void) {
   exit(70);
 }
 
+static size_t fa_checked_size_add(size_t left, size_t right, const char *message) {
+  if (left > SIZE_MAX - right) fa_die_usage(message);
+  return left + right;
+}
+
+static size_t fa_checked_size_mul(size_t left, size_t right, const char *message) {
+  if (left != 0 && right > SIZE_MAX / left) fa_die_usage(message);
+  return left * right;
+}
+
+static int64_t fa_checked_i64_add(int64_t left, int64_t right) {
+  int64_t out;
+  if (__builtin_add_overflow(left, right, &out)) fa_die_usage("add: integer overflow");
+  return out;
+}
+
+static int64_t fa_checked_i64_sub(int64_t left, int64_t right) {
+  int64_t out;
+  if (__builtin_sub_overflow(left, right, &out)) fa_die_usage("sub: integer overflow");
+  return out;
+}
+
+static int64_t fa_checked_i64_mul(int64_t left, int64_t right) {
+  int64_t out;
+  if (__builtin_mul_overflow(left, right, &out)) fa_die_usage("mul: integer overflow");
+  return out;
+}
+
+static int64_t fa_checked_i64_div(int64_t left, int64_t right) {
+  if (right == 0) fa_die_usage("div: division by zero");
+  if (left == INT64_MIN && right == -1) fa_die_usage("div: integer overflow");
+  return left / right;
+}
+
+static int64_t fa_checked_i64_rem(int64_t left, int64_t right) {
+  if (right == 0) fa_die_usage("rem: remainder by zero");
+  if (left == INT64_MIN && right == -1) fa_die_usage("rem: integer overflow");
+  return left % right;
+}
+
+static int64_t fa_checked_i64_neg(int64_t value) {
+  if (value == INT64_MIN) fa_die_usage("neg: integer overflow");
+  return -value;
+}
+
+static int64_t fa_checked_i64_abs(int64_t value) {
+  if (value == INT64_MIN) fa_die_usage("abs: integer overflow");
+  return value < 0 ? -value : value;
+}
+
+static double fa_checked_f64_div(double left, double right) {
+  if (right == 0.0) fa_die_usage("div: division by zero");
+  return left / right;
+}
+
+static double fa_checked_f64_rem(double left, double right) {
+  if (right == 0.0) fa_die_usage("rem: remainder by zero");
+  return fmod(left, right);
+}
+
+static double fa_checked_sqrt(double value) {
+  if (value < 0.0) fa_die_usage("sqrt: negative input");
+  return sqrt(value);
+}
+
 static _Thread_local FaScopedAllocator fa_current_allocator = { NULL, NULL };
 
 typedef struct {
@@ -31,7 +96,7 @@ static void fa_scoped_allocator_restore(FaScopedAllocator previous) {
 
 static void *fa_malloc(size_t size) {
   if (size == 0) size = 1;
-  size_t total = sizeof(FaAllocHeader) + size;
+  size_t total = fa_checked_size_add(sizeof(FaAllocHeader), size, "allocation size overflow");
   FaAllocHeader *header = fa_current_allocator.alloc
       ? (FaAllocHeader *)fa_current_allocator.alloc(fa_current_allocator.ctx, total)
       : (FaAllocHeader *)malloc(total);
@@ -42,7 +107,7 @@ static void *fa_malloc(size_t size) {
 }
 
 static void *fa_calloc(size_t count, size_t size) {
-  size_t total = (count ? count : 1) * size;
+  size_t total = fa_checked_size_mul(count ? count : 1, size, "allocation size overflow");
   void *ptr = fa_malloc(total);
   memset(ptr, 0, total);
   return ptr;
@@ -57,7 +122,8 @@ static void *fa_realloc(void *ptr, size_t size) {
     memcpy(next, ptr, header->size < size ? header->size : size);
     return next;
   }
-  FaAllocHeader *next = (FaAllocHeader *)realloc(header, sizeof(FaAllocHeader) + size);
+  size_t total = fa_checked_size_add(sizeof(FaAllocHeader), size, "allocation size overflow");
+  FaAllocHeader *next = (FaAllocHeader *)realloc(header, total);
   if (!next) fa_die_alloc();
   next->size = size;
   next->scoped = false;
@@ -413,9 +479,11 @@ static FaFaultable_Seq_Real FaFaultable_Seq_Real_fault(FaFault fault) {
 }
 
 static FaBytes fa_concat_raw(FaBytes a, FaBytes b) {
-  char *bytes = (char *)fa_malloc(a.len + b.len + 1);
+  size_t len = fa_checked_size_add(a.len, b.len, "concat: byte length overflow");
+  size_t alloc = fa_checked_size_add(len, 1, "concat: byte length overflow");
+  char *bytes = (char *)fa_malloc(alloc);
   memcpy(bytes, a.bytes, a.len);
   memcpy(bytes + a.len, b.bytes, b.len);
-  bytes[a.len + b.len] = '\0';
-  return fa_bytes_owned(bytes, a.len + b.len);
+  bytes[len] = '\0';
+  return fa_bytes_owned(bytes, len);
 }

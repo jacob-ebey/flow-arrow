@@ -83,3 +83,98 @@ fn std_math_real_functions_and_usage_faults_run() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn std_math_invalid_numeric_inputs_are_reported() {
+    for (name, source, expected) in [
+        (
+            "math-div-zero",
+            r#"
+                import std.cli { Args }
+                import std.math { div }
+
+                program main(args: Args) -> exit_code: Int {
+                    (1, 0) -> div -> $exit_code
+                }
+            "#,
+            "div: division by zero",
+        ),
+        (
+            "math-rem-zero",
+            r#"
+                import std.cli { Args }
+                import std.math { rem }
+
+                program main(args: Args) -> exit_code: Int {
+                    (1, 0) -> rem -> $exit_code
+                }
+            "#,
+            "rem: remainder by zero",
+        ),
+        (
+            "math-add-overflow",
+            r#"
+                import std.cli { Args }
+                import std.fault { expect }
+                import std.int { parse_int }
+                import std.math { add }
+
+                program main(args: Args) -> exit_code: Int {
+                    "9223372036854775807" -> parse_int -> expect -> $max
+                    ($max, 1) -> add -> $exit_code
+                }
+            "#,
+            "add: integer overflow",
+        ),
+        (
+            "math-neg-overflow",
+            r#"
+                import std.cli { Args }
+                import std.fault { expect }
+                import std.int { parse_int }
+                import std.math { neg }
+
+                program main(args: Args) -> exit_code: Int {
+                    "-9223372036854775808" -> parse_int -> expect -> neg -> $exit_code
+                }
+            "#,
+            "neg: integer overflow",
+        ),
+        (
+            "math-abs-overflow",
+            r#"
+                import std.cli { Args }
+                import std.fault { expect }
+                import std.int { parse_int }
+                import std.math { abs }
+
+                program main(args: Args) -> exit_code: Int {
+                    "-9223372036854775808" -> parse_int -> expect -> abs -> $exit_code
+                }
+            "#,
+            "abs: integer overflow",
+        ),
+        (
+            "math-sqrt-negative",
+            r#"
+                import std.cli { Args }
+                import std.math { sqrt }
+                import std.real { format_real }
+                import std.io { write_stdout }
+
+                program main(args: Args) -> exit_code: Int {
+                    -1.0 -> sqrt -> format_real -> write_stdout -> $exit_code
+                }
+            "#,
+            "sqrt: negative input",
+        ),
+    ] {
+        let output = support::run_source(name, source, b"");
+        assert!(!output.status.success(), "{name} unexpectedly succeeded");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{name}: expected {expected:?}, stderr was: {stderr}"
+        );
+    }
+}

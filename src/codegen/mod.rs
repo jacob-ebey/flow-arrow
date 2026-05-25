@@ -1483,7 +1483,7 @@ fn numeric_binary_output(input: &Ty) -> Result<Ty, String> {
 
 fn add_expr(left: &str, right: &str, ty: &Ty) -> String {
     if ty == &Ty::Int {
-        format!("({left} + {right})")
+        format!("fa_checked_i64_add({left}, {right})")
     } else {
         format!("((double){left} + (double){right})")
     }
@@ -1503,15 +1503,19 @@ fn numeric_binary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
         format!("(double){right}")
     };
     match name {
+        "add" if output_ty == &Ty::Int => format!("fa_checked_i64_add({left}, {right})"),
         "add" => format!("({cast_left} + {cast_right})"),
+        "sub" if output_ty == &Ty::Int => format!("fa_checked_i64_sub({left}, {right})"),
         "sub" => format!("({cast_left} - {cast_right})"),
+        "mul" if output_ty == &Ty::Int => format!("fa_checked_i64_mul({left}, {right})"),
         "mul" => format!("({cast_left} * {cast_right})"),
-        "div" => format!("({cast_left} / {cast_right})"),
+        "div" if output_ty == &Ty::Int => format!("fa_checked_i64_div({left}, {right})"),
+        "div" => format!("fa_checked_f64_div({cast_left}, {cast_right})"),
         "rem" => {
             if output_ty == &Ty::Int {
-                format!("({left} % {right})")
+                format!("fa_checked_i64_rem({left}, {right})")
             } else {
-                format!("fmod({cast_left}, {cast_right})")
+                format!("fa_checked_f64_rem({cast_left}, {cast_right})")
             }
         }
         "min" => format!("({cast_left} < {cast_right} ? {cast_left} : {cast_right})"),
@@ -1522,10 +1526,11 @@ fn numeric_binary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
 
 fn numeric_unary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
     match name {
+        "neg" if output_ty == &Ty::Int => format!("fa_checked_i64_neg({input})"),
         "neg" => format!("(-({input}))"),
-        "abs" if output_ty == &Ty::Int => format!("(({input}) < 0 ? -({input}) : ({input}))"),
+        "abs" if output_ty == &Ty::Int => format!("fa_checked_i64_abs({input})"),
         "abs" => format!("fabs({input})"),
-        "sqrt" => format!("sqrt((double){input})"),
+        "sqrt" => format!("fa_checked_sqrt((double){input})"),
         "exp" => format!("exp((double){input})"),
         "sin" => format!("sin((double){input})"),
         "cos" => format!("cos((double){input})"),
@@ -1560,7 +1565,7 @@ fn binary_op_expr(op: BinaryOp, left: &str, right: &str) -> String {
     }
 }
 
-fn compare_expr(name: &str, input: &str) -> String {
+fn compare_expr(name: &str, input: &str, input_ty: &Ty) -> String {
     let op = match name {
         "eq" => "==",
         "lt" => "<",
@@ -1569,7 +1574,11 @@ fn compare_expr(name: &str, input: &str) -> String {
         "ge" => ">=",
         _ => unreachable!(),
     };
-    format!("((double){input}.f0 {op} (double){input}.f1)")
+    if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Int, Ty::Int])) {
+        format!("({input}.f0 {op} {input}.f1)")
+    } else {
+        format!("((double){input}.f0 {op} (double){input}.f1)")
+    }
 }
 
 fn stages_binding_output<'a>(chain: &'a TypedChain, output: &str) -> Option<&'a [TypedStage]> {

@@ -1,5 +1,4 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 #[cfg(not(target_arch = "wasm32"))]

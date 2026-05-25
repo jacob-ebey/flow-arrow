@@ -9,9 +9,11 @@ static FaFault fa_fault_with_line(size_t line, FaFault fault) {
 
 static FaBytes fa_format_faults(FaSeq_Fault faults) {
   size_t total = 0;
-  for (size_t i = 0; i < faults.count; i++) total += faults.items[i].message.len + 1;
-  char *bytes = (char *)malloc(total + 1);
-  if (!bytes) fa_die_alloc();
+  for (size_t i = 0; i < faults.count; i++) {
+    total = fa_checked_size_add(total, faults.items[i].message.len, "format_faults: byte length overflow");
+    total = fa_checked_size_add(total, 1, "format_faults: byte length overflow");
+  }
+  char *bytes = (char *)fa_malloc(fa_checked_size_add(total, 1, "format_faults: byte length overflow"));
   size_t offset = 0;
   for (size_t i = 0; i < faults.count; i++) {
     memcpy(bytes + offset, faults.items[i].message.bytes, faults.items[i].message.len);

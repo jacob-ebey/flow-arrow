@@ -23,8 +23,8 @@ static FaFaultable_Bytes fa_read_file(FaBytes path) {
   if (!buf) fa_die_alloc();
   for (;;) {
     if (len == cap) {
-      cap *= 2;
-      char *next = (char *)realloc(buf, cap + 1);
+      cap = fa_checked_size_mul(cap, 2, "read_file: file too large");
+      char *next = (char *)realloc(buf, fa_checked_size_add(cap, 1, "read_file: file too large"));
       if (!next) fa_die_alloc();
       buf = next;
     }
@@ -117,8 +117,9 @@ static FaBytes fa_join_path(FaBytes base, FaBytes child) {
   if (base.len == 0) return fa_bytes_literal(child.bytes, child.len);
   if (child.len == 0) return fa_bytes_literal(base.bytes, base.len);
   bool needs_sep = base.bytes[base.len - 1] != '/';
-  size_t total = base.len + (needs_sep ? 1 : 0) + child.len;
-  char *bytes = (char *)malloc(total + 1);
+  size_t total = fa_checked_size_add(base.len, needs_sep ? 1 : 0, "join_path: path length overflow");
+  total = fa_checked_size_add(total, child.len, "join_path: path length overflow");
+  char *bytes = (char *)malloc(fa_checked_size_add(total, 1, "join_path: path length overflow"));
   if (!bytes) fa_die_alloc();
   size_t offset = 0;
   memcpy(bytes + offset, base.bytes, base.len);
@@ -154,8 +155,9 @@ typedef struct {
 
 static void fa_bytes_vec_push(FaBytesVec *vec, FaBytes value) {
   if (vec->count == vec->cap) {
-    vec->cap = vec->cap == 0 ? 16 : vec->cap * 2;
-    FaBytes *items = (FaBytes *)realloc(vec->items, vec->cap * sizeof(FaBytes));
+    vec->cap = vec->cap == 0 ? 16 : fa_checked_size_mul(vec->cap, 2, "path list size overflow");
+    size_t bytes = fa_checked_size_mul(vec->cap, sizeof(FaBytes), "path list size overflow");
+    FaBytes *items = (FaBytes *)realloc(vec->items, bytes);
     if (!items) fa_die_alloc();
     vec->items = items;
   }
@@ -419,7 +421,7 @@ static FaFaultable_Bytes fa_stream_read_at(FaStream stream, int64_t offset, int6
   if (offset < 0) return FaFaultable_Bytes_fault(fa_fault_cstr("read_at: offset must be non-negative"));
   if (len < 0) return FaFaultable_Bytes_fault(fa_fault_cstr("read_at: length must be non-negative"));
 
-  char *buffer = (char *)malloc((size_t)len + 1);
+  char *buffer = (char *)malloc(fa_checked_size_add((size_t)len, 1, "read_at: length overflow"));
   if (!buffer) fa_die_alloc();
 
   size_t done = 0;

@@ -5,6 +5,9 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
+type LspBinding = (String, Range);
+type LspBindingTarget = (Range, usize, Vec<LspBinding>);
+
 pub fn run_server() -> Result<u8, String> {
     Server::default().run().map_err(|error| error.to_string())?;
     Ok(0)
@@ -674,10 +677,10 @@ struct ImportItemInfo {
 
 impl ImportInfo {
     fn range_for_name(&self, name: &str) -> Option<Range> {
-        if let Some((alias, range)) = &self.alias {
-            if alias == name || name.starts_with(&format!("{alias}.")) {
-                return Some(*range);
-            }
+        if let Some((alias, range)) = &self.alias
+            && (alias == name || name.starts_with(&format!("{alias}.")))
+        {
+            return Some(*range);
         }
         for item in &self.items {
             if item.local == name || item.imported == name {
@@ -1088,13 +1091,12 @@ impl Analysis {
         if matches!(
             self.tokens.get(index).map(|token| &token.kind),
             Some(TokenKind::Symbol('(') | TokenKind::Symbol('['))
-        ) {
-            if let Some(end) = self.matching_delimiter(index) {
-                return Range {
-                    start: self.tokens[index].range.start,
-                    end: self.tokens[end].range.end,
-                };
-            }
+        ) && let Some(end) = self.matching_delimiter(index)
+        {
+            return Range {
+                start: self.tokens[index].range.start,
+                end: self.tokens[end].range.end,
+            };
         }
         self.tokens[index].range
     }
@@ -1140,7 +1142,7 @@ impl Analysis {
         }
     }
 
-    fn binding_target_at(&self, index: usize) -> Option<(Range, usize, Vec<(String, Range)>)> {
+    fn binding_target_at(&self, index: usize) -> Option<LspBindingTarget> {
         match self.tokens.get(index)? {
             LspToken {
                 kind: TokenKind::Variable(name),
@@ -1308,10 +1310,9 @@ impl Analysis {
                 ImportSourceInfo::Module(module) => {
                     if let Some((alias, range)) = &import.alias
                         && let Some(member) = name.strip_prefix(&format!("{alias}."))
+                        && stdlib::find_export(module, member).is_some()
                     {
-                        if stdlib::find_export(module, member).is_some() {
-                            return Some(ImportedDefinition::Range(*range));
-                        }
+                        return Some(ImportedDefinition::Range(*range));
                     }
                     for item in &import.items {
                         if item.local == name {
@@ -1328,10 +1329,9 @@ impl Analysis {
                     let full_path = base.join(path);
                     if let Some((alias, _)) = &import.alias
                         && let Some(member) = name.strip_prefix(&format!("{alias}."))
+                        && let Some(location) = local_import_location(&full_path, member)
                     {
-                        if let Some(location) = local_import_location(&full_path, member) {
-                            return Some(ImportedDefinition::Location(location));
-                        }
+                        return Some(ImportedDefinition::Location(location));
                     }
                     for item in &import.items {
                         if item.local == name {
@@ -1929,13 +1929,13 @@ fn definition_result(analysis: &Analysis, position: Position) -> Option<String> 
 
 fn hover_result(analysis: &Analysis, position: Position) -> Option<String> {
     if let Some(callable) = analysis.callable_at(position) {
-        if let Some(stage) = analysis.semantic_stage_at(callable, position) {
-            if stage.is_arrow || (!stage.label.starts_with('$') && !stage.label.starts_with('(')) {
-                return Some(hover_json(&format!(
-                    "{}: {} -> {}",
-                    stage.label, stage.input, stage.output
-                )));
-            }
+        if let Some(stage) = analysis.semantic_stage_at(callable, position)
+            && (stage.is_arrow || (!stage.label.starts_with('$') && !stage.label.starts_with('(')))
+        {
+            return Some(hover_json(&format!(
+                "{}: {} -> {}",
+                stage.label, stage.input, stage.output
+            )));
         }
         if let Some(source) = analysis.semantic_source_at(callable, position) {
             return Some(hover_json(&format!("{}: {}", source.label, source.ty)));
@@ -1955,15 +1955,10 @@ fn hover_result(analysis: &Analysis, position: Position) -> Option<String> {
                 .unwrap_or_else(|| variable.detail.clone());
             format!("${}: {}", variable.name, ty)
         }
-        SymbolRef::Name(name) => {
-            if let Some(symbol) = analysis.local_symbol(&name) {
-                symbol.detail.clone()
-            } else if let Some(detail) = imported_detail(analysis, &name) {
-                detail
-            } else {
-                return None;
-            }
-        }
+        SymbolRef::Name(name) => analysis
+            .local_symbol(&name)
+            .map(|symbol| symbol.detail.clone())
+            .or_else(|| imported_detail(analysis, &name))?,
         SymbolRef::ImportPath(path) => format!("local import {path:?}"),
     };
     Some(hover_json(&contents))

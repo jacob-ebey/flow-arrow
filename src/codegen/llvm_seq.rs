@@ -4,6 +4,16 @@ use inkwell::IntPredicate;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, IntValue};
 
+struct SeqCopyRange<'ctx, 'ty> {
+    src: BasicValueEnum<'ctx>,
+    src_ty: &'ty Ty,
+    dst: BasicValueEnum<'ctx>,
+    dst_ty: &'ty Ty,
+    dst_start: IntValue<'ctx>,
+    src_start: IntValue<'ctx>,
+    len: IntValue<'ctx>,
+}
+
 impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     pub(super) fn emit_range_step(
         &mut self,
@@ -2926,15 +2936,15 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         src_start: IntValue<'ctx>,
         len: IntValue<'ctx>,
     ) -> Result<(), String> {
-        self.copy_seq_range_to_offset(
+        self.copy_seq_range_to_offset(SeqCopyRange {
             src,
             src_ty,
             dst,
             dst_ty,
-            self.context.i64_type().const_zero(),
+            dst_start: self.context.i64_type().const_zero(),
             src_start,
             len,
-        )
+        })
     }
 
     fn copy_seq_range_to_offset_from_zero(
@@ -2946,15 +2956,15 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         dst_start: IntValue<'ctx>,
         len: IntValue<'ctx>,
     ) -> Result<(), String> {
-        self.copy_seq_range_to_offset(
+        self.copy_seq_range_to_offset(SeqCopyRange {
             src,
             src_ty,
             dst,
             dst_ty,
             dst_start,
-            self.context.i64_type().const_zero(),
+            src_start: self.context.i64_type().const_zero(),
             len,
-        )
+        })
     }
 
     fn seq_count_tuple_input(
@@ -3144,16 +3154,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             .map_err(|error| format!("LLVM backend failed to load `{label}` result: {error}"))
     }
 
-    fn copy_seq_range_to_offset(
-        &mut self,
-        src: BasicValueEnum<'ctx>,
-        src_ty: &Ty,
-        dst: BasicValueEnum<'ctx>,
-        dst_ty: &Ty,
-        dst_start: IntValue<'ctx>,
-        src_start: IntValue<'ctx>,
-        len: IntValue<'ctx>,
-    ) -> Result<(), String> {
+    fn copy_seq_range_to_offset(&mut self, range: SeqCopyRange<'ctx, '_>) -> Result<(), String> {
         let function = self.current_function()?;
         let loop_block = self.context.append_basic_block(function, "copy.loop");
         let body_block = self.context.append_basic_block(function, "copy.body");
@@ -3176,7 +3177,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             .into_int_value();
         let cond = self
             .builder
-            .build_int_compare(IntPredicate::ULT, j, len, "copy.cond")
+            .build_int_compare(IntPredicate::ULT, j, range.len, "copy.cond")
             .map_err(|error| format!("LLVM backend failed to compare copy index: {error}"))?;
         self.builder
             .build_conditional_branch(cond, body_block, after_block)
@@ -3184,16 +3185,16 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         self.builder.position_at_end(body_block);
         let src_i = self
             .builder
-            .build_int_add(src_start, j, "src_i")
+            .build_int_add(range.src_start, j, "src_i")
             .map_err(|error| format!("LLVM backend failed to compute source index: {error}"))?;
         let dst_i = self
             .builder
-            .build_int_add(dst_start, j, "dst_i")
+            .build_int_add(range.dst_start, j, "dst_i")
             .map_err(|error| {
                 format!("LLVM backend failed to compute destination index: {error}")
             })?;
-        let item = self.load_seq_item(src, src_ty, src_i)?;
-        self.store_seq_item(dst, dst_ty, dst_i, item)?;
+        let item = self.load_seq_item(range.src, range.src_ty, src_i)?;
+        self.store_seq_item(range.dst, range.dst_ty, dst_i, item)?;
         self.increment_and_continue(j_ptr, loop_block)?;
         self.builder.position_at_end(after_block);
         Ok(())

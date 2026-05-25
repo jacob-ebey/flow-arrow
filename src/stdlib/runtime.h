@@ -64,6 +64,18 @@ typedef struct { FaScopedAllocFn alloc; void *ctx; } FaScopedAllocator;
 
 static void fa_die_usage(const char *message);
 static void fa_die_alloc(void);
+static size_t fa_checked_size_add(size_t left, size_t right, const char *message);
+static size_t fa_checked_size_mul(size_t left, size_t right, const char *message);
+static int64_t fa_checked_i64_add(int64_t left, int64_t right);
+static int64_t fa_checked_i64_sub(int64_t left, int64_t right);
+static int64_t fa_checked_i64_mul(int64_t left, int64_t right);
+static int64_t fa_checked_i64_div(int64_t left, int64_t right);
+static int64_t fa_checked_i64_rem(int64_t left, int64_t right);
+static int64_t fa_checked_i64_neg(int64_t value);
+static int64_t fa_checked_i64_abs(int64_t value);
+static double fa_checked_f64_div(double left, double right);
+static double fa_checked_f64_rem(double left, double right);
+static double fa_checked_sqrt(double value);
 static FaScopedAllocator fa_scoped_allocator_enter(FaScopedAllocFn alloc, void *ctx);
 static void fa_scoped_allocator_restore(FaScopedAllocator previous);
 static void *fa_malloc(size_t size);

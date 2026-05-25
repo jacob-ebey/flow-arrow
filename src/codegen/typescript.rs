@@ -52,6 +52,15 @@ struct TsValue {
     tuple_items: Option<Vec<TsValue>>,
 }
 
+struct TsMatchParams<'a> {
+    arms: &'a [TypedMatchArm],
+    output_ty: Ty,
+    subject: TsValue,
+    env: &'a HashMap<String, TsValue>,
+    indent: &'a str,
+    preferred: Option<&'a str>,
+}
+
 struct TypeScriptCodegen<'a> {
     codegen: TypedCodegen<'a>,
     options: TypeScriptEmitOptions,
@@ -1155,12 +1164,14 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                         .and_then(binding_target_name);
                     value = self.emit_match(
                         out,
-                        arms,
-                        stage.output.clone(),
-                        value,
-                        env,
-                        indent,
-                        preferred,
+                        TsMatchParams {
+                            arms,
+                            output_ty: stage.output.clone(),
+                            subject: value,
+                            env,
+                            indent,
+                            preferred,
+                        },
                     )?;
                 }
             }
@@ -2059,9 +2070,17 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 let identity = self.emit_endpoint(out, identity, env, indent)?;
                 self.emit_scan(out, op, value, identity, indent, None)
             }
-            TypedStageKind::Match { arms } => {
-                self.emit_match(out, arms, stage.output.clone(), value, env, indent, None)
-            }
+            TypedStageKind::Match { arms } => self.emit_match(
+                out,
+                TsMatchParams {
+                    arms,
+                    output_ty: stage.output.clone(),
+                    subject: value,
+                    env,
+                    indent,
+                    preferred: None,
+                },
+            ),
         }
     }
 
@@ -2397,9 +2416,11 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 ts_numeric_binary_expr(name, input, output_ty)
             }
+            "neg" if output_ty == &Ty::Int => format!("faCheckedI64Neg({})", input.code),
             "neg" => format!("(-{})", input.code),
-            "abs" => format!("({0} < 0 ? -{0} : {0})", input.code),
-            "sqrt" => format!("Math.sqrt({})", input.code),
+            "abs" if output_ty == &Ty::Int => format!("faCheckedI64Abs({})", input.code),
+            "abs" => format!("Math.abs({})", input.code),
+            "sqrt" => format!("faCheckedSqrt({})", input.code),
             "exp" => format!("Math.exp({})", input.code),
             "sin" => format!("Math.sin({})", input.code),
             "cos" => format!("Math.cos({})", input.code),
@@ -3066,13 +3087,16 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     fn emit_match(
         &mut self,
         out: &mut String,
-        arms: &[TypedMatchArm],
-        output_ty: Ty,
-        subject: TsValue,
-        env: &HashMap<String, TsValue>,
-        indent: &str,
-        preferred: Option<&str>,
+        params: TsMatchParams<'_>,
     ) -> Result<TsValue, String> {
+        let TsMatchParams {
+            arms,
+            output_ty,
+            subject,
+            env,
+            indent,
+            preferred,
+        } = params;
         let tmp = self.next_temp_or_preferred(preferred);
         out.push_str(&format!("{indent}let {tmp}: {};\n", ts_type(&output_ty)));
         for (index, arm) in arms.iter().enumerate() {
@@ -3417,9 +3441,11 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 ts_numeric_binary_expr(name, input, output_ty)
             }
+            "neg" if output_ty == &Ty::Int => format!("faCheckedI64Neg({})", input.code),
             "neg" => format!("(-{})", input.code),
-            "abs" => format!("({0} < 0 ? -{0} : {0})", input.code),
-            "sqrt" => format!("Math.sqrt({})", input.code),
+            "abs" if output_ty == &Ty::Int => format!("faCheckedI64Abs({})", input.code),
+            "abs" => format!("Math.abs({})", input.code),
+            "sqrt" => format!("faCheckedSqrt({})", input.code),
             "exp" => format!("Math.exp({})", input.code),
             "sin" => format!("Math.sin({})", input.code),
             "cos" => format!("Math.cos({})", input.code),
@@ -3834,11 +3860,16 @@ fn ts_numeric_binary_expr(name: &str, input: &TsValue, output_ty: &Ty) -> String
     let left = tuple_field(input, 0);
     let right = tuple_field(input, 1);
     match name {
+        "add" if output_ty == &Ty::Int => format!("faCheckedI64Add({left}, {right})"),
         "add" => format!("({left} + {right})"),
+        "sub" if output_ty == &Ty::Int => format!("faCheckedI64Sub({left}, {right})"),
         "sub" => format!("({left} - {right})"),
+        "mul" if output_ty == &Ty::Int => format!("faCheckedI64Mul({left}, {right})"),
         "mul" => format!("({left} * {right})"),
-        "div" => format!("({left} / {right})"),
-        "rem" => format!("({left} % {right})"),
+        "div" if output_ty == &Ty::Int => format!("faCheckedI64Div({left}, {right})"),
+        "div" => format!("faCheckedRealDiv({left}, {right})"),
+        "rem" if output_ty == &Ty::Int => format!("faCheckedI64Rem({left}, {right})"),
+        "rem" => format!("faCheckedRealRem({left}, {right})"),
         "min" => format!("({left} <= {right} ? {left} : {right})"),
         "max" => format!("({left} >= {right} ? {left} : {right})"),
         _ if matches!(output_ty, Ty::Real) => "Number.NaN".to_string(),
@@ -4033,7 +4064,66 @@ function faConcatBytes(items: Array<string | FaFaultable<string>>): string | FaF
 function faParseInt(bytes: string): FaFaultable<bigint> {
   const text = bytes.trim();
   if (!/^[+-]?\d+$/.test(text)) return faFaultMessage(`parse_int: invalid integer '${bytes}'`);
-  return faOk(BigInt(text));
+  const value = BigInt(text);
+  if (value < FA_I64_MIN || value > FA_I64_MAX) return faFaultMessage(`parse_int: integer out of range '${bytes}'`);
+  return faOk(value);
+}
+
+const FA_I64_MIN = -(1n << 63n);
+const FA_I64_MAX = (1n << 63n) - 1n;
+
+function faAssertI64(value: bigint, label: string): bigint {
+  if (value < FA_I64_MIN || value > FA_I64_MAX) throw new Error(`${label}: integer overflow`);
+  return value;
+}
+
+function faCheckedI64Add(left: bigint, right: bigint): bigint {
+  return faAssertI64(left + right, "add");
+}
+
+function faCheckedI64Sub(left: bigint, right: bigint): bigint {
+  return faAssertI64(left - right, "sub");
+}
+
+function faCheckedI64Mul(left: bigint, right: bigint): bigint {
+  return faAssertI64(left * right, "mul");
+}
+
+function faCheckedI64Div(left: bigint, right: bigint): bigint {
+  if (right === 0n) throw new Error("div: division by zero");
+  if (left === FA_I64_MIN && right === -1n) throw new Error("div: integer overflow");
+  return left / right;
+}
+
+function faCheckedI64Rem(left: bigint, right: bigint): bigint {
+  if (right === 0n) throw new Error("rem: remainder by zero");
+  if (left === FA_I64_MIN && right === -1n) throw new Error("rem: integer overflow");
+  return left % right;
+}
+
+function faCheckedI64Neg(value: bigint): bigint {
+  if (value === FA_I64_MIN) throw new Error("neg: integer overflow");
+  return -value;
+}
+
+function faCheckedI64Abs(value: bigint): bigint {
+  if (value === FA_I64_MIN) throw new Error("abs: integer overflow");
+  return value < 0n ? -value : value;
+}
+
+function faCheckedRealDiv(left: number, right: number): number {
+  if (right === 0) throw new Error("div: division by zero");
+  return left / right;
+}
+
+function faCheckedRealRem(left: number, right: number): number {
+  if (right === 0) throw new Error("rem: remainder by zero");
+  return left % right;
+}
+
+function faCheckedSqrt(value: number): number {
+  if (value < 0) throw new Error("sqrt: negative input");
+  return Math.sqrt(value);
 }
 
 function faParseReal(bytes: string): FaFaultable<number> {
@@ -4716,6 +4806,45 @@ try {{
 const faScalarWorkerMappers = new Map([
 {mapper_entries}
 ]);
+const FA_I64_MIN = -(1n << 63n);
+const FA_I64_MAX = (1n << 63n) - 1n;
+function faAssertI64(value, label) {{
+  if (value < FA_I64_MIN || value > FA_I64_MAX) throw new Error(`${{label}}: integer overflow`);
+  return value;
+}}
+function faCheckedI64Add(left, right) {{ return faAssertI64(left + right, "add"); }}
+function faCheckedI64Sub(left, right) {{ return faAssertI64(left - right, "sub"); }}
+function faCheckedI64Mul(left, right) {{ return faAssertI64(left * right, "mul"); }}
+function faCheckedI64Div(left, right) {{
+  if (right === 0n) throw new Error("div: division by zero");
+  if (left === FA_I64_MIN && right === -1n) throw new Error("div: integer overflow");
+  return left / right;
+}}
+function faCheckedI64Rem(left, right) {{
+  if (right === 0n) throw new Error("rem: remainder by zero");
+  if (left === FA_I64_MIN && right === -1n) throw new Error("rem: integer overflow");
+  return left % right;
+}}
+function faCheckedI64Neg(value) {{
+  if (value === FA_I64_MIN) throw new Error("neg: integer overflow");
+  return -value;
+}}
+function faCheckedI64Abs(value) {{
+  if (value === FA_I64_MIN) throw new Error("abs: integer overflow");
+  return value < 0n ? -value : value;
+}}
+function faCheckedRealDiv(left, right) {{
+  if (right === 0) throw new Error("div: division by zero");
+  return left / right;
+}}
+function faCheckedRealRem(left, right) {{
+  if (right === 0) throw new Error("rem: remainder by zero");
+  return left % right;
+}}
+function faCheckedSqrt(value) {{
+  if (value < 0) throw new Error("sqrt: negative input");
+  return Math.sqrt(value);
+}}
 let mapper = null;
 const postDone = () => {{
   if (nodeParentPort) {{

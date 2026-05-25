@@ -31,8 +31,10 @@ fn main() {
     let flowarrow_cpu_build_time = flowarrow_cpu_build_start.elapsed();
 
     let flowarrow_gpu_build = if config.gpu {
-        let mut gpu_options = BuildOptions::default();
-        gpu_options.gpu = true;
+        let gpu_options = BuildOptions {
+            gpu: true,
+            ..BuildOptions::default()
+        };
         let build_start = Instant::now();
         eprintln!("building FlowArrow GPU accumulator benchmark...");
         let build = build_file_with_options(&gpu_source, &gpu_options)

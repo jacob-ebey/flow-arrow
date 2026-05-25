@@ -66,11 +66,12 @@ impl Default for BuildOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BuildOptimization {
     O0,
     O1,
     O2,
+    #[default]
     O3,
     Os,
     Oz,
@@ -110,22 +111,11 @@ impl BuildOptimization {
     }
 }
 
-impl Default for BuildOptimization {
-    fn default() -> Self {
-        Self::O3
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CrateType {
+    #[default]
     Bin,
     Cdylib,
-}
-
-impl Default for CrateType {
-    fn default() -> Self {
-        Self::Bin
-    }
 }
 
 impl FromStr for CrateType {
@@ -280,8 +270,10 @@ impl Drop for GpuRuntimeCacheLock {
 }
 
 pub fn build_file(path: &Path, emit_llvm: Option<&Path>) -> Result<BuildOutput, String> {
-    let mut options = BuildOptions::default();
-    options.emit_llvm = emit_llvm.map(PathBuf::from);
+    let options = BuildOptions {
+        emit_llvm: emit_llvm.map(PathBuf::from),
+        ..BuildOptions::default()
+    };
     build_file_with_options(path, &options)
 }
 

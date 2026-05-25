@@ -84,8 +84,10 @@ static FaBytes fa_bytes_replace(FaBytes input, FaBytes needle, FaBytes replaceme
       i++;
     }
   }
-  size_t total = input.len + matches * replacement.len - matches * needle.len;
-  char *bytes = (char *)fa_malloc(total + 1);
+  size_t removed = fa_checked_size_mul(matches, needle.len, "replace: byte length overflow");
+  size_t added = fa_checked_size_mul(matches, replacement.len, "replace: byte length overflow");
+  size_t total = fa_checked_size_add(input.len - removed, added, "replace: byte length overflow");
+  char *bytes = (char *)fa_malloc(fa_checked_size_add(total, 1, "replace: byte length overflow"));
   size_t in = 0;
   size_t out = 0;
   while (in < input.len) {
@@ -103,8 +105,8 @@ static FaBytes fa_bytes_replace(FaBytes input, FaBytes needle, FaBytes replaceme
 
 static FaBytes fa_bytes_repeat(FaBytes input, int64_t count) {
   if (count < 0) fa_die_usage("repeat: count must be non-negative");
-  size_t total = input.len * (size_t)count;
-  char *bytes = (char *)fa_malloc(total + 1);
+  size_t total = fa_checked_size_mul(input.len, (size_t)count, "repeat: byte length overflow");
+  char *bytes = (char *)fa_malloc(fa_checked_size_add(total, 1, "repeat: byte length overflow"));
   size_t offset = 0;
   for (int64_t i = 0; i < count; i++) {
     memcpy(bytes + offset, input.bytes, input.len);
@@ -180,9 +182,16 @@ static FaBytes fa_codes_to_bytes(FaSeq_Int codes) {
 
 static FaBytes fa_join_bytes(FaSeq_Bytes values, FaBytes delimiter) {
   size_t total = 0;
-  for (size_t i = 0; i < values.count; i++) total += values.items[i].len;
-  if (values.count > 1) total += delimiter.len * (values.count - 1);
-  char *bytes = (char *)fa_malloc(total + 1);
+  for (size_t i = 0; i < values.count; i++) {
+    total = fa_checked_size_add(total, values.items[i].len, "join_bytes: byte length overflow");
+  }
+  if (values.count > 1) {
+    total = fa_checked_size_add(
+        total,
+        fa_checked_size_mul(delimiter.len, values.count - 1, "join_bytes: byte length overflow"),
+        "join_bytes: byte length overflow");
+  }
+  char *bytes = (char *)fa_malloc(fa_checked_size_add(total, 1, "join_bytes: byte length overflow"));
   size_t offset = 0;
   for (size_t i = 0; i < values.count; i++) {
     if (i > 0) {
@@ -198,8 +207,10 @@ static FaBytes fa_join_bytes(FaSeq_Bytes values, FaBytes delimiter) {
 
 static FaBytes fa_reduce_concat_bytes(FaSeq_Bytes values, FaBytes identity) {
   size_t total = identity.len;
-  for (size_t i = 0; i < values.count; i++) total += values.items[i].len;
-  char *bytes = (char *)fa_malloc(total + 1);
+  for (size_t i = 0; i < values.count; i++) {
+    total = fa_checked_size_add(total, values.items[i].len, "concat_bytes: byte length overflow");
+  }
+  char *bytes = (char *)fa_malloc(fa_checked_size_add(total, 1, "concat_bytes: byte length overflow"));
   size_t offset = 0;
   memcpy(bytes + offset, identity.bytes, identity.len);
   offset += identity.len;

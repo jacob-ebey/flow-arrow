@@ -137,7 +137,7 @@ fn print_program(program: &Program<'_>, source_type: SourceType) -> String {
 fn format_oxc_errors(context: &str, source: &str, errors: Vec<OxcDiagnostic>) -> String {
     let mut out = context.to_string();
     for error in errors {
-        out.push_str("\n");
+        out.push('\n');
         out.push_str(&format!("{:?}", error.with_source_code(source.to_string())));
     }
     out

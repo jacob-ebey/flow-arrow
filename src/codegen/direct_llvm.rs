@@ -1,11 +1,13 @@
 use super::*;
 
 use inkwell::AddressSpace;
+use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use inkwell::intrinsics::Intrinsic;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module as LlvmModule};
 use inkwell::targets::{
@@ -1756,43 +1758,38 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let count = self.seq_count(input.value)?;
         let output = self.emit_seq_new(&output_ty, count)?;
 
-        if self.options.gpu {
-            if let Some(kernel) =
+        if self.options.gpu
+            && let Some(kernel) =
                 self.gpu_plan
                     .kernel_for_map(name, item_ty.as_ref(), &output_item_ty)
-            {
-                let kernel_id = kernel.id.clone();
-                let wgsl_source = kernel.wgsl.clone();
-                let scalar = kernel.scalar;
-                let wgsl = self
-                    .builder
-                    .build_global_string_ptr(&wgsl_source, &format!("{kernel_id}_wgsl"))
-                    .map_err(|error| {
-                        format!("LLVM backend failed to build GPU WGSL string: {error}")
-                    })?
-                    .as_pointer_value();
-                let input_items = self.seq_items(input.value)?;
-                let output_items = self.seq_items(output.value)?;
-                let map_function = match scalar {
-                    gpu::GpuScalarKind::I32 => self.gpu_map_i64_function(),
-                    gpu::GpuScalarKind::F32 => self.gpu_map_f64_function(),
-                };
-                self.builder
-                    .build_call(
-                        map_function,
-                        &[
-                            wgsl.into(),
-                            input_items.into(),
-                            output_items.into(),
-                            count.into(),
-                        ],
-                        "gpu.map",
-                    )
-                    .map_err(|error| {
-                        format!("LLVM backend failed to call native GPU map: {error}")
-                    })?;
-                return Ok(output);
-            }
+        {
+            let kernel_id = kernel.id.clone();
+            let wgsl_source = kernel.wgsl.clone();
+            let scalar = kernel.scalar;
+            let wgsl = self
+                .builder
+                .build_global_string_ptr(&wgsl_source, &format!("{kernel_id}_wgsl"))
+                .map_err(|error| format!("LLVM backend failed to build GPU WGSL string: {error}"))?
+                .as_pointer_value();
+            let input_items = self.seq_items(input.value)?;
+            let output_items = self.seq_items(output.value)?;
+            let map_function = match scalar {
+                gpu::GpuScalarKind::I32 => self.gpu_map_i64_function(),
+                gpu::GpuScalarKind::F32 => self.gpu_map_f64_function(),
+            };
+            self.builder
+                .build_call(
+                    map_function,
+                    &[
+                        wgsl.into(),
+                        input_items.into(),
+                        output_items.into(),
+                        count.into(),
+                    ],
+                    "gpu.map",
+                )
+                .map_err(|error| format!("LLVM backend failed to call native GPU map: {error}"))?;
+            return Ok(output);
         }
 
         let function = self.current_function()?;
@@ -3292,14 +3289,38 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let left = self.extract_tuple_field(&input, 0)?;
         let right = self.extract_tuple_field(&input, 1)?;
         if matches!(left_ty, Ty::Real) || matches!(right_ty, Ty::Real) {
-            let left = self.to_real(left, left_ty)?;
-            let right = self.to_real(right, right_ty)?;
+            let left = self.cast_to_real(left, left_ty)?;
+            let right = self.cast_to_real(right, right_ty)?;
             let result = match name {
                 "add" => self.builder.build_float_add(left, right, "add"),
                 "sub" => self.builder.build_float_sub(left, right, "sub"),
                 "mul" => self.builder.build_float_mul(left, right, "mul"),
-                "div" => self.builder.build_float_div(left, right, "div"),
-                "rem" => self.builder.build_float_rem(left, right, "rem"),
+                "div" | "rem" => {
+                    let function_name = if name == "div" {
+                        "fa_checked_f64_div"
+                    } else {
+                        "fa_checked_f64_rem"
+                    };
+                    let function = self.runtime_function(
+                        function_name,
+                        Some(self.context.f64_type().into()),
+                        &[
+                            self.context.f64_type().into(),
+                            self.context.f64_type().into(),
+                        ],
+                    )?;
+                    return self
+                        .builder
+                        .build_call(function, &[left.into(), right.into()], name)
+                        .map_err(|error| {
+                            format!("LLVM backend failed to call `{function_name}`: {error}")
+                        })?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| {
+                            format!("runtime function `{function_name}` did not return a value")
+                        });
+                }
                 "min" => {
                     let cmp = self
                         .builder
@@ -3327,36 +3348,55 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         } else {
             let left = left.into_int_value();
             let right = right.into_int_value();
-            let result = match name {
-                "add" => self.builder.build_int_add(left, right, "add"),
-                "sub" => self.builder.build_int_sub(left, right, "sub"),
-                "mul" => self.builder.build_int_mul(left, right, "mul"),
-                "div" => self.builder.build_int_signed_div(left, right, "div"),
-                "rem" => self.builder.build_int_signed_rem(left, right, "rem"),
+            match name {
+                "add" | "sub" | "mul" | "div" | "rem" => {
+                    let function_name = match name {
+                        "add" => "fa_checked_i64_add",
+                        "sub" => "fa_checked_i64_sub",
+                        "mul" => "fa_checked_i64_mul",
+                        "div" => "fa_checked_i64_div",
+                        "rem" => "fa_checked_i64_rem",
+                        _ => unreachable!(),
+                    };
+                    let function = self.runtime_function(
+                        function_name,
+                        Some(self.context.i64_type().into()),
+                        &[
+                            self.context.i64_type().into(),
+                            self.context.i64_type().into(),
+                        ],
+                    )?;
+                    self.builder
+                        .build_call(function, &[left.into(), right.into()], name)
+                        .map_err(|error| {
+                            format!("LLVM backend failed to call `{function_name}`: {error}")
+                        })?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| {
+                            format!("runtime function `{function_name}` did not return a value")
+                        })
+                }
                 "min" => {
                     let cmp = self
                         .builder
                         .build_int_compare(IntPredicate::SLT, left, right, "min")
                         .map_err(|error| format!("LLVM backend failed to compare min: {error}"))?;
-                    return self
-                        .builder
+                    self.builder
                         .build_select(cmp, left, right, "min")
-                        .map_err(|error| format!("LLVM backend failed to select min: {error}"));
+                        .map_err(|error| format!("LLVM backend failed to select min: {error}"))
                 }
                 "max" => {
                     let cmp = self
                         .builder
                         .build_int_compare(IntPredicate::SGT, left, right, "max")
                         .map_err(|error| format!("LLVM backend failed to compare max: {error}"))?;
-                    return self
-                        .builder
+                    self.builder
                         .build_select(cmp, left, right, "max")
-                        .map_err(|error| format!("LLVM backend failed to select max: {error}"));
+                        .map_err(|error| format!("LLVM backend failed to select max: {error}"))
                 }
                 _ => unreachable!(),
             }
-            .map_err(|error| format!("LLVM backend failed to build `{name}`: {error}"))?;
-            Ok(result.into())
         }
     }
 
@@ -3383,11 +3423,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match name {
             "neg" => match input.ty {
-                Ty::Int => Ok(self
-                    .builder
-                    .build_int_neg(input.value.into_int_value(), "neg")
-                    .map_err(|error| format!("LLVM backend failed to build neg: {error}"))?
-                    .into()),
+                Ty::Int => self.emit_checked_i64_unary("fa_checked_i64_neg", "neg", input.value),
                 Ty::Real => Ok(self
                     .builder
                     .build_float_neg(input.value.into_float_value(), "neg")
@@ -3396,25 +3432,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 ref other => Err(format!("neg expected numeric input, found `{other}`")),
             },
             "abs" => match input.ty {
-                Ty::Int => {
-                    let value = input.value.into_int_value();
-                    let negative = self
-                        .builder
-                        .build_int_compare(
-                            IntPredicate::SLT,
-                            value,
-                            self.context.i64_type().const_zero(),
-                            "abs.negative",
-                        )
-                        .map_err(|error| format!("LLVM backend failed to compare abs: {error}"))?;
-                    let negated = self
-                        .builder
-                        .build_int_neg(value, "abs.neg")
-                        .map_err(|error| format!("LLVM backend failed to negate abs: {error}"))?;
-                    self.builder
-                        .build_select(negative, negated, value, "abs")
-                        .map_err(|error| format!("LLVM backend failed to select abs: {error}"))
-                }
+                Ty::Int => self.emit_checked_i64_unary("fa_checked_i64_abs", "abs", input.value),
                 Ty::Real => {
                     let value = input.value.into_float_value();
                     let negative = self
@@ -3440,9 +3458,14 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 if output_ty != &Ty::Real {
                     return Err(format!("{name} expected Real output, found `{output_ty}`"));
                 }
-                let value = self.to_real(input.value, &input.ty)?;
+                let value = self.cast_to_real(input.value, &input.ty)?;
+                let runtime_name = if name == "sqrt" {
+                    "fa_checked_sqrt"
+                } else {
+                    name
+                };
                 let fn_value = self.runtime_function(
-                    name,
+                    runtime_name,
                     Some(self.context.f64_type().into()),
                     &[self.context.f64_type().into()],
                 )?;
@@ -3451,10 +3474,31 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     .map_err(|error| format!("LLVM backend failed to call `{name}`: {error}"))?
                     .try_as_basic_value()
                     .basic()
-                    .ok_or_else(|| format!("runtime function `{name}` did not return a value"))
+                    .ok_or_else(|| {
+                        format!("runtime function `{runtime_name}` did not return a value")
+                    })
             }
             _ => unreachable!(),
         }
+    }
+
+    fn emit_checked_i64_unary(
+        &mut self,
+        function_name: &str,
+        label: &str,
+        input: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let function = self.runtime_function(
+            function_name,
+            Some(self.context.i64_type().into()),
+            &[self.context.i64_type().into()],
+        )?;
+        self.builder
+            .build_call(function, &[input.into_int_value().into()], label)
+            .map_err(|error| format!("LLVM backend failed to call `{function_name}`: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("runtime function `{function_name}` did not return a value"))
     }
 
     fn emit_int_binary(
@@ -3501,8 +3545,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let left = self.extract_tuple_field(&input, 0)?;
         let right = self.extract_tuple_field(&input, 1)?;
         let bit = if matches!(left_ty, Ty::Real) || matches!(right_ty, Ty::Real) {
-            let left = self.to_real(left, left_ty)?;
-            let right = self.to_real(right, right_ty)?;
+            let left = self.cast_to_real(left, left_ty)?;
+            let right = self.cast_to_real(right, right_ty)?;
             let pred = match name {
                 "eq" => inkwell::FloatPredicate::OEQ,
                 "lt" => inkwell::FloatPredicate::OLT,
@@ -3724,7 +3768,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     .as_ref()
                     .is_some_and(|unwrapped| unwrapped == inner.as_ref()) =>
             {
-                return self.coerce_faultable_tuple_to_faultable(value, inner);
+                self.coerce_faultable_tuple_to_faultable(value, inner)
             }
             (Ty::Faultable(inner), actual)
                 if inner.as_ref() == &actual
@@ -4120,7 +4164,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         })
     }
 
-    fn to_real(
+    fn cast_to_real(
         &mut self,
         value: BasicValueEnum<'ctx>,
         ty: &Ty,
@@ -4155,6 +4199,36 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         if let Some(function) = self.module.get_function(name) {
             return Ok(function);
         }
+        if self.options.export_abi == Some(DirectExportAbi::Wasm) {
+            match name {
+                "fa_checked_i64_add" => {
+                    return self.define_wasm_checked_i64_overflow_function(
+                        name,
+                        "llvm.sadd.with.overflow.i64",
+                    );
+                }
+                "fa_checked_i64_sub" => {
+                    return self.define_wasm_checked_i64_overflow_function(
+                        name,
+                        "llvm.ssub.with.overflow.i64",
+                    );
+                }
+                "fa_checked_i64_mul" => {
+                    return self.define_wasm_checked_i64_overflow_function(
+                        name,
+                        "llvm.smul.with.overflow.i64",
+                    );
+                }
+                "fa_checked_i64_div" => return self.define_wasm_checked_i64_div_rem(name, "div"),
+                "fa_checked_i64_rem" => return self.define_wasm_checked_i64_div_rem(name, "rem"),
+                "fa_checked_i64_neg" => return self.define_wasm_checked_i64_neg(),
+                "fa_checked_i64_abs" => return self.define_wasm_checked_i64_abs(),
+                "fa_checked_f64_div" => return self.define_wasm_checked_f64_div_rem(name, "div"),
+                "fa_checked_f64_rem" => return self.define_wasm_checked_f64_div_rem(name, "rem"),
+                "fa_checked_sqrt" => return self.define_wasm_checked_sqrt(),
+                _ => {}
+            }
+        }
         let arg_types = args
             .iter()
             .copied()
@@ -4165,6 +4239,338 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             None => self.context.void_type().fn_type(&arg_types, false),
         };
         Ok(self.module.add_function(name, function_ty, None))
+    }
+
+    fn define_wasm_checked_i64_overflow_function(
+        &mut self,
+        name: &str,
+        intrinsic_name: &str,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let saved_block = self.builder.get_insert_block();
+        let i64_ty = self.context.i64_type();
+        let function = self.module.add_function(
+            name,
+            i64_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false),
+            None,
+        );
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        let left = function
+            .get_nth_param(0)
+            .ok_or_else(|| format!("`{name}` missing left parameter"))?
+            .into_int_value();
+        let right = function
+            .get_nth_param(1)
+            .ok_or_else(|| format!("`{name}` missing right parameter"))?
+            .into_int_value();
+        let intrinsic = Intrinsic::find(intrinsic_name)
+            .and_then(|intrinsic| intrinsic.get_declaration(&self.module, &[i64_ty.into()]))
+            .ok_or_else(|| format!("failed to declare `{intrinsic_name}`"))?;
+        let pair = self
+            .builder
+            .build_call(intrinsic, &[left.into(), right.into()], name)
+            .map_err(|error| format!("LLVM backend failed to call `{intrinsic_name}`: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("`{intrinsic_name}` did not return a value"))?
+            .into_struct_value();
+        let result = self
+            .builder
+            .build_extract_value(pair, 0, "result")
+            .map_err(|error| format!("LLVM backend failed to extract `{name}` result: {error}"))?
+            .into_int_value();
+        let overflow = self
+            .builder
+            .build_extract_value(pair, 1, "overflow")
+            .map_err(|error| format!("LLVM backend failed to extract `{name}` overflow: {error}"))?
+            .into_int_value();
+        self.build_trap_if(overflow, name)?;
+        self.builder
+            .build_return(Some(&result))
+            .map_err(|error| format!("LLVM backend failed to return `{name}`: {error}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(function)
+    }
+
+    fn define_wasm_checked_i64_div_rem(
+        &mut self,
+        name: &str,
+        op: &str,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let saved_block = self.builder.get_insert_block();
+        let i64_ty = self.context.i64_type();
+        let function = self.module.add_function(
+            name,
+            i64_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false),
+            None,
+        );
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        let left = function
+            .get_nth_param(0)
+            .ok_or_else(|| format!("`{name}` missing left parameter"))?
+            .into_int_value();
+        let right = function
+            .get_nth_param(1)
+            .ok_or_else(|| format!("`{name}` missing right parameter"))?
+            .into_int_value();
+        let zero = i64_ty.const_zero();
+        let is_zero = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, right, zero, "is_zero")
+            .map_err(|error| format!("LLVM backend failed to check `{name}` zero: {error}"))?;
+        let is_min = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                left,
+                i64_ty.const_int(i64::MIN as u64, true),
+                "is_min",
+            )
+            .map_err(|error| format!("LLVM backend failed to check `{name}` min: {error}"))?;
+        let is_neg_one = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                right,
+                i64_ty.const_int((-1_i64) as u64, true),
+                "is_neg_one",
+            )
+            .map_err(|error| format!("LLVM backend failed to check `{name}` -1: {error}"))?;
+        let overflow = self
+            .builder
+            .build_and(is_min, is_neg_one, "overflow")
+            .map_err(|error| {
+                format!("LLVM backend failed to combine `{name}` overflow: {error}")
+            })?;
+        let invalid = self
+            .builder
+            .build_or(is_zero, overflow, "invalid")
+            .map_err(|error| format!("LLVM backend failed to combine `{name}` checks: {error}"))?;
+        self.build_trap_if(invalid, name)?;
+        let result = match op {
+            "div" => self.builder.build_int_signed_div(left, right, "div"),
+            "rem" => self.builder.build_int_signed_rem(left, right, "rem"),
+            _ => unreachable!(),
+        }
+        .map_err(|error| format!("LLVM backend failed to build `{name}`: {error}"))?;
+        self.builder
+            .build_return(Some(&result))
+            .map_err(|error| format!("LLVM backend failed to return `{name}`: {error}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(function)
+    }
+
+    fn define_wasm_checked_i64_neg(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        let saved_block = self.builder.get_insert_block();
+        let i64_ty = self.context.i64_type();
+        let function = self.module.add_function(
+            "fa_checked_i64_neg",
+            i64_ty.fn_type(&[i64_ty.into()], false),
+            None,
+        );
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        let value = function
+            .get_nth_param(0)
+            .ok_or_else(|| "`fa_checked_i64_neg` missing value parameter".to_string())?
+            .into_int_value();
+        let overflow = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                value,
+                i64_ty.const_int(i64::MIN as u64, true),
+                "overflow",
+            )
+            .map_err(|error| {
+                format!("LLVM backend failed to check `fa_checked_i64_neg`: {error}")
+            })?;
+        self.build_trap_if(overflow, "fa_checked_i64_neg")?;
+        let result = self.builder.build_int_neg(value, "neg").map_err(|error| {
+            format!("LLVM backend failed to build `fa_checked_i64_neg`: {error}")
+        })?;
+        self.builder.build_return(Some(&result)).map_err(|error| {
+            format!("LLVM backend failed to return `fa_checked_i64_neg`: {error}")
+        })?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(function)
+    }
+
+    fn define_wasm_checked_i64_abs(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        let saved_block = self.builder.get_insert_block();
+        let i64_ty = self.context.i64_type();
+        let function = self.module.add_function(
+            "fa_checked_i64_abs",
+            i64_ty.fn_type(&[i64_ty.into()], false),
+            None,
+        );
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        let value = function
+            .get_nth_param(0)
+            .ok_or_else(|| "`fa_checked_i64_abs` missing value parameter".to_string())?
+            .into_int_value();
+        let zero = i64_ty.const_zero();
+        let overflow = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                value,
+                i64_ty.const_int(i64::MIN as u64, true),
+                "overflow",
+            )
+            .map_err(|error| {
+                format!("LLVM backend failed to check `fa_checked_i64_abs`: {error}")
+            })?;
+        self.build_trap_if(overflow, "fa_checked_i64_abs")?;
+        let is_negative = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, value, zero, "is_negative")
+            .map_err(|error| {
+                format!("LLVM backend failed to compare `fa_checked_i64_abs`: {error}")
+            })?;
+        let negated = self.builder.build_int_neg(value, "neg").map_err(|error| {
+            format!("LLVM backend failed to negate `fa_checked_i64_abs`: {error}")
+        })?;
+        let result = self
+            .builder
+            .build_select(is_negative, negated, value, "abs")
+            .map_err(|error| {
+                format!("LLVM backend failed to select `fa_checked_i64_abs`: {error}")
+            })?
+            .into_int_value();
+        self.builder.build_return(Some(&result)).map_err(|error| {
+            format!("LLVM backend failed to return `fa_checked_i64_abs`: {error}")
+        })?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(function)
+    }
+
+    fn define_wasm_checked_f64_div_rem(
+        &mut self,
+        name: &str,
+        op: &str,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let saved_block = self.builder.get_insert_block();
+        let f64_ty = self.context.f64_type();
+        let function = self.module.add_function(
+            name,
+            f64_ty.fn_type(&[f64_ty.into(), f64_ty.into()], false),
+            None,
+        );
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        let left = function
+            .get_nth_param(0)
+            .ok_or_else(|| format!("`{name}` missing left parameter"))?
+            .into_float_value();
+        let right = function
+            .get_nth_param(1)
+            .ok_or_else(|| format!("`{name}` missing right parameter"))?
+            .into_float_value();
+        let is_zero = self
+            .builder
+            .build_float_compare(
+                FloatPredicate::OEQ,
+                right,
+                f64_ty.const_float(0.0),
+                "is_zero",
+            )
+            .map_err(|error| format!("LLVM backend failed to check `{name}` zero: {error}"))?;
+        self.build_trap_if(is_zero, name)?;
+        let result = match op {
+            "div" => self.builder.build_float_div(left, right, "div"),
+            "rem" => self.builder.build_float_rem(left, right, "rem"),
+            _ => unreachable!(),
+        }
+        .map_err(|error| format!("LLVM backend failed to build `{name}`: {error}"))?;
+        self.builder
+            .build_return(Some(&result))
+            .map_err(|error| format!("LLVM backend failed to return `{name}`: {error}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(function)
+    }
+
+    fn define_wasm_checked_sqrt(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        let saved_block = self.builder.get_insert_block();
+        let f64_ty = self.context.f64_type();
+        let function = self.module.add_function(
+            "fa_checked_sqrt",
+            f64_ty.fn_type(&[f64_ty.into()], false),
+            None,
+        );
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        let value = function
+            .get_nth_param(0)
+            .ok_or_else(|| "`fa_checked_sqrt` missing value parameter".to_string())?
+            .into_float_value();
+        let is_negative = self
+            .builder
+            .build_float_compare(
+                FloatPredicate::OLT,
+                value,
+                f64_ty.const_float(0.0),
+                "is_negative",
+            )
+            .map_err(|error| format!("LLVM backend failed to check `fa_checked_sqrt`: {error}"))?;
+        self.build_trap_if(is_negative, "fa_checked_sqrt")?;
+        let sqrt = Intrinsic::find("llvm.sqrt.f64")
+            .and_then(|intrinsic| intrinsic.get_declaration(&self.module, &[f64_ty.into()]))
+            .ok_or_else(|| "failed to declare `llvm.sqrt.f64`".to_string())?;
+        let result = self
+            .builder
+            .build_call(sqrt, &[value.into()], "sqrt")
+            .map_err(|error| format!("LLVM backend failed to call `llvm.sqrt.f64`: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "`llvm.sqrt.f64` did not return a value".to_string())?
+            .into_float_value();
+        self.builder
+            .build_return(Some(&result))
+            .map_err(|error| format!("LLVM backend failed to return `fa_checked_sqrt`: {error}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(function)
+    }
+
+    fn build_trap_if(&mut self, condition: IntValue<'ctx>, label: &str) -> Result<(), String> {
+        let function = self.current_function()?;
+        let trap_block = self
+            .context
+            .append_basic_block(function, &format!("{label}.trap"));
+        let ok_block = self
+            .context
+            .append_basic_block(function, &format!("{label}.ok"));
+        self.builder
+            .build_conditional_branch(condition, trap_block, ok_block)
+            .map_err(|error| {
+                format!("LLVM backend failed to branch for `{label}` trap: {error}")
+            })?;
+        self.builder.position_at_end(trap_block);
+        let trap = Intrinsic::find("llvm.trap")
+            .and_then(|intrinsic| intrinsic.get_declaration(&self.module, &[]))
+            .ok_or_else(|| "failed to declare `llvm.trap`".to_string())?;
+        self.builder
+            .build_call(trap, &[], "trap")
+            .map_err(|error| format!("LLVM backend failed to call `llvm.trap`: {error}"))?;
+        self.builder.build_unreachable().map_err(|error| {
+            format!("LLVM backend failed to build `llvm.trap` terminator: {error}")
+        })?;
+        self.builder.position_at_end(ok_block);
+        Ok(())
     }
 
     fn calloc_function(&mut self) -> FunctionValue<'ctx> {

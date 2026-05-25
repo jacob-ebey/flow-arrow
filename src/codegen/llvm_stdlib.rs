@@ -11,45 +11,34 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         input: LlvmValue<'ctx>,
         output_ty: Ty,
     ) -> Result<LlvmValue<'ctx>, String> {
-        if let Some(plain_input_ty) = unwrap_faultable_tuple(&input.ty) {
-            if let Ty::Faultable(output_inner) = &output_ty {
-                if let Ok(plain_output_ty) = builtin_output_type_plain(name, &plain_input_ty) {
-                    if &plain_output_ty != output_inner.as_ref() && plain_output_ty != output_ty {
-                        // Fall through to the builtin-specific lowering.
-                    } else {
-                        let wrapped =
-                            self.coerce_faultable_tuple_to_faultable(input, &plain_input_ty)?;
-                        let value = self.emit_faultable_plain_builtin_call(
-                            name,
-                            wrapped,
-                            &plain_output_ty,
-                            &output_ty,
-                        )?;
-                        return Ok(LlvmValue {
-                            value,
-                            ty: output_ty,
-                        });
-                    }
-                }
-            }
+        if let Some(plain_input_ty) = unwrap_faultable_tuple(&input.ty)
+            && let Ty::Faultable(output_inner) = &output_ty
+            && let Ok(plain_output_ty) = builtin_output_type_plain(name, &plain_input_ty)
+            && (&plain_output_ty == output_inner.as_ref() || plain_output_ty == output_ty)
+        {
+            let wrapped = self.coerce_faultable_tuple_to_faultable(input, &plain_input_ty)?;
+            let value = self.emit_faultable_plain_builtin_call(
+                name,
+                wrapped,
+                &plain_output_ty,
+                &output_ty,
+            )?;
+            return Ok(LlvmValue {
+                value,
+                ty: output_ty,
+            });
         }
-        if let Ty::Faultable(input_inner) = input.ty.clone() {
-            if let Ty::Faultable(output_inner) = &output_ty {
-                if let Ok(plain_output_ty) = builtin_output_type_plain(name, input_inner.as_ref()) {
-                    if &plain_output_ty == output_inner.as_ref() || plain_output_ty == output_ty {
-                        let value = self.emit_faultable_plain_builtin_call(
-                            name,
-                            input,
-                            &plain_output_ty,
-                            &output_ty,
-                        )?;
-                        return Ok(LlvmValue {
-                            value,
-                            ty: output_ty,
-                        });
-                    }
-                }
-            }
+        if let Ty::Faultable(input_inner) = input.ty.clone()
+            && let Ty::Faultable(output_inner) = &output_ty
+            && let Ok(plain_output_ty) = builtin_output_type_plain(name, input_inner.as_ref())
+            && (&plain_output_ty == output_inner.as_ref() || plain_output_ty == output_ty)
+        {
+            let value =
+                self.emit_faultable_plain_builtin_call(name, input, &plain_output_ty, &output_ty)?;
+            return Ok(LlvmValue {
+                value,
+                ty: output_ty,
+            });
         }
         let value = match name {
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {

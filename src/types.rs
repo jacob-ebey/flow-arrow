@@ -230,9 +230,9 @@ pub(crate) fn match_types(
         }
         (Type::Var(name), actual) => {
             if let Some(bound) = vars.get(name) {
-                if bound == actual {
-                    Ok(())
-                } else if matches!(actual, Type::EmptySeq) && matches!(bound, Type::Seq(_)) {
+                if bound == actual
+                    || matches!(actual, Type::EmptySeq) && matches!(bound, Type::Seq(_))
+                {
                     Ok(())
                 } else {
                     Err(format!(

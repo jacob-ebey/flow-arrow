@@ -403,7 +403,7 @@ impl<'a> LlvmText<'a> {
         if let Some(binding) = self.codegen.foreign_c.get(name).cloned() {
             let temp = self.next_temp();
             let symbol = format!("@{}", binding.symbol);
-            self.declare(&symbol, &output_ty, &[input.ty.clone()]);
+            self.declare(&symbol, &output_ty, std::slice::from_ref(&input.ty));
             out.push_str(&format!(
                 "  {temp} = call {} {symbol}({} {})\n",
                 llvm_ty(&output_ty),
@@ -430,7 +430,7 @@ impl<'a> LlvmText<'a> {
             return Ok(value);
         }
         let symbol = format!("@flow_builtin_{}", sanitize_symbol(&canonical));
-        self.declare(&symbol, &output_ty, &[input.ty.clone()]);
+        self.declare(&symbol, &output_ty, std::slice::from_ref(&input.ty));
         let temp = self.next_temp();
         out.push_str(&format!(
             "  {temp} = call {} {symbol}({} {})\n",
@@ -524,7 +524,7 @@ impl<'a> LlvmText<'a> {
             _ => Ty::Seq(Box::new(output_item_ty)),
         };
         let symbol = format!("@flow_map_{}", sanitize_symbol(name));
-        self.declare(&symbol, &output_ty, &[input.ty.clone()]);
+        self.declare(&symbol, &output_ty, std::slice::from_ref(&input.ty));
         let temp = self.next_temp();
         out.push_str(&format!(
             "  {temp} = call {} {symbol}({} {}) ; map {name}\n",
@@ -556,7 +556,7 @@ impl<'a> LlvmText<'a> {
             Ty::Seq(Box::new(Ty::Fault)),
         ]);
         let symbol = format!("@flow_fault_map_{}", sanitize_symbol(name));
-        self.declare(&symbol, &output_ty, &[input.ty.clone()]);
+        self.declare(&symbol, &output_ty, std::slice::from_ref(&input.ty));
         let temp = self.next_temp();
         out.push_str(&format!(
             "  {temp} = call {} {symbol}({} {}) ; fault map {name}\n",
@@ -586,7 +586,7 @@ impl<'a> LlvmText<'a> {
             ));
         }
         let symbol = format!("@flow_filter_{}", sanitize_symbol(name));
-        self.declare(&symbol, &input.ty, &[input.ty.clone()]);
+        self.declare(&symbol, &input.ty, std::slice::from_ref(&input.ty));
         let temp = self.next_temp();
         out.push_str(&format!(
             "  {temp} = call {} {symbol}({} {}) ; filter {name}\n",
@@ -719,7 +719,7 @@ impl<'a> LlvmText<'a> {
         subject: TextValue,
     ) -> Result<TextValue, String> {
         let symbol = "@flow_match";
-        self.declare(symbol, &output_ty, &[subject.ty.clone()]);
+        self.declare(symbol, &output_ty, std::slice::from_ref(&subject.ty));
         let temp = self.next_temp();
         out.push_str(&format!(
             "  {temp} = call {} {symbol}({} {}) ; match with {} arm(s)\n",

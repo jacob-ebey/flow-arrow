@@ -330,6 +330,17 @@ struct Checker<'a> {
     types: HashMap<String, Type>,
 }
 
+struct TypeStageParams<'a> {
+    resolved: &'a ResolvedModule,
+    callable: &'a Callable,
+    kind: CallableKind,
+    stage: &'a Stage,
+    input: &'a Type,
+    is_last: bool,
+    env: &'a mut HashMap<String, Type>,
+    variables: &'a mut Vec<TypedPort>,
+}
+
 #[allow(dead_code)]
 impl<'a> Checker<'a> {
     fn new(module: &'a Module) -> Result<Self, String> {
@@ -543,34 +554,33 @@ impl<'a> Checker<'a> {
         let mut stages = Vec::new();
         for (index, stage) in chain.stages.iter().enumerate() {
             let is_last = index + 1 == chain.stages.len();
-            let typed_stage = self.type_stage(
+            let typed_stage = self.type_stage(TypeStageParams {
                 resolved,
                 callable,
                 kind,
                 stage,
-                &value_type,
+                input: &value_type,
                 is_last,
                 env,
                 variables,
-            )?;
+            })?;
             value_type = typed_stage.output.clone();
             stages.push(typed_stage);
         }
         Ok(TypedChain { source, stages })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn type_stage(
-        &self,
-        resolved: &ResolvedModule,
-        callable: &Callable,
-        kind: CallableKind,
-        stage: &Stage,
-        input: &Type,
-        is_last: bool,
-        env: &mut HashMap<String, Type>,
-        variables: &mut Vec<TypedPort>,
-    ) -> Result<TypedStage, String> {
+    fn type_stage(&self, params: TypeStageParams<'_>) -> Result<TypedStage, String> {
+        let TypeStageParams {
+            resolved,
+            callable,
+            kind,
+            stage,
+            input,
+            is_last,
+            env,
+            variables,
+        } = params;
         let input_type = input.clone();
         let symbol = stage_symbol_id(resolved, stage);
         let (label, output, kind) = match stage {
@@ -845,16 +855,16 @@ impl<'a> Checker<'a> {
                 | Stage::Scan { .. }
                 | Stage::Match { .. } => {}
             }
-            let typed = self.type_stage(
+            let typed = self.type_stage(TypeStageParams {
                 resolved,
-                &inline_callable,
-                CallableKind::Node,
+                callable: &inline_callable,
+                kind: CallableKind::Node,
                 stage,
-                &value_type,
-                false,
-                &mut env,
-                &mut variables,
-            )?;
+                input: &value_type,
+                is_last: false,
+                env: &mut env,
+                variables: &mut variables,
+            })?;
             value_type = typed.output.clone();
             out.push(typed);
         }
@@ -1943,25 +1953,24 @@ impl<'a> Checker<'a> {
 
     fn resolve_node(&self, callable: &Callable, name: &str) -> Result<CallableInfo, String> {
         let node_ref = parse_static_node_ref(name);
-        if node_ref.args.is_empty() {
-            if let Some(param) = callable
+        if node_ref.args.is_empty()
+            && let Some(param) = callable
                 .node_params
                 .iter()
                 .find(|param| param.name == node_ref.base)
-            {
-                let input = self.parse_declared_type(&param.input)?;
-                let output = self.parse_declared_type(&param.output)?;
-                return Ok(CallableInfo {
-                    signatures: vec![Signature { input, output }],
-                    reduce_signatures: Vec::new(),
-                    node_params: Vec::new(),
-                    kind: CallableKind::Node,
-                    effect: Effect::Pure,
-                    runtime: RuntimeSupport::DirectBuiltin,
-                    is_stdlib: false,
-                    runtime_name: param.name.clone(),
-                });
-            }
+        {
+            let input = self.parse_declared_type(&param.input)?;
+            let output = self.parse_declared_type(&param.output)?;
+            return Ok(CallableInfo {
+                signatures: vec![Signature { input, output }],
+                reduce_signatures: Vec::new(),
+                node_params: Vec::new(),
+                kind: CallableKind::Node,
+                effect: Effect::Pure,
+                runtime: RuntimeSupport::DirectBuiltin,
+                is_stdlib: false,
+                runtime_name: param.name.clone(),
+            });
         }
         let info = self
             .symbols

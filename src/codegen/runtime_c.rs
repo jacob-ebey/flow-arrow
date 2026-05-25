@@ -3529,7 +3529,10 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 ));
             }
             "eq" | "lt" | "gt" | "le" | "ge" => {
-                out.push_str(&format!("  {target} = {};\n", compare_expr(name, input)));
+                out.push_str(&format!(
+                    "  {target} = {};\n",
+                    compare_expr(name, input, input_ty)
+                ));
             }
             "not_empty" => out.push_str(&format!("  {target} = {input}.len > 0;\n")),
             "is_empty" if matches!(input_ty, Ty::Bytes) => {
@@ -4776,8 +4779,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     _ => return false,
                 }
             }
-            if let [first, second] = stages {
-                if let (
+            if let [first, second] = stages
+                && let (
                     TypedStageKind::Call {
                         name: first_name, ..
                     },
@@ -4785,28 +4788,27 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                         name: second_name, ..
                     },
                 ) = (&first.kind, &second.kind)
+            {
+                if matches_pair_source(&chain.source, &left_port.name, &right_port.name)
+                    && self.is_matmul_name(first_name)
+                    && self.fusion_for_name(second_name) == Some(Fusion::NestedSum)
                 {
-                    if matches_pair_source(&chain.source, &left_port.name, &right_port.name)
-                        && self.is_matmul_name(first_name)
-                        && self.fusion_for_name(second_name) == Some(Fusion::NestedSum)
-                    {
-                        reductions.insert(binding.to_string(), MatrixReductionTerm::ProductSum);
-                        continue;
-                    }
-                    if matches_pair_source(&chain.source, &left_port.name, &vector_port.name)
-                        && self.is_matvec_name(first_name)
-                        && self.fusion_for_name(second_name) == Some(Fusion::Sum)
-                    {
-                        reductions.insert(binding.to_string(), MatrixReductionTerm::MatvecSum);
-                        continue;
-                    }
-                    if matches!(&chain.source.kind, TypedEndpointKind::Variable(name) if name == &left_port.name)
-                        && self.is_map_sum_callable(first_name)
-                        && self.fusion_for_name(second_name) == Some(Fusion::Sum)
-                    {
-                        reductions.insert(binding.to_string(), MatrixReductionTerm::RowSumTotal);
-                        continue;
-                    }
+                    reductions.insert(binding.to_string(), MatrixReductionTerm::ProductSum);
+                    continue;
+                }
+                if matches_pair_source(&chain.source, &left_port.name, &vector_port.name)
+                    && self.is_matvec_name(first_name)
+                    && self.fusion_for_name(second_name) == Some(Fusion::Sum)
+                {
+                    reductions.insert(binding.to_string(), MatrixReductionTerm::MatvecSum);
+                    continue;
+                }
+                if matches!(&chain.source.kind, TypedEndpointKind::Variable(name) if name == &left_port.name)
+                    && self.is_map_sum_callable(first_name)
+                    && self.fusion_for_name(second_name) == Some(Fusion::Sum)
+                {
+                    reductions.insert(binding.to_string(), MatrixReductionTerm::RowSumTotal);
+                    continue;
                 }
             }
             if let [stage] = stages
