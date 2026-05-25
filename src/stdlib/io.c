@@ -7,8 +7,8 @@ static FaBytes fa_read_stdin(void) {
   if (!buf) fa_die_alloc();
   for (;;) {
     if (len == cap) {
-      cap *= 2;
-      char *next = (char *)realloc(buf, cap + 1);
+      cap = fa_checked_size_mul(cap, 2, "read_stdin: input too large");
+      char *next = (char *)realloc(buf, fa_checked_size_add(cap, 1, "read_stdin: input too large"));
       if (!next) fa_die_alloc();
       buf = next;
     }

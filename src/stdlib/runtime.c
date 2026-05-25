@@ -21,6 +21,11 @@ static size_t fa_checked_size_mul(size_t left, size_t right, const char *message
   return left * right;
 }
 
+static int64_t fa_checked_size_to_i64(size_t value, const char *message) {
+  if (value > (size_t)INT64_MAX) fa_die_usage(message);
+  return (int64_t)value;
+}
+
 static int64_t fa_checked_i64_add(int64_t left, int64_t right) {
   int64_t out;
   if (__builtin_add_overflow(left, right, &out)) fa_die_usage("add: integer overflow");
@@ -74,6 +79,10 @@ static double fa_checked_f64_rem(double left, double right) {
 static double fa_checked_sqrt(double value) {
   if (value < 0.0) fa_die_usage("sqrt: negative input");
   return sqrt(value);
+}
+
+static int fa_preview_len(size_t len) {
+  return len > 240 ? 240 : (int)len;
 }
 
 static _Thread_local FaScopedAllocator fa_current_allocator = { NULL, NULL };
@@ -299,7 +308,7 @@ static FaUnit fa_unit(void) {
 }
 
 static char *fa_copy_bytes(const char *bytes, size_t len) {
-  char *copy = (char *)fa_malloc(len + 1);
+  char *copy = (char *)fa_malloc(fa_checked_size_add(len, 1, "byte copy length overflow"));
   memcpy(copy, bytes, len);
   copy[len] = '\0';
   return copy;
@@ -334,7 +343,8 @@ static FaFault fa_fault_cstr(const char *message) {
 }
 
 static void fa_exit_fault(FaFault fault) {
-  fprintf(stderr, "%.*s\n", (int)fault.message.len, fault.message.bytes);
+  if (fault.message.len > 0) fwrite(fault.message.bytes, 1, fault.message.len, stderr);
+  fputc('\n', stderr);
   exit(65);
 }
 

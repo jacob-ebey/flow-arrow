@@ -90,8 +90,9 @@ static void *fa_http_request_alloc(void *ctx, size_t size) {
 static FaFault fa_http_fault2(const char *prefix, const char *detail) {
   size_t prefix_len = strlen(prefix);
   size_t detail_len = strlen(detail);
-  size_t len = prefix_len + 2 + detail_len;
-  char *message = (char *)malloc(len + 1);
+  size_t len = fa_checked_size_add(prefix_len, 2, "std.http: fault message length overflow");
+  len = fa_checked_size_add(len, detail_len, "std.http: fault message length overflow");
+  char *message = (char *)malloc(fa_checked_size_add(len, 1, "std.http: fault message length overflow"));
   if (!message) fa_die_alloc();
   memcpy(message, prefix, prefix_len);
   memcpy(message + prefix_len, ": ", 2);
@@ -344,11 +345,9 @@ static FaFaultable_Int fa_http_serve(FaTuple_HttpListener_Stream_HttpResponse in
     return FaFaultable_Int_fault(fault);
   }
 
-  fprintf(stderr, "std.http listening on %s://%.*s:%lld\n",
-      listener.config.tls ? "https" : "http",
-      (int)listener.config.host.len,
-      listener.config.host.bytes,
-      (long long)listener.config.port);
+  fprintf(stderr, "std.http listening on %s://", listener.config.tls ? "https" : "http");
+  if (listener.config.host.len > 0) fwrite(listener.config.host.bytes, 1, listener.config.host.len, stderr);
+  fprintf(stderr, ":%lld\n", (long long)listener.config.port);
 
   while (h2o_evloop_run(state.loop, INT32_MAX) == 0) {
   }
@@ -373,7 +372,7 @@ static bool fa_http_route(FaTuple_HttpRequest_Bytes_Bytes input) {
   }
   return path.len > 0
       && path.bytes[0] == '/'
-      && request.path.len + 1 == path.len
+      && request.path.len == path.len - 1
       && memcmp(request.path.bytes, path.bytes + 1, request.path.len) == 0;
 }
 
@@ -403,16 +402,18 @@ static FaHttpResponse fa_http_with_status(FaTuple_HttpResponse_Int input) {
 static FaHttpResponse fa_http_with_header(FaTuple_HttpResponse_Bytes_Bytes input) {
   FaHttpResponse response = input.f0;
   size_t count = response.header_names.count;
-  FaBytes *names = (FaBytes *)realloc(response.header_names.items, (count + 1) * sizeof(FaBytes));
+  size_t next_count = fa_checked_size_add(count, 1, "std.http: response header count overflow");
+  size_t bytes = fa_checked_size_mul(next_count, sizeof(FaBytes), "std.http: response header count overflow");
+  FaBytes *names = (FaBytes *)realloc(response.header_names.items, bytes);
   if (!names) fa_die_alloc();
-  FaBytes *values = (FaBytes *)realloc(response.header_values.items, (count + 1) * sizeof(FaBytes));
+  FaBytes *values = (FaBytes *)realloc(response.header_values.items, bytes);
   if (!values) fa_die_alloc();
   names[count] = input.f1;
   values[count] = input.f2;
   response.header_names.items = names;
-  response.header_names.count = count + 1;
+  response.header_names.count = next_count;
   response.header_values.items = values;
-  response.header_values.count = count + 1;
+  response.header_values.count = next_count;
   return response;
 }
 

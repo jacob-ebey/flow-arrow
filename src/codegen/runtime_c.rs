@@ -3498,7 +3498,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             "codes_to_bytes" => {
                 out.push_str(&format!("  {target} = fa_codes_to_bytes({input});\n"))
             }
-            "byte_length" => out.push_str(&format!("  {target} = (int64_t){input}.len;\n")),
+            "byte_length" => out.push_str(&format!(
+                "  {target} = fa_checked_size_to_i64({input}.len, \"byte_length: input is too large\");\n"
+            )),
             "concat_bytes" if matches!(output_ty, Ty::Faultable(inner) if inner.as_ref() == &Ty::Bytes) =>
             {
                 self.emit_faultable_concat_bytes(out, target, input);
@@ -3559,7 +3561,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             "select" => out.push_str(&format!(
                 "  {target} = {input}.f0 ? {input}.f1 : {input}.f2;\n"
             )),
-            "length" => out.push_str(&format!("  {target} = (int64_t){input}.count;\n")),
+            "length" => out.push_str(&format!(
+                "  {target} = fa_checked_size_to_i64({input}.count, \"length: sequence is too large\");\n"
+            )),
             "is_empty" if matches!(input_ty, Ty::Seq(_)) => {
                 out.push_str(&format!("  {target} = {input}.count == 0;\n"))
             }
@@ -3767,7 +3771,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         out.push_str("  } else {\n");
         out.push_str("    for (;;) {\n");
         out.push_str(&format!(
-                "      if ({count} == {cap}) {{ {cap} *= 2; {item_c_ty} *next_items = ({item_c_ty} *)fa_realloc({items}, {cap} * sizeof({item_c_ty})); {items} = next_items; }}\n"
+            "      if ({count} == {cap}) {{ {cap} = fa_checked_size_mul({cap}, 2, \"stream.to_seq: sequence too large\"); {item_c_ty} *next_items = ({item_c_ty} *)fa_realloc({items}, fa_checked_size_mul({cap}, sizeof({item_c_ty}), \"stream.to_seq: sequence too large\")); {items} = next_items; }}\n"
         ));
         out.push_str(&format!("      {item_c_ty} {item};\n"));
         out.push_str(&format!("      FaFault {fault};\n"));
@@ -3997,7 +4001,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
 
     fn emit_inner_length(&mut self, out: &mut String, target: &str, input: &str) {
         out.push_str(&format!(
-            "  {target} = {input}.count == 0 ? 0 : (int64_t){input}.items[0].count;\n"
+            "  {target} = {input}.count == 0 ? 0 : fa_checked_size_to_i64({input}.items[0].count, \"cols: row is too large\");\n"
         ));
     }
 
@@ -4233,6 +4237,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         out.push_str(&format!(
             "  if ({input}.f1 < 0) fa_die_usage(\"fill: count must be non-negative\");\n"
         ));
+        out.push_str(&format!(
+            "  if ((uint64_t){input}.f1 > (uint64_t)SIZE_MAX) fa_die_usage(\"fill: count is too large\");\n"
+        ));
         out.push_str(&format!("  {target} = {new_fn}((size_t){input}.f1);\n"));
         out.push_str(&format!(
             "  for (size_t {i} = 0; {i} < {target}.count; {i}++) {target}.items[{i}] = {input}.f0;\n"
@@ -4325,7 +4332,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     ) -> Result<(), String> {
         let new_fn = self.types.seq_new_name(output_ty)?;
         let i = self.next_temp();
-        out.push_str(&format!("  {target} = {new_fn}({input}.f0.count + 1);\n"));
+        out.push_str(&format!(
+            "  {target} = {new_fn}(fa_checked_size_add({input}.f0.count, 1, \"append: sequence too large\"));\n"
+        ));
         out.push_str(&format!(
             "  for (size_t {i} = 0; {i} < {input}.f0.count; {i}++) {target}.items[{i}] = {input}.f0.items[{i}];\n"
         ));

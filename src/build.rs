@@ -2119,7 +2119,7 @@ impl GpuRuntime {
             });
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(len.div_ceil(64) as u32, 1, 1);
+            pass.dispatch_workgroups(checked_workgroups(len, "map input length"), 1, 1);
         }
         let readback = self.readback_buffer(byte_len);
         encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback, 0, byte_len);
@@ -2197,7 +2197,7 @@ impl GpuRuntime {
             });
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(output_len.div_ceil(64) as u32, 1, 1);
+            pass.dispatch_workgroups(checked_workgroups(output_len, "reduce output length"), 1, 1);
         }
         self.queue.submit(Some(encoder.finish()));
         let bytes =
@@ -2279,7 +2279,7 @@ impl GpuRuntime {
             });
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(work_items.div_ceil(64) as u32, 1, 1);
+            pass.dispatch_workgroups(checked_workgroups(work_items, "GPU program work item count"), 1, 1);
         }
         self.queue.submit(Some(encoder.finish()));
         let bytes = self.dispatch_reduce_buffer("f32", 0, output_buffer, work_items, 0.0, false);
@@ -2371,7 +2371,7 @@ impl GpuRuntime {
                 });
                 pass.set_pipeline(&pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
-                pass.dispatch_workgroups(output_len.div_ceil(64) as u32, 1, 1);
+                pass.dispatch_workgroups(checked_workgroups(output_len, "reduce output length"), 1, 1);
             }
             self.queue.submit(Some(encoder.finish()));
             keep_alive.push(current_buffer);
@@ -2393,7 +2393,7 @@ impl GpuRuntime {
 
     fn map_params_buffer(&self, len: usize) -> wgpu::Buffer {
         let mut params = [0u8; 16];
-        params[0..4].copy_from_slice(&(len as u32).to_le_bytes());
+        params[0..4].copy_from_slice(&checked_usize_u32(len, "GPU map input length").to_le_bytes());
         self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flowarrow.gpu.map.params"),
             contents: &params,
@@ -2409,7 +2409,7 @@ impl GpuRuntime {
         include_identity: bool,
     ) -> wgpu::Buffer {
         let mut params = [0u8; 16];
-        params[0..4].copy_from_slice(&(len as u32).to_le_bytes());
+        params[0..4].copy_from_slice(&checked_usize_u32(len, "GPU reduce input length").to_le_bytes());
         params[4..8].copy_from_slice(&op.to_le_bytes());
         params[8..12].copy_from_slice(&identity.to_bytes());
         params[12..16].copy_from_slice(&(u32::from(include_identity)).to_le_bytes());
@@ -2431,7 +2431,7 @@ impl GpuRuntime {
         let mut params = [0u8; 32];
         params[0..4].copy_from_slice(&start.to_le_bytes());
         params[4..8].copy_from_slice(&step.to_le_bytes());
-        params[8..12].copy_from_slice(&(len as u32).to_le_bytes());
+        params[8..12].copy_from_slice(&checked_usize_u32(len, "GPU range reduce length").to_le_bytes());
         params[12..16].copy_from_slice(&op.to_le_bytes());
         params[16..20].copy_from_slice(&identity.to_le_bytes());
         self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -2453,14 +2453,14 @@ impl GpuRuntime {
             fail("FlowArrow GPU generated program exceeded runtime descriptor capacity");
         }
         let mut words = [0u32; 32];
-        words[0] = checked_u32(work_items as i64, "GPU program work item count");
+        words[0] = checked_usize_u32(work_items, "GPU program work item count");
         words[1] = iterations;
         for (index, slice) in slices.iter().enumerate() {
-            words[2 + index] = checked_u32(slice.len() as i64, "GPU slice length");
+            words[2 + index] = checked_usize_u32(slice.len(), "GPU slice length");
         }
         for (index, matrix) in matrices.iter().enumerate() {
-            words[6 + index * 2] = checked_u32(matrix.rows as i64, "GPU matrix row count");
-            words[7 + index * 2] = checked_u32(matrix.cols as i64, "GPU matrix column count");
+            words[6 + index * 2] = checked_usize_u32(matrix.rows, "GPU matrix row count");
+            words[7 + index * 2] = checked_usize_u32(matrix.cols, "GPU matrix column count");
         }
         for (index, scalar) in scalars.iter().enumerate() {
             words[14 + index] = scalar.to_bits();
@@ -2622,7 +2622,7 @@ impl GpuRuntime {
             });
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(len.div_ceil(64) as u32, 1, 1);
+            pass.dispatch_workgroups(checked_workgroups(len, "map input length"), 1, 1);
         }
         let readback = self.readback_buffer(byte_len);
         encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback, 0, byte_len);
@@ -2704,7 +2704,7 @@ impl GpuRuntime {
             });
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(output_len.div_ceil(64) as u32, 1, 1);
+            pass.dispatch_workgroups(checked_workgroups(output_len, "reduce output length"), 1, 1);
         }
         self.queue.submit(Some(encoder.finish()));
         let bytes = self
@@ -2787,7 +2787,7 @@ impl GpuRuntime {
             });
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(work_items.div_ceil(64) as u32, 1, 1);
+            pass.dispatch_workgroups(checked_workgroups(work_items, "GPU program work item count"), 1, 1);
         }
         self.queue.submit(Some(encoder.finish()));
         let bytes = self
@@ -2883,7 +2883,7 @@ impl GpuRuntime {
                 });
                 pass.set_pipeline(&pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
-                pass.dispatch_workgroups(output_len.div_ceil(64) as u32, 1, 1);
+                pass.dispatch_workgroups(checked_workgroups(output_len, "reduce output length"), 1, 1);
             }
             self.queue.submit(Some(encoder.finish()));
             keep_alive.push(current_buffer);
@@ -2905,7 +2905,7 @@ impl GpuRuntime {
 
     fn map_params_buffer(&self, len: usize) -> wgpu::Buffer {
         let mut params = [0u8; 16];
-        params[0..4].copy_from_slice(&(len as u32).to_le_bytes());
+        params[0..4].copy_from_slice(&checked_usize_u32(len, "GPU map input length").to_le_bytes());
         self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flowarrow.gpu.map.params"),
             contents: &params,
@@ -2921,7 +2921,7 @@ impl GpuRuntime {
         include_identity: bool,
     ) -> wgpu::Buffer {
         let mut params = [0u8; 16];
-        params[0..4].copy_from_slice(&(len as u32).to_le_bytes());
+        params[0..4].copy_from_slice(&checked_usize_u32(len, "GPU reduce input length").to_le_bytes());
         params[4..8].copy_from_slice(&op.to_le_bytes());
         params[8..12].copy_from_slice(&identity.to_bytes());
         params[12..16].copy_from_slice(&(u32::from(include_identity)).to_le_bytes());
@@ -2943,7 +2943,7 @@ impl GpuRuntime {
         let mut params = [0u8; 32];
         params[0..4].copy_from_slice(&start.to_le_bytes());
         params[4..8].copy_from_slice(&step.to_le_bytes());
-        params[8..12].copy_from_slice(&(len as u32).to_le_bytes());
+        params[8..12].copy_from_slice(&checked_usize_u32(len, "GPU range reduce length").to_le_bytes());
         params[12..16].copy_from_slice(&op.to_le_bytes());
         params[16..20].copy_from_slice(&identity.to_le_bytes());
         self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -2965,14 +2965,14 @@ impl GpuRuntime {
             fail("FlowArrow GPU generated program exceeded runtime descriptor capacity");
         }
         let mut words = [0u32; 32];
-        words[0] = checked_u32(work_items as i64, "GPU program work item count");
+        words[0] = checked_usize_u32(work_items, "GPU program work item count");
         words[1] = iterations;
         for (index, slice) in slices.iter().enumerate() {
-            words[2 + index] = checked_u32(slice.len() as i64, "GPU slice length");
+            words[2 + index] = checked_usize_u32(slice.len(), "GPU slice length");
         }
         for (index, matrix) in matrices.iter().enumerate() {
-            words[6 + index * 2] = checked_u32(matrix.rows as i64, "GPU matrix row count");
-            words[7 + index * 2] = checked_u32(matrix.cols as i64, "GPU matrix column count");
+            words[6 + index * 2] = checked_usize_u32(matrix.rows, "GPU matrix row count");
+            words[7 + index * 2] = checked_usize_u32(matrix.cols, "GPU matrix column count");
         }
         for (index, scalar) in scalars.iter().enumerate() {
             words[14 + index] = scalar.to_bits();
@@ -3094,6 +3094,16 @@ fn checked_u32(value: i64, label: &str) -> u32 {
     u32::try_from(value).unwrap_or_else(|_| {
         fail(&format!("FlowArrow GPU {label} exceeds 32-bit runtime limits"));
     })
+}
+
+fn checked_usize_u32(value: usize, label: &str) -> u32 {
+    u32::try_from(value).unwrap_or_else(|_| {
+        fail(&format!("FlowArrow GPU {label} exceeds 32-bit runtime limits"));
+    })
+}
+
+fn checked_workgroups(items: usize, label: &str) -> u32 {
+    checked_usize_u32(items.div_ceil(64), label)
 }
 
 fn f64_to_f32(values: &[f64]) -> Vec<f32> {

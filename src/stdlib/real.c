@@ -16,7 +16,7 @@ static FaFaultable_Real fa_parse_real(FaBytes bytes) {
   while (end && isspace((unsigned char)*end)) end++;
   if (errno == ERANGE || end == start || !end || *end != '\0') {
     char message[512];
-    snprintf(message, sizeof(message), "expected Real, got \"%.*s\"", (int)bytes.len, bytes.bytes);
+    snprintf(message, sizeof(message), "expected Real, got \"%.*s\"", fa_preview_len(bytes.len), bytes.bytes);
     fa_free(copy);
     return FaFaultable_Real_fault(fa_fault_cstr(message));
   }

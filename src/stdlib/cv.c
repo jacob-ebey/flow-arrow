@@ -619,7 +619,7 @@ static FaFaultable_Bytes fa_cv_encode_ppm(FaCvImage image) {
   if (fa_cv_add_overflows((size_t)header_len, raster_len, &total_len)) {
     return FaFaultable_Bytes_fault(fa_fault_cstr("encode_ppm: image is too large"));
   }
-  char *out = (char *)malloc(total_len + 1);
+  char *out = (char *)malloc(fa_checked_size_add(total_len, 1, "encode_ppm: image is too large"));
   if (!out) fa_die_alloc();
   memcpy(out, header, (size_t)header_len);
   unsigned char *pixels = (unsigned char *)out + header_len;
@@ -653,7 +653,7 @@ static FaFaultable_Bytes fa_cv_encode_pgm(FaCvImage image) {
   if (fa_cv_add_overflows((size_t)header_len, count, &total_len)) {
     return FaFaultable_Bytes_fault(fa_fault_cstr("encode_pgm: image is too large"));
   }
-  char *out = (char *)malloc(total_len + 1);
+  char *out = (char *)malloc(fa_checked_size_add(total_len, 1, "encode_pgm: image is too large"));
   if (!out) fa_die_alloc();
   memcpy(out, header, (size_t)header_len);
   unsigned char *pixels = (unsigned char *)out + header_len;

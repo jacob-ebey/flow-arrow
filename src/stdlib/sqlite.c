@@ -23,10 +23,15 @@ static FaFault fa_sqlite_fault_message(const char *operation, int rc, const char
   size_t rc_len = strlen(rc_buf);
   const char *prefix = "std.sqlite: ";
   size_t prefix_len = strlen(prefix);
-  size_t len = prefix_len + op_len + 10 + rc_len + 3 + msg_len;
-  char *out = (char *)malloc(len + 1);
+  size_t len = fa_checked_size_add(prefix_len, op_len, "std.sqlite: fault message length overflow");
+  len = fa_checked_size_add(len, 10, "std.sqlite: fault message length overflow");
+  len = fa_checked_size_add(len, rc_len, "std.sqlite: fault message length overflow");
+  len = fa_checked_size_add(len, 3, "std.sqlite: fault message length overflow");
+  len = fa_checked_size_add(len, msg_len, "std.sqlite: fault message length overflow");
+  size_t out_len = fa_checked_size_add(len, 1, "std.sqlite: fault message length overflow");
+  char *out = (char *)malloc(out_len);
   if (!out) fa_die_alloc();
-  snprintf(out, len + 1, "%s%s failed (%s): %s", prefix, operation, rc_buf, message);
+  snprintf(out, out_len, "%s%s failed (%s): %s", prefix, operation, rc_buf, message);
   return fa_fault_bytes(fa_bytes_owned(out, strlen(out)));
 }
 
@@ -436,8 +441,9 @@ static FaFaultable_Tuple_SqliteConnection_Seq_SqliteRow fa_sqlite_query_all(FaTu
   if (!items) fa_die_alloc();
   for (;;) {
     if (count == cap) {
-      cap *= 2;
-      FaSqliteRow *next = (FaSqliteRow *)realloc(items, cap * sizeof(FaSqliteRow));
+      cap = fa_checked_size_mul(cap, 2, "std.sqlite: row list size overflow");
+      size_t bytes = fa_checked_size_mul(cap, sizeof(FaSqliteRow), "std.sqlite: row list size overflow");
+      FaSqliteRow *next = (FaSqliteRow *)realloc(items, bytes);
       if (!next) fa_die_alloc();
       items = next;
     }
@@ -467,7 +473,7 @@ static FaFaultable_Tuple_SqliteConnection_Seq_SqliteRow fa_sqlite_query_all(FaTu
 }
 
 static int64_t fa_sqlite_column_count(FaSqliteRow row) {
-  return (int64_t)row.count;
+  return fa_checked_size_to_i64(row.count, "std.sqlite: column count exceeds Int range");
 }
 
 static FaFaultable_Bytes fa_sqlite_column_name(FaTuple_SqliteRow_Int input) {

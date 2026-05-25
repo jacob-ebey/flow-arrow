@@ -344,7 +344,14 @@ impl Json {
 
     fn as_u32(&self) -> Option<u32> {
         match self {
-            Json::Number(value) if *value >= 0.0 => Some(*value as u32),
+            Json::Number(value)
+                if value.is_finite()
+                    && value.fract() == 0.0
+                    && *value >= 0.0
+                    && *value <= u32::MAX as f64 =>
+            {
+                Some(*value as u32)
+            }
             _ => None,
         }
     }
