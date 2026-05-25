@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::module_resolver;
 use crate::monomorphize;
 use crate::stdlib::{self, RuntimeSupport};
+use crate::typecheck::{self, CheckMode, TypedModule};
 use crate::types::{
     Signature, Type as Ty, contains_empty_seq, parse_type, sequence_item_type, stdlib_type_symbol,
     substitute_partial,
@@ -53,7 +54,7 @@ pub fn emit_module(_module: &Module) -> Result<String, String> {
 }
 
 pub(crate) struct LoweredModule {
-    module: Module,
+    typed: TypedModule,
 }
 
 impl LoweredModule {
@@ -69,17 +70,18 @@ impl LoweredModule {
     }
 
     fn from_expanded(module: Module) -> Result<Self, String> {
-        Ok(Self {
-            module: monomorphize::expand_module(&module)?,
-        })
+        let module = monomorphize::expand_module(&module)?;
+        let resolved = module_resolver::ResolvedModule::synthetic(module);
+        let typed = typecheck::typed_resolved_module(resolved, CheckMode::Library)?;
+        Ok(Self { typed })
     }
 
     fn typed(&self) -> Result<TypedCodegen<'_>, String> {
-        TypedCodegen::new(&self.module)
+        TypedCodegen::from_typed(&self.typed)
     }
 
     fn has_foreign_js(&self) -> bool {
-        self.module.declarations.iter().any(|decl| {
+        self.typed.module().declarations.iter().any(|decl| {
             matches!(
                 decl,
                 Decl::Foreign(ForeignBlock {
@@ -92,7 +94,8 @@ impl LoweredModule {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn has_foreign(&self) -> bool {
-        self.module
+        self.typed
+            .module()
             .declarations
             .iter()
             .any(|decl| matches!(decl, Decl::Foreign(_)))
@@ -489,6 +492,7 @@ enum BroadcastSide {
 
 struct TypedCodegen<'a> {
     module: &'a Module,
+    typed: Option<&'a TypedModule>,
     temp: usize,
     parallel_helper: usize,
     stream_helper: usize,
@@ -510,9 +514,19 @@ struct ForeignCBinding {
 }
 
 impl<'a> TypedCodegen<'a> {
+    #[allow(dead_code)]
     fn new(module: &'a Module) -> Result<Self, String> {
+        Self::new_inner(module, None)
+    }
+
+    fn from_typed(typed: &'a TypedModule) -> Result<Self, String> {
+        Self::new_inner(typed.module(), Some(typed))
+    }
+
+    fn new_inner(module: &'a Module, typed: Option<&'a TypedModule>) -> Result<Self, String> {
         let mut codegen = Self {
             module,
+            typed,
             temp: 0,
             parallel_helper: 0,
             stream_helper: 0,
@@ -1350,15 +1364,16 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             {
                 return Err(format!("duplicate declaration `{}`", callable.name));
             }
+            let signature = match self.typed_signature(&callable.name)? {
+                Some(signature) => signature,
+                None => Signature {
+                    input: self.port_types(&callable.inputs)?,
+                    output: self.port_types(&callable.outputs)?,
+                },
+            };
             if self
                 .signatures
-                .insert(
-                    callable.name.clone(),
-                    Signature {
-                        input: self.port_types(&callable.inputs)?,
-                        output: self.port_types(&callable.outputs)?,
-                    },
-                )
+                .insert(callable.name.clone(), signature)
                 .is_some()
             {
                 return Err(format!("duplicate declaration `{}`", callable.name));
@@ -1402,15 +1417,16 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                         ));
                     }
                 }
+                let signature = match self.typed_signature(&node.name)? {
+                    Some(signature) => signature,
+                    None => Signature {
+                        input: self.port_types(&node.inputs)?,
+                        output: self.port_types(&node.outputs)?,
+                    },
+                };
                 if self
                     .signatures
-                    .insert(
-                        node.name.clone(),
-                        Signature {
-                            input: self.port_types(&node.inputs)?,
-                            output: self.port_types(&node.outputs)?,
-                        },
-                    )
+                    .insert(node.name.clone(), signature)
                     .is_some()
                 {
                     return Err(format!("duplicate declaration `{}`", node.name));
@@ -1418,6 +1434,10 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             }
         }
         Ok(())
+    }
+
+    fn typed_signature(&self, name: &str) -> Result<Option<Signature>, String> {
+        Ok(self.typed.and_then(|typed| typed.signature_for(name)))
     }
 
     fn port_types(&self, ports: &[Port]) -> Result<Ty, String> {

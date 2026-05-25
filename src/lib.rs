@@ -1072,6 +1072,32 @@ extern node demo(value: Int) -> out: Int {
     }
 
     #[test]
+    fn typed_module_records_symbol_ids_for_stage_refs() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { add }
+
+            program main(args: Args) -> exit_code: Int {
+                (1, 2) -> add -> $exit_code
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        let typed = typecheck::typed_module(&module).expect("typed module");
+        let add = typed
+            .resolved
+            .symbol_id("add")
+            .expect("imported add symbol");
+        let main = typed
+            .callables
+            .iter()
+            .find(|callable| callable.name == "main")
+            .expect("main callable");
+        assert_eq!(main.chains[0].stages[0].symbol, Some(add));
+        assert_eq!(main.chains[0].stages[0].input.to_string(), "(Int,Int)");
+        assert_eq!(main.chains[0].stages[0].output.to_string(), "Int");
+    }
+
+    #[test]
     fn type_aliases_resolve_in_typecheck_and_codegen() {
         let source = r#"
             type Pixel = (Real,(Real,Real))

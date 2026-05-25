@@ -1,5 +1,7 @@
 use crate::ast::*;
-use crate::module_resolver;
+use crate::module_resolver::{
+    self, ResolvedModule, ResolvedSymbolKind, ResolvedSymbolOrigin, SymbolId,
+};
 use crate::node_ref::{StaticNodeRef, parse_static_node_ref};
 use crate::stdlib::{self, Effect, RuntimeSupport, SymbolKind};
 use crate::types::{
@@ -12,34 +14,63 @@ use std::path::Path;
 
 #[allow(dead_code)]
 pub fn check_module(module: &Module) -> Result<(), String> {
-    let expanded = module_resolver::expand_stdlib_sources(module)?;
-    Checker::new(&expanded)?.check()
+    typed_module(module).map(|_| ())
 }
 
 pub(crate) fn check_library_module(module: &Module) -> Result<(), String> {
-    let expanded = module_resolver::expand_stdlib_sources(module)?;
-    Checker::new(&expanded)?.check_library()
+    typed_library_module(module).map(|_| ())
 }
 
 pub fn check_module_with_base(module: &Module, base_dir: &Path) -> Result<(), String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    Checker::new(&expanded)?.check()
+    typed_module_with_base(module, base_dir).map(|_| ())
 }
 
 pub(crate) fn check_library_module_with_base(
     module: &Module,
     base_dir: &Path,
 ) -> Result<(), String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    Checker::new(&expanded)?.check_library()
+    typed_library_module_with_base(module, base_dir).map(|_| ())
 }
 
 pub(crate) fn semantic_summary_with_base(
     module: &Module,
     base_dir: &Path,
 ) -> Result<SemanticSummary, String> {
-    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-    Checker::new(&expanded)?.semantic_summary()
+    Ok(typed_library_module_with_base(module, base_dir)?.semantic_summary())
+}
+
+pub(crate) fn typed_module(module: &Module) -> Result<TypedModule, String> {
+    let resolved = module_resolver::resolve_stdlib_sources(module)?;
+    typed_resolved_module(resolved, CheckMode::Program)
+}
+
+pub(crate) fn typed_library_module(module: &Module) -> Result<TypedModule, String> {
+    let resolved = module_resolver::resolve_stdlib_sources(module)?;
+    typed_resolved_module(resolved, CheckMode::Library)
+}
+
+pub(crate) fn typed_module_with_base(
+    module: &Module,
+    base_dir: &Path,
+) -> Result<TypedModule, String> {
+    let resolved = module_resolver::resolve_sources(module, Some(base_dir))?;
+    typed_resolved_module(resolved, CheckMode::Program)
+}
+
+pub(crate) fn typed_library_module_with_base(
+    module: &Module,
+    base_dir: &Path,
+) -> Result<TypedModule, String> {
+    let resolved = module_resolver::resolve_sources(module, Some(base_dir))?;
+    typed_resolved_module(resolved, CheckMode::Library)
+}
+
+pub(crate) fn typed_resolved_module(
+    resolved: ResolvedModule,
+    mode: CheckMode,
+) -> Result<TypedModule, String> {
+    let module = resolved.module().clone();
+    Checker::new(&module)?.typed_module(resolved, mode)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -80,6 +111,180 @@ pub(crate) struct StageSummary {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckMode {
+    Program,
+    Library,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct TypedModule {
+    pub resolved: ResolvedModule,
+    pub symbols: Vec<TypedSymbol>,
+    pub callables: Vec<TypedCallable>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct TypedSymbol {
+    pub id: SymbolId,
+    pub name: String,
+    pub kind: TypedSymbolKind,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) enum TypedSymbolKind {
+    Type(Type),
+    Callable(TypedCallableSymbol),
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct TypedCallableSymbol {
+    pub signatures: Vec<Signature>,
+    pub reduce_signatures: Vec<Signature>,
+    pub effect: Effect,
+    pub runtime: RuntimeSupport,
+    pub runtime_name: String,
+    pub origin: ResolvedSymbolOrigin,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct TypedCallable {
+    pub id: Option<SymbolId>,
+    pub name: String,
+    pub kind: TypedCallableKind,
+    pub signature: Signature,
+    pub effect: Effect,
+    pub node_params: Vec<TypedNodeParam>,
+    pub inputs: Vec<TypedPort>,
+    pub outputs: Vec<TypedPort>,
+    pub variables: Vec<TypedPort>,
+    pub chains: Vec<TypedChain>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TypedCallableKind {
+    Node,
+    Program,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct TypedNodeParam {
+    pub name: String,
+    pub signature: Signature,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TypedPort {
+    pub name: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TypedChain {
+    pub source: TypedEndpoint,
+    pub stages: Vec<TypedStage>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TypedEndpoint {
+    pub label: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct TypedStage {
+    pub label: String,
+    pub input: Type,
+    pub output: Type,
+    pub symbol: Option<SymbolId>,
+}
+
+impl TypedModule {
+    pub(crate) fn module(&self) -> &Module {
+        self.resolved.module()
+    }
+
+    pub(crate) fn semantic_summary(&self) -> SemanticSummary {
+        SemanticSummary {
+            callables: self
+                .callables
+                .iter()
+                .map(TypedCallable::semantic_summary)
+                .collect(),
+        }
+    }
+
+    pub(crate) fn signature_for(&self, name: &str) -> Option<Signature> {
+        let id = self.resolved.symbol_id(name)?;
+        self.symbols.iter().find_map(|symbol| {
+            if symbol.id != id {
+                return None;
+            }
+            match &symbol.kind {
+                TypedSymbolKind::Callable(callable) => callable.signatures.first().cloned(),
+                TypedSymbolKind::Type(_) => None,
+            }
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn type_for(&self, name: &str) -> Option<Type> {
+        let id = self.resolved.symbol_id(name)?;
+        self.symbols.iter().find_map(|symbol| {
+            if symbol.id != id {
+                return None;
+            }
+            match &symbol.kind {
+                TypedSymbolKind::Type(ty) => Some(ty.clone()),
+                TypedSymbolKind::Callable(_) => None,
+            }
+        })
+    }
+}
+
+impl TypedCallable {
+    fn semantic_summary(&self) -> CallableSummary {
+        let variables = self
+            .variables
+            .iter()
+            .map(|port| ValueSummary {
+                name: port.name.clone(),
+                ty: port.ty.to_string(),
+            })
+            .collect::<Vec<_>>();
+        CallableSummary {
+            name: self.name.clone(),
+            variables,
+            chains: self
+                .chains
+                .iter()
+                .map(|chain| ChainSummary {
+                    source: EndpointSummary {
+                        label: chain.source.label.clone(),
+                        ty: chain.source.ty.to_string(),
+                    },
+                    stages: chain
+                        .stages
+                        .iter()
+                        .map(|stage| StageSummary {
+                            label: stage.label.clone(),
+                            input: stage.input.to_string(),
+                            output: stage.output.to_string(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CallableKind {
     Node,
     Program,
@@ -109,6 +314,7 @@ struct Checker<'a> {
     types: HashMap<String, Type>,
 }
 
+#[allow(dead_code)]
 impl<'a> Checker<'a> {
     fn new(module: &'a Module) -> Result<Self, String> {
         let mut checker = Self {
@@ -158,6 +364,291 @@ impl<'a> Checker<'a> {
                 .push(self.summarize_callable(callable, kind)?);
         }
         Ok(summary)
+    }
+
+    fn typed_module(
+        &self,
+        resolved: ResolvedModule,
+        mode: CheckMode,
+    ) -> Result<TypedModule, String> {
+        if mode == CheckMode::Program {
+            self.validate_main()?;
+        }
+        let mut callables = Vec::new();
+        for decl in &self.module.declarations {
+            match decl {
+                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) => {}
+                Decl::Foreign(foreign) => self.check_foreign(foreign)?,
+                Decl::Node(callable) => {
+                    callables.push(self.type_callable(&resolved, callable, CallableKind::Node)?);
+                }
+                Decl::Program(callable) => {
+                    callables.push(self.type_callable(
+                        &resolved,
+                        callable,
+                        CallableKind::Program,
+                    )?);
+                }
+            }
+        }
+        let symbols = self.typed_symbols(&resolved);
+        Ok(TypedModule {
+            resolved,
+            symbols,
+            callables,
+        })
+    }
+
+    fn typed_symbols(&self, resolved: &ResolvedModule) -> Vec<TypedSymbol> {
+        resolved
+            .symbols()
+            .iter()
+            .filter_map(|symbol| match symbol.kind {
+                ResolvedSymbolKind::Type => {
+                    self.types.get(&symbol.internal_name).map(|ty| TypedSymbol {
+                        id: symbol.id,
+                        name: symbol.internal_name.clone(),
+                        kind: TypedSymbolKind::Type(ty.clone()),
+                    })
+                }
+                ResolvedSymbolKind::Callable => {
+                    self.symbols
+                        .get(&symbol.internal_name)
+                        .map(|info| TypedSymbol {
+                            id: symbol.id,
+                            name: symbol.internal_name.clone(),
+                            kind: TypedSymbolKind::Callable(TypedCallableSymbol {
+                                signatures: info.signatures.clone(),
+                                reduce_signatures: info.reduce_signatures.clone(),
+                                effect: info.effect,
+                                runtime: info.runtime,
+                                runtime_name: info.runtime_name.clone(),
+                                origin: symbol.origin,
+                            }),
+                        })
+                }
+            })
+            .collect()
+    }
+
+    fn type_callable(
+        &self,
+        resolved: &ResolvedModule,
+        callable: &Callable,
+        kind: CallableKind,
+    ) -> Result<TypedCallable, String> {
+        if kind == CallableKind::Program && !callable.node_params.is_empty() {
+            return Err(format!(
+                "program `{}` cannot declare static node parameters",
+                callable.name
+            ));
+        }
+        if callable.is_extern && !callable.node_params.is_empty() {
+            return Err(format!(
+                "extern node `{}` cannot declare static node parameters",
+                callable.name
+            ));
+        }
+        let mut env = HashMap::new();
+        let mut inputs = Vec::new();
+        let mut variables = Vec::new();
+        for port in &callable.inputs {
+            let ty = self.parse_declared_type(&port.ty)?;
+            if env.insert(port.name.clone(), ty.clone()).is_some() {
+                return Err(format!(
+                    "`{}` declares input `{}` more than once",
+                    callable.name, port.name
+                ));
+            }
+            let port = TypedPort {
+                name: port.name.clone(),
+                ty,
+            };
+            variables.push(port.clone());
+            inputs.push(port);
+        }
+        let mut chains = Vec::new();
+        for chain in &callable.chains {
+            chains.push(self.type_chain(
+                resolved,
+                callable,
+                kind,
+                chain,
+                &mut env,
+                &mut variables,
+            )?);
+        }
+        let mut outputs = Vec::new();
+        for output in &callable.outputs {
+            let expected = self.parse_declared_type(&output.ty)?;
+            let actual = env.get(&output.name).ok_or_else(|| {
+                format!(
+                    "`{}` declares output `{}` but it is never bound",
+                    callable.name, output.name
+                )
+            })?;
+            self.expect_assignable_type(
+                &format!("output `{}` of `{}`", output.name, callable.name),
+                actual,
+                &expected,
+            )?;
+            outputs.push(TypedPort {
+                name: output.name.clone(),
+                ty: expected,
+            });
+        }
+        let info = self
+            .symbols
+            .get(&callable.name)
+            .ok_or_else(|| format!("missing callable `{}`", callable.name))?;
+        Ok(TypedCallable {
+            id: resolved.symbol_id(&callable.name),
+            name: callable.name.clone(),
+            kind: match kind {
+                CallableKind::Node => TypedCallableKind::Node,
+                CallableKind::Program => TypedCallableKind::Program,
+            },
+            signature: info
+                .signatures
+                .first()
+                .cloned()
+                .ok_or_else(|| format!("`{}` has no signature", callable.name))?,
+            effect: info.effect,
+            node_params: info
+                .node_params
+                .iter()
+                .map(|param| TypedNodeParam {
+                    name: param.name.clone(),
+                    signature: param.signature.clone(),
+                })
+                .collect(),
+            inputs,
+            outputs,
+            variables,
+            chains,
+        })
+    }
+
+    fn type_chain(
+        &self,
+        resolved: &ResolvedModule,
+        callable: &Callable,
+        kind: CallableKind,
+        chain: &Chain,
+        env: &mut HashMap<String, Type>,
+        variables: &mut Vec<TypedPort>,
+    ) -> Result<TypedChain, String> {
+        let mut value_type = self.endpoint_type(&chain.source, env)?;
+        let source = TypedEndpoint {
+            label: format_endpoint_for_error(&chain.source),
+            ty: value_type.clone(),
+        };
+        let mut stages = Vec::new();
+        for (index, stage) in chain.stages.iter().enumerate() {
+            let is_last = index + 1 == chain.stages.len();
+            let input_type = value_type.clone();
+            let (label, output_type) = match stage {
+                Stage::Bind(target) if is_last => {
+                    let bindings = binding_target_types(target, &value_type)?;
+                    for (name, ty) in bindings {
+                        if contains_empty_seq(&ty) {
+                            return Err("empty sequence literals need a type context".to_string());
+                        }
+                        if env.insert(name.clone(), ty.clone()).is_some() {
+                            return Err(format!("value `{name}` is bound more than once"));
+                        }
+                        variables.push(TypedPort { name, ty });
+                    }
+                    (format_binding_target_for_error(target), value_type.clone())
+                }
+                Stage::Endpoint(Endpoint::Name(name)) => (
+                    name.clone(),
+                    self.apply_node(callable, kind, name, &value_type, false, false)?,
+                ),
+                Stage::Endpoint(Endpoint::Variable(_)) => {
+                    return Err(
+                        "variables may only appear as source values or final bindings".to_string(),
+                    );
+                }
+                Stage::Endpoint(_) => {
+                    return Err("non-name endpoints may only appear as source values".to_string());
+                }
+                Stage::Bind(_) => {
+                    return Err("binding targets may only appear as final stages".to_string());
+                }
+                Stage::Map(name) => (
+                    format!("map {name}"),
+                    self.apply_map(callable, name, &value_type)?,
+                ),
+                Stage::FaultMap { node, ok, fault } => {
+                    if !is_last {
+                        return Err("`fault map` must be the final stage in a chain".to_string());
+                    }
+                    let (ok_type, fault_type) =
+                        self.apply_fault_map(callable, node, &value_type)?;
+                    if env.insert(ok.clone(), ok_type.clone()).is_some() {
+                        return Err(format!("value `{ok}` is bound more than once"));
+                    }
+                    if env.insert(fault.clone(), fault_type.clone()).is_some() {
+                        return Err(format!("value `{fault}` is bound more than once"));
+                    }
+                    variables.push(TypedPort {
+                        name: ok.clone(),
+                        ty: ok_type.clone(),
+                    });
+                    variables.push(TypedPort {
+                        name: fault.clone(),
+                        ty: fault_type.clone(),
+                    });
+                    (
+                        format!("fault map {node}"),
+                        Type::Tuple(vec![ok_type, fault_type]),
+                    )
+                }
+                Stage::Filter(name) => (
+                    format!("filter {name}"),
+                    self.apply_filter(callable, name, &value_type)?,
+                ),
+                Stage::Field(name) => (
+                    format!("field {name}"),
+                    self.apply_field(name, &value_type)?,
+                ),
+                Stage::Repeat { count, node } => {
+                    let count_type = self.endpoint_type(count, env)?;
+                    self.expect_type("repeat count", &count_type, &Type::Int)?;
+                    (
+                        format!("repeat {node}"),
+                        self.apply_repeat(callable, node, &value_type)?,
+                    )
+                }
+                Stage::Reduce { op, identity } => {
+                    let identity_type = self.endpoint_type(identity, env)?;
+                    (
+                        format!("reduce {op}"),
+                        self.apply_reduce(callable, op, &value_type, &identity_type)?,
+                    )
+                }
+                Stage::Scan { op, identity } => {
+                    let identity_type = self.endpoint_type(identity, env)?;
+                    (
+                        format!("scan {op}"),
+                        self.apply_scan(callable, op, &value_type, &identity_type)?,
+                    )
+                }
+                Stage::Match { arms } => (
+                    "match".to_string(),
+                    self.apply_match(callable, kind, arms, &value_type, env)?,
+                ),
+            };
+            value_type = output_type;
+            stages.push(TypedStage {
+                label,
+                input: input_type,
+                output: value_type.clone(),
+                symbol: stage_symbol_id(resolved, stage),
+            });
+        }
+        Ok(TypedChain { source, stages })
     }
 
     fn validate_main(&self) -> Result<(), String> {
@@ -1769,6 +2260,32 @@ fn binding_target_types(
             Ok(bindings)
         }
     }
+}
+
+fn stage_symbol_id(resolved: &ResolvedModule, stage: &Stage) -> Option<SymbolId> {
+    let name = match stage {
+        Stage::Endpoint(Endpoint::Name(name))
+        | Stage::Map(name)
+        | Stage::Filter(name)
+        | Stage::Reduce { op: name, .. }
+        | Stage::Scan { op: name, .. } => name,
+        Stage::FaultMap { node, .. } | Stage::Repeat { node, .. } => node,
+        Stage::Bind(_)
+        | Stage::Field(_)
+        | Stage::Match { .. }
+        | Stage::Endpoint(Endpoint::Variable(_))
+        | Stage::Endpoint(Endpoint::Int(_))
+        | Stage::Endpoint(Endpoint::Real(_))
+        | Stage::Endpoint(Endpoint::Bool(_))
+        | Stage::Endpoint(Endpoint::String(_))
+        | Stage::Endpoint(Endpoint::Unit)
+        | Stage::Endpoint(Endpoint::Tuple(_))
+        | Stage::Endpoint(Endpoint::Seq(_))
+        | Stage::Endpoint(Endpoint::Struct { .. })
+        | Stage::Endpoint(Endpoint::Eval { .. }) => return None,
+    };
+    let node_ref = parse_static_node_ref(name);
+    resolved.symbol_id(&node_ref.base)
 }
 
 fn faultable_projection_type(ty: &Type) -> Type {

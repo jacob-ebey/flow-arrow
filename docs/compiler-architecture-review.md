@@ -49,6 +49,15 @@ module. Native build paths now lower a module once and derive LLVM, runtime C,
 foreign C sources, foreign dependencies, and WASM artifacts from the same
 `LoweredModule`.
 
+A second repair pass introduced the first explicit resolved and typed compiler
+contracts. `module_resolver` now returns `ResolvedModule`, carrying the
+backend-compatible lowered AST plus `ModuleId`/`SymbolId` tables. `typecheck`
+now exposes `TypedModule`, `TypedCallable`, typed ports, typed chains, and typed
+stage input/output facts. Existing `check_*` entry points are wrappers over the
+typed path. `LoweredModule` owns a `TypedModule`, and backend setup consumes
+typed callable/foreign signatures instead of reparsing those signatures from
+syntax when a typed module is available.
+
 ## What Is Working
 
 - The project has a clear language model and a compact AST that is easy to read.
@@ -63,6 +72,12 @@ foreign C sources, foreign dependencies, and WASM artifacts from the same
   is the right direction for reproducible local builds.
 
 ## P0: No Canonical Typed IR
+
+Status after repair passes: partially addressed. `TypedModule` now exists and
+contains typed callables, ports, chains, stage input/output types, and symbol
+references where a stage names a callable. The remaining problem is that the
+backend-compatible AST is still carried inside the typed module, and most
+emitters still lower from that AST while consulting typed facts.
 
 ### Evidence
 
@@ -122,6 +137,11 @@ formatting and early parse diagnostics, but not as the backend contract.
 
 ## P0: Type Parsing And Type Semantics Are Duplicated
 
+Status after repair passes: addressed for the semantic type layer. `src/types.rs`
+now owns `Type`, `Signature`, type parsing, primitive/stdlib type symbols,
+substitution, assignability, empty-sequence detection, and sequence item type
+joining. Typecheck and codegen both use that module.
+
 ### Evidence
 
 - `src/typecheck.rs` has its own `TypeParser`, `match_types`,
@@ -153,6 +173,11 @@ Then make codegen lowering map `TypeId` to backend layout types instead of
 owning a second semantic type enum.
 
 ## P0: Compile Pipeline Work Is Repeated And Inconsistent
+
+Status after repair passes: partially addressed. Build/codegen paths now create
+one `LoweredModule` and derive backend artifacts from that object. Public API
+entry points still parse/typecheck before invoking backend wrappers, so a future
+`CompileSession` should absorb those wrappers.
 
 ### Evidence
 
@@ -192,6 +217,12 @@ Build orchestration should request a single lowered module and then ask target
 backends for artifacts from that same object.
 
 ## P1: Module Resolution Rewrites Syntax Instead Of Producing Symbols
+
+Status after repair passes: partially addressed. The resolver now returns a
+`ResolvedModule` with `ModuleId` and `SymbolId` tables, and typed stages can
+carry the resolved symbol for callable references. The resolver still preserves
+the existing backend-compatible name rewriting; replacing rewritten names with
+structural symbol references remains the next step.
 
 ### Evidence
 

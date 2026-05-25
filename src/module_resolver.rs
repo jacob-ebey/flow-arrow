@@ -5,17 +5,135 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct ModuleId(pub(crate) usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct SymbolId(pub(crate) usize);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolvedModuleKind {
+    Root,
+    Synthetic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedSourceModule {
+    pub id: ModuleId,
+    pub name: String,
+    pub kind: ResolvedModuleKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolvedSymbolKind {
+    Type,
+    Callable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolvedSymbolOrigin {
+    Source,
+    StdlibBuiltin,
+    Foreign,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedSymbol {
+    pub id: SymbolId,
+    pub module_id: ModuleId,
+    pub public_name: String,
+    pub internal_name: String,
+    pub kind: ResolvedSymbolKind,
+    pub origin: ResolvedSymbolOrigin,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct ResolvedModule {
+    module: Module,
+    modules: Vec<ResolvedSourceModule>,
+    symbols: Vec<ResolvedSymbol>,
+    names: HashMap<String, SymbolId>,
+}
+
+impl ResolvedModule {
+    pub(crate) fn new_root(module: Module) -> Self {
+        Self::from_module(module, "<root>", ResolvedModuleKind::Root)
+    }
+
+    pub(crate) fn synthetic(module: Module) -> Self {
+        Self::from_module(module, "<synthetic>", ResolvedModuleKind::Synthetic)
+    }
+
+    fn from_module(module: Module, module_name: &str, kind: ResolvedModuleKind) -> Self {
+        let module_id = ModuleId(0);
+        let mut symbols = Vec::new();
+        let mut names = HashMap::new();
+        for decl in &module.declarations {
+            record_decl_symbols(module_id, decl, &mut symbols, &mut names);
+        }
+        Self {
+            module,
+            modules: vec![ResolvedSourceModule {
+                id: module_id,
+                name: module_name.to_string(),
+                kind,
+            }],
+            symbols,
+            names,
+        }
+    }
+
+    pub(crate) fn module(&self) -> &Module {
+        &self.module
+    }
+
+    pub(crate) fn into_module(self) -> Module {
+        self.module
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn modules(&self) -> &[ResolvedSourceModule] {
+        &self.modules
+    }
+
+    pub(crate) fn symbols(&self) -> &[ResolvedSymbol] {
+        &self.symbols
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn symbol_id(&self, name: &str) -> Option<SymbolId> {
+        self.names.get(name).copied()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn symbol(&self, id: SymbolId) -> Option<&ResolvedSymbol> {
+        self.symbols.get(id.0)
+    }
+}
+
 #[allow(dead_code)]
 pub fn expand_stdlib_sources(module: &Module) -> Result<Module, String> {
-    expand_sources(module, None)
+    Ok(resolve_stdlib_sources(module)?.into_module())
 }
 
 pub fn expand_sources(module: &Module, base_dir: Option<&Path>) -> Result<Module, String> {
+    Ok(resolve_sources(module, base_dir)?.into_module())
+}
+
+pub(crate) fn resolve_stdlib_sources(module: &Module) -> Result<ResolvedModule, String> {
+    resolve_sources(module, None)
+}
+
+pub(crate) fn resolve_sources(
+    module: &Module,
+    base_dir: Option<&Path>,
+) -> Result<ResolvedModule, String> {
     let mut resolver = Resolver::default();
     let root = resolver.rewrite_root(module, base_dir)?;
     let mut declarations = resolver.declarations;
     declarations.extend(root);
-    Ok(Module { declarations })
+    Ok(ResolvedModule::new_root(Module { declarations }))
 }
 
 #[derive(Default)]
@@ -377,6 +495,134 @@ fn normalize_path(path: PathBuf) -> Result<PathBuf, String> {
     } else {
         Ok(path)
     }
+}
+
+fn record_decl_symbols(
+    module_id: ModuleId,
+    decl: &Decl,
+    symbols: &mut Vec<ResolvedSymbol>,
+    names: &mut HashMap<String, SymbolId>,
+) {
+    match decl {
+        Decl::TypeAlias(alias) => record_symbol(
+            module_id,
+            &alias.name,
+            &alias.name,
+            ResolvedSymbolKind::Type,
+            ResolvedSymbolOrigin::Source,
+            symbols,
+            names,
+        ),
+        Decl::Struct(struct_decl) => record_symbol(
+            module_id,
+            &struct_decl.name,
+            &struct_decl.name,
+            ResolvedSymbolKind::Type,
+            ResolvedSymbolOrigin::Source,
+            symbols,
+            names,
+        ),
+        Decl::Node(callable) | Decl::Program(callable) => record_symbol(
+            module_id,
+            &callable.name,
+            &callable.name,
+            ResolvedSymbolKind::Callable,
+            ResolvedSymbolOrigin::Source,
+            symbols,
+            names,
+        ),
+        Decl::Foreign(foreign) => {
+            for node in &foreign.nodes {
+                record_symbol(
+                    module_id,
+                    &node.name,
+                    &node.name,
+                    ResolvedSymbolKind::Callable,
+                    ResolvedSymbolOrigin::Foreign,
+                    symbols,
+                    names,
+                );
+            }
+        }
+        Decl::Import(import) => record_import_symbols(module_id, import, symbols, names),
+    }
+}
+
+fn record_import_symbols(
+    module_id: ModuleId,
+    import: &Import,
+    symbols: &mut Vec<ResolvedSymbol>,
+    names: &mut HashMap<String, SymbolId>,
+) {
+    let ImportSource::Module(module) = &import.source else {
+        return;
+    };
+    match &import.clause {
+        ImportClause::Alias(alias) => {
+            for symbol in stdlib::module_symbols(module) {
+                let kind = resolved_stdlib_symbol_kind(symbol.kind);
+                let name = format!("{alias}.{}", symbol.name);
+                record_symbol(
+                    module_id,
+                    &name,
+                    &name,
+                    kind,
+                    ResolvedSymbolOrigin::StdlibBuiltin,
+                    symbols,
+                    names,
+                );
+            }
+        }
+        ImportClause::Items(items) => {
+            for item in items {
+                let Some(symbol) = stdlib::find_export(module, &item.name) else {
+                    continue;
+                };
+                let kind = resolved_stdlib_symbol_kind(symbol.kind);
+                let name = item.alias.as_deref().unwrap_or(&item.name);
+                record_symbol(
+                    module_id,
+                    name,
+                    name,
+                    kind,
+                    ResolvedSymbolOrigin::StdlibBuiltin,
+                    symbols,
+                    names,
+                );
+            }
+        }
+    }
+}
+
+fn resolved_stdlib_symbol_kind(kind: stdlib::SymbolKind) -> ResolvedSymbolKind {
+    match kind {
+        stdlib::SymbolKind::Type => ResolvedSymbolKind::Type,
+        stdlib::SymbolKind::Node => ResolvedSymbolKind::Callable,
+    }
+}
+
+fn record_symbol(
+    module_id: ModuleId,
+    public_name: &str,
+    internal_name: &str,
+    kind: ResolvedSymbolKind,
+    origin: ResolvedSymbolOrigin,
+    symbols: &mut Vec<ResolvedSymbol>,
+    names: &mut HashMap<String, SymbolId>,
+) {
+    if names.contains_key(internal_name) {
+        return;
+    }
+    let id = SymbolId(symbols.len());
+    symbols.push(ResolvedSymbol {
+        id,
+        module_id,
+        public_name: public_name.to_string(),
+        internal_name: internal_name.to_string(),
+        kind,
+        origin,
+    });
+    names.insert(internal_name.to_string(), id);
 }
 
 fn rewrite_builtin_import(
