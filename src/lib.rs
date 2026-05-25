@@ -587,7 +587,7 @@ mod tests {
         assert!(emitted.contains("async function square_plus_one_all"));
         assert!(emitted.contains("faGpuMapF32"));
         assert!(emitted.contains("fa_gpu_map_square_plus_one"));
-        assert!(emitted.contains("flowarrow_gpu_runtime.js"));
+        assert!(emitted.contains("flowarrow_gpu_runtime.mjs"));
         assert!(emitted.contains("fa_gpu_map_f64"));
         assert!(!emitted.contains("createShaderModule"));
         assert!(!emitted.contains("GPUBufferUsage"));
@@ -688,6 +688,47 @@ mod tests {
         assert!(llvm.contains("fa_gpu_repeat_vector_accum_f64"));
         assert!(llvm.contains("gpu.repeat.vector"));
         assert!(!llvm.contains("repeat.loop"));
+    }
+
+    #[test]
+    fn javascript_gpu_repeat_vector_accumulator_uses_runtime_schedule() {
+        let source = r#"
+            import std.math { add as scalar_add }
+            import std.vector { dot, squared_distance, squared_norm }
+
+            extern node run() -> score: Real {
+                ([1.0, 2.0], [3.0, 4.0], 0.0) -> repeat<2> kernel -> final_score -> $score
+            }
+
+            node kernel(left: Seq[Real], right: Seq[Real], score: Real) -> (out_left: Seq[Real], out_right: Seq[Real], out_score: Real) {
+                ($left, $right) -> dot -> $dot
+                ($left, $right) -> squared_distance -> $distance_squared
+                $left -> squared_norm -> $norm_squared
+                ($dot, $distance_squared) -> scalar_add -> $partial
+                ($partial, $norm_squared) -> scalar_add -> $delta
+                ($score, $delta) -> scalar_add -> $out_score
+                $left -> $out_left
+                $right -> $out_right
+            }
+
+            node final_score(left: Seq[Real], right: Seq[Real], score: Real) -> out: Real {
+                $score -> $out
+            }
+        "#;
+
+        let (_, javascript) = compile_javascript_artifacts_source_with_options(
+            source,
+            TypeScriptCompileOptions {
+                mode: TypeScriptCompileMode::Library,
+                gpu: true,
+                ..TypeScriptCompileOptions::default()
+            },
+        )
+        .expect("javascript gpu");
+
+        assert!(javascript.contains("faGpuRepeatVectorAccumF64"));
+        assert!(javascript.contains("fa_gpu_repeat_vector_accum_f64"));
+        assert!(!javascript.contains("await kernel("));
     }
 
     #[test]

@@ -932,6 +932,19 @@ fn build_wasm_gpu_runtime(build_dir: &Path) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr)
         ));
     }
+    let js = build_dir.join("flowarrow_gpu_runtime.js");
+    let mjs = build_dir.join("flowarrow_gpu_runtime.mjs");
+    if mjs.exists() {
+        fs::remove_file(&mjs)
+            .map_err(|error| format!("failed to replace `{}`: {error}", mjs.display()))?;
+    }
+    fs::rename(&js, &mjs).map_err(|error| {
+        format!(
+            "failed to rename WebGPU runtime glue `{}` to `{}`: {error}",
+            js.display(),
+            mjs.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -1585,6 +1598,39 @@ pub unsafe extern "C" fn fa_gpu_repeat_vector_accum_f64(
     score + iterations as f64 * f64::from(delta)
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_repeat_vector_accum_f64(
+    wgsl: String,
+    left: Vec<f64>,
+    right: Vec<f64>,
+    score: f64,
+    iterations: i32,
+) -> Result<f64, JsValue> {
+    if iterations <= 0 {
+        return Ok(score);
+    }
+    if left.len() != right.len() {
+        return Err(JsValue::from_str(
+            "FlowArrow GPU vector accumulator requires equal vector lengths",
+        ));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    let delta = runtime
+        .reduce_program_f64(
+            &wgsl,
+            &[f64_to_f32(&left), f64_to_f32(&right)],
+            &[],
+            &[score as f32],
+            checked_u32(i64::from(iterations), "repeat iteration count"),
+            left.len(),
+        )
+        .await;
+    Ok(score + f64::from(iterations) * f64::from(delta))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fa_gpu_repeat_matrix_accum_f64(
@@ -1660,6 +1706,76 @@ pub unsafe extern "C" fn fa_gpu_repeat_matrix_accum_f64(
         work_items,
     );
     score + iterations as f64 * f64::from(delta)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_repeat_matrix_accum_f64(
+    wgsl: String,
+    left_values: Vec<f64>,
+    left_rows: u32,
+    left_cols: u32,
+    right_values: Vec<f64>,
+    right_rows: u32,
+    right_cols: u32,
+    vector: Vec<f64>,
+    score: f64,
+    iterations: i32,
+) -> Result<f64, JsValue> {
+    if iterations <= 0 {
+        return Ok(score);
+    }
+    let left_shape = (left_rows as usize, left_cols as usize);
+    let right_shape = (right_rows as usize, right_cols as usize);
+    if left_values.len() != left_shape.0.saturating_mul(left_shape.1) {
+        return Err(JsValue::from_str(
+            "FlowArrow GPU matrix accumulator received malformed left matrix storage",
+        ));
+    }
+    if right_values.len() != right_shape.0.saturating_mul(right_shape.1) {
+        return Err(JsValue::from_str(
+            "FlowArrow GPU matrix accumulator received malformed right matrix storage",
+        ));
+    }
+    if left_shape.1 != right_shape.0 {
+        return Err(JsValue::from_str(
+            "FlowArrow GPU matrix accumulator requires left columns to equal right rows",
+        ));
+    }
+    if vector.len() != left_shape.1 {
+        return Err(JsValue::from_str(
+            "FlowArrow GPU matrix accumulator requires vector length to equal left columns",
+        ));
+    }
+    let work_items = left_shape
+        .0
+        .checked_mul(left_shape.1)
+        .ok_or_else(|| JsValue::from_str("FlowArrow GPU matrix accumulator work size overflowed"))?;
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    let delta = runtime
+        .reduce_program_f64(
+            &wgsl,
+            &[f64_to_f32(&vector)],
+            &[
+                GpuMatrixInput {
+                    rows: left_shape.0,
+                    cols: left_shape.1,
+                    values: f64_to_f32(&left_values),
+                },
+                GpuMatrixInput {
+                    rows: right_shape.0,
+                    cols: right_shape.1,
+                    values: f64_to_f32(&right_values),
+                },
+            ],
+            &[score as f32],
+            checked_u32(i64::from(iterations), "repeat iteration count"),
+            work_items,
+        )
+        .await;
+    Ok(score + f64::from(iterations) * f64::from(delta))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2381,6 +2497,89 @@ impl GpuRuntime {
         bytes_as_i32(&bytes)[0]
     }
 
+    async fn reduce_program_f64(
+        &mut self,
+        wgsl: &str,
+        slices: &[Vec<f32>],
+        matrices: &[GpuMatrixInput],
+        scalars: &[f32],
+        iterations: u32,
+        work_items: usize,
+    ) -> f32 {
+        if work_items == 0 {
+            return 0.0;
+        }
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("flowarrow.gpu.program.output"),
+            size: (work_items * 4).max(4) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let params_buffer =
+            self.program_params_buffer(slices, matrices, scalars, iterations, work_items);
+        let mut storage_buffers = Vec::with_capacity(slices.len() + matrices.len());
+        for slice in slices {
+            storage_buffers.push(self.storage_f32_buffer("flowarrow.gpu.program.slice", slice));
+        }
+        for matrix in matrices {
+            storage_buffers
+                .push(self.storage_f32_buffer("flowarrow.gpu.program.matrix", &matrix.values));
+        }
+
+        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("flowarrow.gpu.program.kernel"),
+            source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+        });
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("flowarrow.gpu.program.pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let mut entries = Vec::with_capacity(2 + storage_buffers.len());
+        entries.push(wgpu::BindGroupEntry {
+            binding: 0,
+            resource: output_buffer.as_entire_binding(),
+        });
+        entries.push(wgpu::BindGroupEntry {
+            binding: 1,
+            resource: params_buffer.as_entire_binding(),
+        });
+        for (index, buffer) in storage_buffers.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: (2 + index) as u32,
+                resource: buffer.as_entire_binding(),
+            });
+        }
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flowarrow.gpu.program.bind_group"),
+            layout: &bind_group_layout,
+            entries: &entries,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("flowarrow.gpu.program.encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("flowarrow.gpu.program.pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(work_items.div_ceil(64) as u32, 1, 1);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        let bytes = self
+            .dispatch_reduce_buffer("f32", 0, output_buffer, work_items, 0.0, false)
+            .await;
+        bytes_as_f32(&bytes)[0]
+    }
+
     async fn dispatch_reduce<T: GpuParam>(
         &mut self,
         scalar: &str,
@@ -2536,6 +2735,53 @@ impl GpuRuntime {
             contents: &params,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })
+    }
+
+    fn program_params_buffer(
+        &self,
+        slices: &[Vec<f32>],
+        matrices: &[GpuMatrixInput],
+        scalars: &[f32],
+        iterations: u32,
+        work_items: usize,
+    ) -> wgpu::Buffer {
+        if slices.len() > 4 || matrices.len() > 4 || scalars.len() > 4 {
+            fail("FlowArrow GPU generated program exceeded runtime descriptor capacity");
+        }
+        let mut words = [0u32; 32];
+        words[0] = checked_u32(work_items as i64, "GPU program work item count");
+        words[1] = iterations;
+        for (index, slice) in slices.iter().enumerate() {
+            words[2 + index] = checked_u32(slice.len() as i64, "GPU slice length");
+        }
+        for (index, matrix) in matrices.iter().enumerate() {
+            words[6 + index * 2] = checked_u32(matrix.rows as i64, "GPU matrix row count");
+            words[7 + index * 2] = checked_u32(matrix.cols as i64, "GPU matrix column count");
+        }
+        for (index, scalar) in scalars.iter().enumerate() {
+            words[14 + index] = scalar.to_bits();
+        }
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.program.params"),
+            contents: u32_as_bytes(&words),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    }
+
+    fn storage_f32_buffer(&self, label: &'static str, values: &[f32]) -> wgpu::Buffer {
+        if values.is_empty() {
+            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: &[0u8; 4],
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            })
+        } else {
+            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: f32_as_bytes(values),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            })
+        }
     }
 
     fn readback_buffer(&self, byte_len: wgpu::BufferAddress) -> wgpu::Buffer {

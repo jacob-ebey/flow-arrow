@@ -1,6 +1,7 @@
 use super::{
-    Ty, TypedCodegen, assignable_output_ty, binding_target_is_discard, builtin_output_type_plain,
-    contains_empty_seq, format_binding_target_for_error, gpu, sequence_item_type,
+    GpuRepeatAccumulator, GpuRepeatAccumulatorKind, Ty, TypedCodegen, assignable_output_ty,
+    binding_target_is_discard, builtin_output_type_plain, contains_empty_seq,
+    format_binding_target_for_error, gpu, sequence_item_type,
 };
 use crate::ast::{BindingTarget, Decl, ForeignSource};
 use crate::typecheck::{
@@ -1692,6 +1693,17 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         indent: &str,
         preferred_target: Option<&BindingTarget>,
     ) -> Result<TsValue, String> {
+        if let Some(plan) = self.codegen.gpu_repeat_accumulator(node, &input.ty) {
+            return self.emit_gpu_repeat_accumulator(
+                out,
+                plan,
+                input,
+                count,
+                indent,
+                preferred_target,
+            );
+        }
+
         if let Some(target @ BindingTarget::Tuple(_)) = preferred_target
             && matches!(&input.ty, Ty::Tuple(_))
         {
@@ -1718,6 +1730,83 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         out.push_str(&format!("{indent}  {tmp} = {};\n", next.code));
         out.push_str(&format!("{indent}}}\n"));
         Ok(ts_value(tmp, input.ty))
+    }
+
+    fn emit_gpu_repeat_accumulator(
+        &mut self,
+        out: &mut String,
+        plan: GpuRepeatAccumulator,
+        input: TsValue,
+        count: TsValue,
+        indent: &str,
+        preferred_target: Option<&BindingTarget>,
+    ) -> Result<TsValue, String> {
+        let Ty::Tuple(items) = input.ty.clone() else {
+            return Err("GPU repeat accumulator expected tuple state".to_string());
+        };
+        let target_items = match preferred_target {
+            Some(BindingTarget::Tuple(targets)) => {
+                if targets.len() != items.len() {
+                    return Err(format!(
+                        "GPU repeat accumulator expected {} tuple fields, found {}",
+                        items.len(),
+                        targets.len()
+                    ));
+                }
+                Some(targets.as_slice())
+            }
+            _ => None,
+        };
+
+        let mut state = Vec::with_capacity(items.len());
+        for (index, ty) in items.iter().enumerate() {
+            let preferred = target_items
+                .and_then(|targets| targets.get(index))
+                .and_then(binding_target_name);
+            let state_name = self.next_temp_or_preferred(preferred);
+            out.push_str(&format!(
+                "{indent}let {state_name}: {} = {};\n",
+                ts_type(ty),
+                tuple_field(&input, index)
+            ));
+            state.push(ts_value(state_name, ty.clone()));
+        }
+
+        let iter = self.next_temp();
+        out.push_str(&format!("{indent}const {iter}: bigint = {};\n", count.code));
+        out.push_str(&format!("{indent}if ({iter} > 0n) {{\n"));
+        match plan.kind {
+            GpuRepeatAccumulatorKind::VectorScore => {
+                if state.len() != 3 {
+                    return Err("GPU vector accumulator expected three tuple fields".to_string());
+                }
+                out.push_str(&format!(
+                    "{indent}  {} = await faGpuRepeatVectorAccumF64({}, {}, {}, {}, {iter});\n",
+                    state[2].code,
+                    ts_string(&plan.wgsl),
+                    state[0].code,
+                    state[1].code,
+                    state[2].code,
+                ));
+            }
+            GpuRepeatAccumulatorKind::MatrixScore => {
+                if state.len() != 4 {
+                    return Err("GPU matrix accumulator expected four tuple fields".to_string());
+                }
+                out.push_str(&format!(
+                    "{indent}  {} = await faGpuRepeatMatrixAccumF64({}, {}, {}, {}, {}, {iter});\n",
+                    state[3].code,
+                    ts_string(&plan.wgsl),
+                    state[0].code,
+                    state[1].code,
+                    state[2].code,
+                    state[3].code,
+                ));
+            }
+        }
+        out.push_str(&format!("{indent}}}\n"));
+
+        Ok(ts_tuple_value(state, Ty::Tuple(items)))
     }
 
     fn emit_repeat_tuple_state(
@@ -3148,6 +3237,25 @@ type FaGpuRuntimeModule = {
     op: number,
     identity: number,
   ) => Promise<number>;
+  fa_gpu_repeat_vector_accum_f64: (
+    wgsl: string,
+    left: Float64Array,
+    right: Float64Array,
+    score: number,
+    iterations: number,
+  ) => Promise<number>;
+  fa_gpu_repeat_matrix_accum_f64: (
+    wgsl: string,
+    leftValues: Float64Array,
+    leftRows: number,
+    leftCols: number,
+    rightValues: Float64Array,
+    rightRows: number,
+    rightCols: number,
+    vector: Float64Array,
+    score: number,
+    iterations: number,
+  ) => Promise<number>;
 };
 
 let faGpuRuntimePromise: Promise<FaGpuRuntimeModule> | null = null;
@@ -3221,6 +3329,59 @@ async function faGpuRangeMapReduceI32(
     faGpuAssertI32(identity),
   );
   return BigInt(reduced);
+}
+
+async function faGpuRepeatVectorAccumF64(
+  wgsl: string,
+  left: number[],
+  right: number[],
+  score: number,
+  iterations: bigint,
+): Promise<number> {
+  return await (await faGpuRuntime()).fa_gpu_repeat_vector_accum_f64(
+    wgsl,
+    new Float64Array(left),
+    new Float64Array(right),
+    score,
+    faGpuAssertI32(iterations),
+  );
+}
+
+async function faGpuRepeatMatrixAccumF64(
+  wgsl: string,
+  left: number[][],
+  right: number[][],
+  vector: number[],
+  score: number,
+  iterations: bigint,
+): Promise<number> {
+  const leftFlat = faGpuFlattenMatrix(left, "left");
+  const rightFlat = faGpuFlattenMatrix(right, "right");
+  return await (await faGpuRuntime()).fa_gpu_repeat_matrix_accum_f64(
+    wgsl,
+    leftFlat.values,
+    leftFlat.rows,
+    leftFlat.cols,
+    rightFlat.values,
+    rightFlat.rows,
+    rightFlat.cols,
+    new Float64Array(vector),
+    score,
+    faGpuAssertI32(iterations),
+  );
+}
+
+function faGpuFlattenMatrix(input: number[][], label: string): { values: Float64Array; rows: number; cols: number } {
+  const rows = input.length;
+  const cols = rows === 0 ? 0 : input[0].length;
+  const values = new Float64Array(rows * cols);
+  for (let row = 0; row < rows; row++) {
+    if (input[row].length !== cols) {
+      throw new Error(`FlowArrow GPU ${label} matrix must be rectangular`);
+    }
+    values.set(input[row], row * cols);
+  }
+  return { values, rows, cols };
 }
 
 "#;

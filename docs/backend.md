@@ -285,7 +285,7 @@ fail if a device cannot be acquired. Native/LLVM builds lower eligible maps,
 reductions, virtual range reductions, and generated repeat accumulator programs
 to direct calls into a generated Rust `wgpu` runtime library. TypeScript and
 JavaScript GPU builds compile that same runtime source to a wasm-bindgen
-WebGPU module (`flowarrow_gpu_runtime.js` plus
+WebGPU module (`flowarrow_gpu_runtime.mjs` plus
 `flowarrow_gpu_runtime_bg.wasm`) and emit only thin async calls into that
 runtime. Both packaging paths compile and dispatch WGSL through `wgpu`, and
 neither path falls back to CPU execution when GPU execution is requested.
