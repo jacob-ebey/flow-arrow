@@ -128,10 +128,15 @@ flowarrow build --target <triple> --crate-type <kind>
 
 Current implementation status: `flowarrow build` defaults to the host
 native target and accepts `--target native`, `--target host`, or the host
-target triple for that backend. `wasm32-unknown-unknown` supports an
-initial `--crate-type cdylib` reactor-module path for pure scalar node
-exports. `typescript` emits TypeScript source under `build/typescript/`,
-and `javascript` emits JavaScript plus TypeScript declarations under
+target triple for that backend. Native `--crate-type bin` emits an
+executable. Native `--crate-type cdylib` emits a platform shared library
+plus a generated C header for top-level `extern node` exports using the
+same C ABI type model as the native runtime: primitives, bytes, tuples,
+structs, sequences, faultables, streams, and the current runtime-backed
+HTTP/SQLite/CV shapes. `wasm32-unknown-unknown` supports an initial
+`--crate-type cdylib` reactor-module path for pure scalar node exports.
+`typescript` emits TypeScript source under `build/typescript/`, and
+`javascript` emits JavaScript plus TypeScript declarations under
 `build/javascript/`.
 `wasm32-wasi` is parsed but not implemented yet.
 

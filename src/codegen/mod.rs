@@ -78,6 +78,38 @@ pub(crate) struct WasmCdylibOutput {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct NativeCdylibOutput {
+    pub source: String,
+    pub header: String,
+    pub exports: Vec<String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn emit_native_cdylib_c_with_base(
+    module: &Module,
+    base_dir: &Path,
+) -> Result<NativeCdylibOutput, String> {
+    let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
+    let expanded = monomorphize::expand_module(&expanded)?;
+    if expanded.declarations.iter().any(|decl| {
+        matches!(
+            decl,
+            Decl::Foreign(ForeignBlock {
+                target: ForeignTarget::Js,
+                ..
+            })
+        )
+    }) {
+        return Err(
+            "foreign js declarations are supported only by the TypeScript and JavaScript backends"
+                .to_string(),
+        );
+    }
+    let mut codegen = TypedCodegen::new(&expanded)?;
+    codegen.emit_native_cdylib_c()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn emit_wasm_cdylib_llvm_with_base(
     module: &Module,
     base_dir: &Path,
@@ -99,7 +131,7 @@ pub(crate) fn emit_wasm_cdylib_llvm_with_base(
         DirectLlvmOptions {
             target_triple: Some(target_triple.to_string()),
             emit_entrypoint: false,
-            export_nodes: true,
+            export_abi: Some(DirectExportAbi::Wasm),
             emit_object: true,
             optimization,
         },
@@ -109,7 +141,7 @@ pub(crate) fn emit_wasm_cdylib_llvm_with_base(
         object: emitted
             .object
             .ok_or_else(|| "WASM object emission did not produce an object file".to_string())?,
-        exports: emitted.exports,
+        exports: emitted.symbol_exports,
     })
 }
 
@@ -721,6 +753,219 @@ impl<'a> TypedCodegen<'a> {
             other => return Err(format!("program main output must be Int, found `{other}`")),
         }
         Ok(out)
+    }
+
+    fn emit_native_cdylib_c(&mut self) -> Result<NativeCdylibOutput, String> {
+        let mut bodies = String::new();
+        let uses_cv_runtime = self.uses_cv_runtime();
+        let uses_http_runtime = self.uses_http_runtime();
+        let uses_sqlite_runtime = self.uses_sqlite_runtime();
+        let mut names = self.callables.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        for name in &names {
+            let sig = self
+                .signatures
+                .get(name)
+                .ok_or_else(|| format!("missing signature for `{name}`"))?;
+            self.types.c_type(&sig.input);
+            self.types.c_type(&sig.output);
+        }
+        let mut foreign_names = self.foreign_c.keys().cloned().collect::<Vec<_>>();
+        foreign_names.sort();
+        for name in &foreign_names {
+            let sig = self
+                .signatures
+                .get(name)
+                .ok_or_else(|| format!("missing signature for `{name}`"))?;
+            self.types.c_type(&sig.input);
+            self.types.c_type(&sig.output);
+        }
+        if uses_cv_runtime {
+            let image = cv_image_ty();
+            self.types.c_type(&image);
+            self.types.c_type(&Ty::Faultable(Box::new(image)));
+            self.types.c_type(&Ty::Faultable(Box::new(Ty::Bytes)));
+        }
+        self.types.set_use_cv_header(uses_cv_runtime);
+
+        for decl in &self.module.declarations {
+            match decl {
+                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Foreign(_) => {}
+                Decl::Node(callable) => self.emit_callable(&mut bodies, callable, false)?,
+                Decl::Program(callable) => self.emit_callable(&mut bodies, callable, true)?,
+                Decl::Import(_) => {}
+            }
+        }
+        let exports = self.exported_node_names();
+        let header = self.native_c_header()?;
+        let wrappers = self.emit_native_c_export_wrappers(&exports)?;
+
+        let mut out = String::new();
+        emit_preamble(&mut out);
+        if self.types.uses_cv_header() {
+            stdlib::emit_cv_type_h(&mut out);
+        }
+        if uses_http_runtime {
+            stdlib::emit_http_runtime_h(&mut out);
+        }
+        if uses_sqlite_runtime {
+            stdlib::emit_sqlite_runtime_h(&mut out);
+        }
+        out.push_str(&self.types.emit_typedefs());
+        out.push_str(&self.types.emit_helpers());
+        if uses_cv_runtime {
+            stdlib::emit_cv_runtime_h(&mut out);
+            stdlib::emit_cv_runtime_c(&mut out);
+        }
+        if uses_http_runtime {
+            stdlib::emit_http_runtime_c(&mut out);
+        }
+        if uses_sqlite_runtime {
+            stdlib::emit_sqlite_runtime_c(&mut out);
+        }
+        for name in &names {
+            let sig = self.signatures.get(name).expect("signature");
+            let input = self.types.c_type(&sig.input);
+            let output = self.types.c_type(&sig.output);
+            out.push_str(&format!(
+                "static inline {output} {}({input} input);\n",
+                user_fn_name(name)
+            ));
+        }
+        for name in &foreign_names {
+            let sig = self.signatures.get(name).expect("signature");
+            let input = self.types.c_type(&sig.input);
+            let output = self.types.c_type(&sig.output);
+            let symbol = &self.foreign_c.get(name).expect("foreign c binding").symbol;
+            out.push_str(&format!("extern {output} {symbol}({input} input);\n"));
+        }
+        out.push('\n');
+        out.push_str(&self.parallel_helpers);
+        out.push_str(&bodies);
+        out.push_str(&wrappers);
+
+        Ok(NativeCdylibOutput {
+            source: out,
+            header,
+            exports,
+        })
+    }
+
+    fn emit_native_c_export_wrappers(&mut self, exports: &[String]) -> Result<String, String> {
+        let mut out = String::new();
+        for name in exports {
+            let callable = self.exported_node(name)?;
+            let inputs = callable.inputs.clone();
+            let sig = self
+                .signatures
+                .get(name)
+                .ok_or_else(|| format!("missing signature for native C export `{name}`"))?
+                .clone();
+            let input_items = native_c_input_items(name, callable, &sig.input)?
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            let output = self.types.c_type(&sig.output);
+            let params = if input_items.is_empty() {
+                "void".to_string()
+            } else {
+                inputs
+                    .iter()
+                    .zip(input_items.iter())
+                    .map(|(port, ty)| {
+                        let c_ty = self.types.c_type(ty);
+                        format!("{c_ty} {}", c_ident(&port.name))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            out.push_str(&format!(
+                "{output} {}({params}) {{\n",
+                sanitize_symbol(name)
+            ));
+            match input_items.as_slice() {
+                [] => {
+                    out.push_str(&format!("  return {}(fa_unit());\n", user_fn_name(name)));
+                }
+                [_] => {
+                    let arg = c_ident(&inputs[0].name);
+                    out.push_str(&format!("  return {}({arg});\n", user_fn_name(name)));
+                }
+                _ => {
+                    let input_ty = self.types.c_type(&sig.input);
+                    out.push_str(&format!("  {input_ty} input;\n"));
+                    for (index, port) in inputs.iter().enumerate() {
+                        out.push_str(&format!("  input.f{index} = {};\n", c_ident(&port.name)));
+                    }
+                    out.push_str(&format!("  return {}(input);\n", user_fn_name(name)));
+                }
+            }
+            out.push_str("}\n\n");
+        }
+        Ok(out)
+    }
+
+    fn exported_node_names(&self) -> Vec<String> {
+        self.module
+            .declarations
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::Node(callable)
+                    if callable.is_extern && !callable.name.starts_with("__flow_") =>
+                {
+                    Some(callable.name.clone())
+                }
+                Decl::TypeAlias(_)
+                | Decl::Struct(_)
+                | Decl::Import(_)
+                | Decl::Foreign(_)
+                | Decl::Program(_) => None,
+                Decl::Node(_) => None,
+            })
+            .collect()
+    }
+
+    fn exported_node(&self, name: &str) -> Result<&Callable, String> {
+        self.module
+            .declarations
+            .iter()
+            .find_map(|decl| match decl {
+                Decl::Node(callable) if callable.name == name => Some(callable),
+                _ => None,
+            })
+            .ok_or_else(|| format!("missing declaration for native C export `{name}`"))
+    }
+
+    fn native_c_header(&self) -> Result<String, String> {
+        let mut registry = TypeRegistry::default();
+        let mut prototypes = Vec::new();
+        for name in self.exported_node_names() {
+            let callable = self.exported_node(&name)?;
+            let sig = self
+                .signatures
+                .get(&name)
+                .ok_or_else(|| format!("missing signature for native C export `{name}`"))?;
+            collect_abi_type(&mut registry, &sig.output);
+            let output = registry.c_type(&sig.output);
+            let input_items = native_c_input_items(&name, callable, &sig.input)?;
+            let params = if input_items.is_empty() {
+                "void".to_string()
+            } else {
+                callable
+                    .inputs
+                    .iter()
+                    .zip(input_items)
+                    .map(|(port, ty)| {
+                        collect_abi_type(&mut registry, ty);
+                        let c_ty = registry.c_type(ty);
+                        format!("{c_ty} {}", c_ident(&port.name))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            prototypes.push(format!("{output} {}({params});", sanitize_symbol(&name)));
+        }
+        Ok(native_c_header_source(&mut registry, &prototypes))
     }
 
     fn emit_runtime_support_c(&mut self) -> Result<String, String> {
@@ -5378,9 +5623,15 @@ struct DirectLlvm<'ctx, 'a> {
 struct DirectLlvmOptions {
     target_triple: Option<String>,
     emit_entrypoint: bool,
-    export_nodes: bool,
+    export_abi: Option<DirectExportAbi>,
     emit_object: bool,
     optimization: OptimizationLevel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(not(target_arch = "wasm32"))]
+enum DirectExportAbi {
+    Wasm,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -5389,7 +5640,7 @@ impl Default for DirectLlvmOptions {
         Self {
             target_triple: None,
             emit_entrypoint: true,
-            export_nodes: false,
+            export_abi: None,
             emit_object: false,
             optimization: OptimizationLevel::Aggressive,
         }
@@ -5400,7 +5651,7 @@ impl Default for DirectLlvmOptions {
 struct DirectLlvmEmission {
     llvm: String,
     object: Option<Vec<u8>>,
-    exports: Vec<String>,
+    symbol_exports: Vec<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -5433,7 +5684,7 @@ impl<'a> DirectLlvm<'_, 'a> {
         };
         direct.declare_callables()?;
         direct.emit_callables()?;
-        if direct.options.export_nodes {
+        if direct.options.export_abi == Some(DirectExportAbi::Wasm) {
             direct.emit_wasm_exports()?;
         }
         if direct.options.emit_entrypoint {
@@ -5456,7 +5707,7 @@ impl<'a> DirectLlvm<'_, 'a> {
         Ok(DirectLlvmEmission {
             llvm: direct.module.print_to_string().to_string(),
             object,
-            exports: direct.exports,
+            symbol_exports: direct.exports,
         })
     }
 }
@@ -5551,8 +5802,21 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     }
 
     fn emit_wasm_exports(&mut self) -> Result<(), String> {
-        let names = self
-            .codegen
+        for name in self.exported_node_names() {
+            let sig = self
+                .codegen
+                .signatures
+                .get(&name)
+                .ok_or_else(|| format!("missing signature for WASM export `{name}`"))?;
+            if wasm_exportable_input(&sig.input) && wasm_exportable_output(&sig.output) {
+                self.emit_c_abi_export(&name, DirectExportAbi::Wasm)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn exported_node_names(&self) -> Vec<String> {
+        self.codegen
             .module
             .declarations
             .iter()
@@ -5569,36 +5833,30 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 | Decl::Program(_) => None,
                 Decl::Node(_) => None,
             })
-            .collect::<Vec<_>>();
-
-        for name in names {
-            let sig = self
-                .codegen
-                .signatures
-                .get(&name)
-                .ok_or_else(|| format!("missing signature for WASM export `{name}`"))?;
-            if wasm_exportable_input(&sig.input) && wasm_exportable_output(&sig.output) {
-                self.emit_wasm_export(&name)?;
-            }
-        }
-        Ok(())
+            .collect()
     }
 
-    fn emit_wasm_export(&mut self, name: &str) -> Result<(), String> {
+    fn emit_c_abi_export(&mut self, name: &str, abi: DirectExportAbi) -> Result<(), String> {
         let export_name = sanitize_symbol(name);
         if export_name != name {
+            let label = export_abi_label(abi);
             return Err(format!(
-                "WASM export `{name}` cannot be represented as a stable symbol yet"
+                "{label} export `{name}` cannot be represented as a stable symbol yet"
             ));
         }
         let sig = self
             .codegen
             .signatures
             .get(name)
-            .ok_or_else(|| format!("missing signature for WASM export `{name}`"))?
+            .ok_or_else(|| {
+                format!(
+                    "missing signature for {} export `{name}`",
+                    export_abi_label(abi)
+                )
+            })?
             .clone();
-        let output_ty = self.wasm_scalar_type(&sig.output, name)?;
-        let params = self.wasm_input_types(&sig.input, name)?;
+        let output_ty = self.export_output_type(&sig.output, name, abi)?;
+        let params = self.wasm_export_input_types(&sig.input, name)?;
         let param_types = params
             .iter()
             .map(|(_, ty)| (*ty).into())
@@ -5609,59 +5867,96 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
 
         let block = self.context.append_basic_block(wrapper, "entry");
         self.builder.position_at_end(block);
-        let input = self.build_wasm_export_input(wrapper, &sig.input, &params, name)?;
-        let internal = *self
-            .functions
-            .get(name)
-            .ok_or_else(|| format!("missing internal function for WASM export `{name}`"))?;
+        let input = self.build_scalar_export_input(wrapper, &sig.input, &params, name, abi)?;
+        let internal = *self.functions.get(name).ok_or_else(|| {
+            format!(
+                "missing internal function for {} export `{name}`",
+                export_abi_label(abi)
+            )
+        })?;
         let result = self
             .builder
             .build_call(internal, &[input.into()], "result")
-            .map_err(|error| format!("LLVM backend failed to call WASM export `{name}`: {error}"))?
+            .map_err(|error| {
+                format!(
+                    "LLVM backend failed to call {} export `{name}`: {error}",
+                    export_abi_label(abi)
+                )
+            })?
             .try_as_basic_value()
             .basic()
-            .ok_or_else(|| format!("WASM export `{name}` did not return a value"))?;
+            .ok_or_else(|| {
+                format!(
+                    "{} export `{name}` did not return a value",
+                    export_abi_label(abi)
+                )
+            })?;
         self.builder.build_return(Some(&result)).map_err(|error| {
-            format!("LLVM backend failed to return WASM export `{name}`: {error}")
+            format!(
+                "LLVM backend failed to return {} export `{name}`: {error}",
+                export_abi_label(abi)
+            )
         })?;
         self.exports.push(export_name);
         Ok(())
     }
 
-    fn wasm_input_types(
-        &self,
+    fn export_input_types(
+        &mut self,
         input_ty: &Ty,
         export_name: &str,
+        abi: DirectExportAbi,
     ) -> Result<Vec<(Ty, BasicTypeEnum<'ctx>)>, String> {
         match input_ty {
             Ty::Unit => Ok(Vec::new()),
             Ty::Tuple(items) => items
                 .iter()
-                .map(|item| Ok((item.clone(), self.wasm_scalar_type(item, export_name)?)))
+                .map(|item| {
+                    Ok((
+                        item.clone(),
+                        self.export_output_type(item, export_name, abi)?,
+                    ))
+                })
                 .collect(),
             other => Ok(vec![(
                 other.clone(),
-                self.wasm_scalar_type(other, export_name)?,
+                self.export_output_type(other, export_name, abi)?,
             )]),
         }
     }
 
-    fn wasm_scalar_type(&self, ty: &Ty, export_name: &str) -> Result<BasicTypeEnum<'ctx>, String> {
-        match ty {
-            Ty::Int => Ok(self.context.i64_type().into()),
-            Ty::Real => Ok(self.context.f64_type().into()),
-            other => Err(format!(
-                "WASM export `{export_name}` uses `{other}`; only Int and Real scalar inputs and outputs are supported"
-            )),
+    fn wasm_export_input_types(
+        &mut self,
+        input_ty: &Ty,
+        export_name: &str,
+    ) -> Result<Vec<(Ty, BasicTypeEnum<'ctx>)>, String> {
+        self.export_input_types(input_ty, export_name, DirectExportAbi::Wasm)
+    }
+
+    fn export_output_type(
+        &mut self,
+        ty: &Ty,
+        export_name: &str,
+        abi: DirectExportAbi,
+    ) -> Result<BasicTypeEnum<'ctx>, String> {
+        match abi {
+            DirectExportAbi::Wasm => match ty {
+                Ty::Int => Ok(self.context.i64_type().into()),
+                Ty::Real => Ok(self.context.f64_type().into()),
+                other => Err(format!(
+                    "WASM export `{export_name}` uses `{other}`; only Int and Real scalar inputs and outputs are supported"
+                )),
+            },
         }
     }
 
-    fn build_wasm_export_input(
+    fn build_scalar_export_input(
         &mut self,
         wrapper: FunctionValue<'ctx>,
         input_ty: &Ty,
         params: &[(Ty, BasicTypeEnum<'ctx>)],
         export_name: &str,
+        abi: DirectExportAbi,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match input_ty {
             Ty::Unit => Ok(self.types.basic_type(&Ty::Unit)?.const_zero()),
@@ -5673,28 +5968,36 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     .const_zero();
                 for (index, item) in items.iter().enumerate() {
                     let param = wrapper.get_nth_param(index as u32).ok_or_else(|| {
-                        format!("missing parameter {index} for WASM export `{export_name}`")
+                        format!(
+                            "missing parameter {index} for {} export `{export_name}`",
+                            export_abi_label(abi)
+                        )
                     })?;
                     tuple = self
                         .builder
                         .build_insert_value(tuple, param, index as u32, "arg")
                         .map_err(|error| {
                             format!(
-                                "LLVM backend failed to build tuple input for WASM export `{export_name}`: {error}"
+                                "LLVM backend failed to build tuple input for {} export `{export_name}`: {error}",
+                                export_abi_label(abi)
                             )
                         })?
                         .into_struct_value();
                     if params.get(index).map(|(ty, _)| ty) != Some(item) {
                         return Err(format!(
-                            "internal parameter mismatch for WASM export `{export_name}`"
+                            "internal parameter mismatch for {} export `{export_name}`",
+                            export_abi_label(abi)
                         ));
                     }
                 }
                 Ok(tuple.into())
             }
-            _ => wrapper
-                .get_nth_param(0)
-                .ok_or_else(|| format!("missing parameter for WASM export `{export_name}`")),
+            _ => wrapper.get_nth_param(0).ok_or_else(|| {
+                format!(
+                    "missing parameter for {} export `{export_name}`",
+                    export_abi_label(abi)
+                )
+            }),
         }
     }
 
@@ -9870,6 +10173,90 @@ impl TypeRegistry {
         out
     }
 
+    fn emit_abi_typedefs(&mut self) -> String {
+        let mut out = String::new();
+        let mut entries = self
+            .types
+            .iter()
+            .map(|(name, ty)| (type_depth(ty), name.clone(), ty.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        for (_, name, ty) in entries {
+            match ty {
+                Ty::Seq(item) => {
+                    let item_ty = self.c_type(&item);
+                    out.push_str(&format!(
+                        "typedef struct {{ size_t count; {item_ty} *items; }} {name};\n"
+                    ));
+                }
+                Ty::Tuple(items) => {
+                    out.push_str("typedef struct { ");
+                    for (index, item) in items.iter().enumerate() {
+                        let item_ty = self.c_type(item);
+                        out.push_str(&format!("{item_ty} f{index}; "));
+                    }
+                    out.push_str(&format!("}} {name};\n"));
+                }
+                Ty::Struct { fields, .. } => {
+                    out.push_str("typedef struct { ");
+                    for (field, item) in fields {
+                        let item_ty = self.c_type(&item);
+                        out.push_str(&format!("{item_ty} {}; ", c_ident(&field)));
+                    }
+                    out.push_str(&format!("}} {name};\n"));
+                }
+                Ty::Faultable(inner) => {
+                    let inner_ty = self.c_type(&inner);
+                    out.push_str(&format!(
+                        "typedef struct {{ bool is_fault; FaFault fault; {inner_ty} value; }} {name};\n"
+                    ));
+                }
+                Ty::HttpServerConfig => {
+                    out.push_str("typedef struct { FaBytes host; int64_t port; bool tls; FaBytes cert_path; FaBytes key_path; bool http2; bool http3; } FaHttpServerConfig;\n");
+                }
+                Ty::HttpListener => {
+                    out.push_str("typedef struct { FaHttpServerConfig config; void *state; } FaHttpListener;\n");
+                }
+                Ty::HttpRequest => {
+                    out.push_str("typedef struct { FaBytes method; FaBytes path; FaBytes body; void *h2o_req; } FaHttpRequest;\n");
+                }
+                Ty::HttpResponse => {
+                    self.c_type(&Ty::HttpRequest);
+                    self.c_type(&Ty::Seq(Box::new(Ty::Bytes)));
+                    out.push_str("typedef struct { FaHttpRequest request; int64_t status; FaSeq_Bytes header_names; FaSeq_Bytes header_values; FaBytes body; FaBytes content_type; } FaHttpResponse;\n");
+                }
+                Ty::SqliteConnection => {
+                    out.push_str(
+                        "typedef struct FaSqliteConnectionState FaSqliteConnectionState;\n",
+                    );
+                    out.push_str(
+                        "typedef struct { FaSqliteConnectionState *state; } FaSqliteConnection;\n",
+                    );
+                }
+                Ty::SqliteValue => {
+                    out.push_str("typedef struct { int kind; int64_t int_value; double real_value; FaBytes bytes_value; } FaSqliteValue;\n");
+                }
+                Ty::SqliteRow => {
+                    self.c_type(&Ty::SqliteValue);
+                    out.push_str("typedef struct { size_t count; FaBytes *names; FaSqliteValue *values; } FaSqliteRow;\n");
+                }
+                Ty::Unit
+                | Ty::Int
+                | Ty::Real
+                | Ty::Bool
+                | Ty::Bytes
+                | Ty::Args
+                | Ty::Stream(_)
+                | Ty::Fault
+                | Ty::OneOf(_)
+                | Ty::Var(_)
+                | Ty::EmptySeq => {}
+            }
+        }
+        out.push('\n');
+        out
+    }
+
     fn emit_helpers(&mut self) -> String {
         let mut out = String::new();
         let mut entries = self
@@ -11145,6 +11532,131 @@ fn wasm_exportable_scalar(ty: &Ty) -> bool {
     matches!(ty, Ty::Int | Ty::Real)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn export_abi_label(abi: DirectExportAbi) -> &'static str {
+    match abi {
+        DirectExportAbi::Wasm => "WASM",
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_c_input_items<'a>(
+    export_name: &str,
+    callable: &Callable,
+    input_ty: &'a Ty,
+) -> Result<Vec<&'a Ty>, String> {
+    match callable.inputs.as_slice() {
+        [] => Ok(Vec::new()),
+        [_] => Ok(vec![input_ty]),
+        ports => {
+            let Ty::Tuple(items) = input_ty else {
+                return Err(format!(
+                    "native C export `{export_name}` has multiple inputs but signature input is `{input_ty}`"
+                ));
+            };
+            if items.len() != ports.len() {
+                return Err(format!(
+                    "native C export `{export_name}` input arity mismatch: signature has {}, declaration has {}",
+                    items.len(),
+                    ports.len()
+                ));
+            }
+            Ok(items.iter().collect())
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn collect_abi_type(registry: &mut TypeRegistry, ty: &Ty) {
+    registry.c_type(ty);
+    match ty {
+        Ty::Seq(item) | Ty::Stream(item) | Ty::Faultable(item) => collect_abi_type(registry, item),
+        Ty::Tuple(items) | Ty::OneOf(items) => {
+            for item in items {
+                collect_abi_type(registry, item);
+            }
+        }
+        Ty::Struct { fields, .. } => {
+            for (_, item) in fields {
+                collect_abi_type(registry, item);
+            }
+        }
+        Ty::HttpListener => collect_abi_type(registry, &Ty::HttpServerConfig),
+        Ty::HttpResponse => {
+            collect_abi_type(registry, &Ty::HttpRequest);
+            collect_abi_type(registry, &Ty::Seq(Box::new(Ty::Bytes)));
+        }
+        Ty::SqliteRow => collect_abi_type(registry, &Ty::SqliteValue),
+        Ty::Unit
+        | Ty::Int
+        | Ty::Real
+        | Ty::Bool
+        | Ty::Bytes
+        | Ty::Args
+        | Ty::HttpServerConfig
+        | Ty::HttpRequest
+        | Ty::SqliteConnection
+        | Ty::SqliteValue
+        | Ty::Fault
+        | Ty::Var(_)
+        | Ty::EmptySeq => {}
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_c_header_source(registry: &mut TypeRegistry, prototypes: &[String]) -> String {
+    let mut out = String::new();
+    out.push_str("#ifndef FLOWARROW_NATIVE_LIBRARY_H\n");
+    out.push_str("#define FLOWARROW_NATIVE_LIBRARY_H\n\n");
+    out.push_str("#include <stdbool.h>\n");
+    out.push_str("#include <stddef.h>\n");
+    out.push_str("#include <stdint.h>\n");
+    out.push_str("#include <stdio.h>\n\n");
+    out.push_str("typedef struct { int _unused; } FaUnit;\n");
+    out.push_str("typedef struct { char *bytes; size_t len; } FaBytes;\n");
+    out.push_str("typedef struct { FaBytes message; } FaFault;\n");
+    out.push_str("typedef struct { int argc; char **argv; } FaArgs;\n");
+    out.push_str("typedef int (*FaStreamNextFn)(void *state, void *out, FaFault *fault);\n");
+    out.push_str("typedef int (*FaStreamCloseFn)(void *state, FaFault *fault);\n");
+    out.push_str(
+        "typedef struct { FILE *file; int fd; FaBytes path; void *state; void *map_fn; FaStreamNextFn next; FaStreamCloseFn close; size_t item_size; bool closed; } FaStream;\n",
+    );
+    out.push_str("typedef struct { size_t count; FaBytes *items; } FaSeq_Bytes;\n");
+    out.push_str("typedef struct { FaBytes f0; FaBytes f1; } FaTuple_Bytes_Bytes;\n");
+    out.push_str(
+        "typedef struct { size_t count; FaTuple_Bytes_Bytes *items; } FaSeq_Tuple_Bytes_Bytes;\n",
+    );
+    out.push_str("typedef struct { size_t count; int64_t *items; } FaSeq_Int;\n");
+    out.push_str("typedef struct { size_t count; double *items; } FaSeq_Real;\n");
+    out.push_str("typedef struct { size_t count; FaFault *items; } FaSeq_Fault;\n");
+    out.push_str(
+        "typedef struct { bool is_fault; FaFault fault; int64_t value; } FaFaultable_Int;\n",
+    );
+    out.push_str(
+        "typedef struct { bool is_fault; FaFault fault; double value; } FaFaultable_Real;\n",
+    );
+    out.push_str(
+        "typedef struct { bool is_fault; FaFault fault; FaBytes value; } FaFaultable_Bytes;\n",
+    );
+    out.push_str("typedef struct { bool is_fault; FaFault fault; FaSeq_Bytes value; } FaFaultable_Seq_Bytes;\n");
+    out.push_str("typedef struct { bool is_fault; FaFault fault; FaSeq_Tuple_Bytes_Bytes value; } FaFaultable_Seq_Tuple_Bytes_Bytes;\n");
+    out.push_str("typedef struct { bool is_fault; FaFault fault; FaStream value; } FaFaultable_Stream_Bytes;\n");
+    out.push_str("typedef struct { bool is_fault; FaFault fault; FaSeq_Real value; } FaFaultable_Seq_Real;\n\n");
+    out.push_str(&registry.emit_abi_typedefs());
+    out.push_str("#ifdef __cplusplus\n");
+    out.push_str("extern \"C\" {\n");
+    out.push_str("#endif\n\n");
+    for prototype in prototypes {
+        out.push_str(prototype);
+        out.push('\n');
+    }
+    out.push_str("\n#ifdef __cplusplus\n");
+    out.push_str("}\n");
+    out.push_str("#endif\n\n");
+    out.push_str("#endif\n");
+    out
+}
+
 fn type_suffix(ty: &Ty) -> String {
     match ty {
         Ty::Unit => "Unit".to_string(),
@@ -11334,15 +11846,55 @@ mod tests {
             TypedCodegen::new(&module).expect("typed codegen"),
             DirectLlvmOptions {
                 emit_entrypoint: false,
-                export_nodes: true,
+                export_abi: Some(DirectExportAbi::Wasm),
                 ..DirectLlvmOptions::default()
             },
         )
         .expect("llvm");
 
-        assert_eq!(emitted.exports, vec!["exposed"]);
+        assert_eq!(emitted.symbol_exports, vec!["exposed"]);
         assert!(emitted.llvm.contains("define i64 @exposed(i64"));
         assert!(!emitted.llvm.contains("define i64 @hidden(i64"));
+    }
+
+    #[test]
+    fn native_c_exports_generate_compound_abi_header() {
+        let module = parser::parse(
+            r#"
+                extern node parts(value: Int) -> (original: Int, doubled: Int) {
+                    $value       -> $original
+                    ($value, 2)  -> mul -> $doubled
+                }
+
+                extern node label() -> value: Bytes {
+                    "compound" -> $value
+                }
+
+                import std.math { mul }
+            "#,
+        )
+        .expect("parse");
+        let mut codegen = TypedCodegen::new(&module).expect("typed codegen");
+        let emitted = codegen.emit_native_cdylib_c().expect("native c");
+
+        assert_eq!(emitted.exports, vec!["parts", "label"]);
+        assert!(
+            emitted
+                .header
+                .contains("typedef struct { int64_t f0; int64_t f1; } FaTuple_Int_Int;")
+        );
+        assert!(
+            emitted
+                .header
+                .contains("FaTuple_Int_Int parts(int64_t v_value);")
+        );
+        assert!(emitted.header.contains("FaBytes label(void);"));
+        assert!(
+            emitted
+                .source
+                .contains("FaTuple_Int_Int parts(int64_t v_value)")
+        );
+        assert!(emitted.source.contains("FaBytes label(void)"));
     }
 
     #[test]

@@ -564,6 +564,71 @@ fn build_native_c_interop_example_and_run() {
 }
 
 #[test]
+fn build_native_c_library_example_and_run_c_app() {
+    let output = Command::new(flowarrow())
+        .args([
+            "build",
+            "--crate-type",
+            "cdylib",
+            "examples/c-library/stats.flow",
+        ])
+        .output()
+        .expect("run flowarrow build");
+    assert!(
+        output.status.success(),
+        "flowarrow build failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    if Command::new("clang").arg("--version").output().is_err() {
+        eprintln!("skipping C library app test: clang is not installed");
+        return;
+    }
+
+    let build_dir = fs::read_dir(Path::new("examples/c-library/build"))
+        .expect("read C library build dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.join("stats.h").exists() && path.join(dynamic_library_name("stats")).exists()
+        })
+        .expect("find C library native build dir");
+    let build_dir = fs::canonicalize(build_dir).expect("canonicalize C library build dir");
+    let library = build_dir.join(dynamic_library_name("stats"));
+    let app = build_dir.join(format!("app{}", std::env::consts::EXE_SUFFIX));
+    let rpath = format!("-Wl,-rpath,{}", build_dir.display());
+    let compile = Command::new("clang")
+        .arg("examples/c-library/app.c")
+        .arg("-I")
+        .arg(&build_dir)
+        .arg(&library)
+        .arg(rpath)
+        .arg("-o")
+        .arg(&app)
+        .output()
+        .expect("compile C library app");
+    assert!(
+        compile.status.success(),
+        "C app compile failed:\n{}{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let output = Command::new(&app).output().expect("run C library app");
+    assert!(
+        output.status.success(),
+        "C library app failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "jobs: 16\ntotal score: 1632\npeak score: 272\ntotal weight: 288\npeak weight: 33\n"
+    );
+}
+
+#[test]
 fn typescript_concurrency_benchmark_example_builds_and_runs() {
     if Command::new("node").arg("--version").output().is_err() {
         eprintln!("skipping TypeScript concurrency benchmark example: node is not installed");
@@ -629,6 +694,16 @@ fn typescript_concurrency_benchmark_example_builds_and_runs() {
     assert!(stdout.contains("sequential"));
     assert!(stdout.contains("workers"));
     assert!(stdout.contains("result=[333333330000, 99990000, 99999999, 19999]"));
+}
+
+fn dynamic_library_name(name: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("{name}.dll")
+    } else if cfg!(target_os = "macos") {
+        format!("lib{name}.dylib")
+    } else {
+        format!("lib{name}.so")
+    }
 }
 
 fn temp_flow_path(prefix: &str) -> std::path::PathBuf {

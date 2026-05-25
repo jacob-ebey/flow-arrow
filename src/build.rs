@@ -393,9 +393,6 @@ fn build_native(
     target: &NativeTarget,
     options: &BuildOptions,
 ) -> Result<BuildOutput, String> {
-    if options.crate_type != CrateType::Bin {
-        return Err("native builds currently support only `--crate-type bin`".to_string());
-    }
     if !target.is_host() {
         return Err(format!(
             "native target `{}` is recognized, but cross-compilation is not implemented yet; use `native` or `{}`",
@@ -404,6 +401,19 @@ fn build_native(
         ));
     }
 
+    match options.crate_type {
+        CrateType::Bin => build_native_bin(path, base_dir, module, target, options),
+        CrateType::Cdylib => build_native_cdylib(path, base_dir, module, target, options),
+    }
+}
+
+fn build_native_bin(
+    path: &Path,
+    base_dir: &Path,
+    module: &Module,
+    target: &NativeTarget,
+    options: &BuildOptions,
+) -> Result<BuildOutput, String> {
     let llvm = codegen::emit_direct_llvm_with_base(module, base_dir)?;
     let runtime_c = codegen::emit_runtime_support_c_with_base(module, base_dir)?;
     let foreign_c_sources = codegen::foreign_c_source_paths_with_base(module, base_dir)?;
@@ -432,10 +442,74 @@ fn build_native(
         .map_err(|error| format!("failed to write `{}`: {error}", plan.llvm_path.display()))?;
     emit_native_runtime_llvm(&runtime_c, &plan.runtime_llvm_path, options)?;
     let foreign_c_objects =
-        compile_foreign_c_sources(&foreign_c_sources, &plan.cache_dir, options)?;
+        compile_foreign_c_sources(&foreign_c_sources, &plan.cache_dir, options, false)?;
     copy_emitted_llvm(&plan.llvm_path, options.emit_llvm.as_deref())?;
     remove_stale_runtime_c(&plan.stale_runtime_c_path)?;
     link_native_executable(&plan, &runtime_c, &foreign_c_objects, options)?;
+    fs::write(&plan.hash_path, plan.build_hash)
+        .map_err(|error| format!("failed to write `{}`: {error}", plan.hash_path.display()))?;
+
+    Ok(BuildOutput {
+        build_dir: plan.build_dir,
+        executable: plan.executable,
+    })
+}
+
+fn build_native_cdylib(
+    path: &Path,
+    base_dir: &Path,
+    module: &Module,
+    target: &NativeTarget,
+    options: &BuildOptions,
+) -> Result<BuildOutput, String> {
+    let emitted = codegen::emit_native_cdylib_c_with_base(module, base_dir)?;
+    if emitted.exports.is_empty() {
+        return Err(
+            "native cdylib build requires at least one top-level `extern node` export".to_string(),
+        );
+    }
+    let foreign_c_sources = codegen::foreign_c_source_paths_with_base(module, base_dir)?;
+    let foreign_c_dependencies = codegen::foreign_c_dependency_paths_with_base(module, base_dir)?;
+    let foreign_c_hash = foreign_c_hash_input(&foreign_c_dependencies)?;
+    let plan = BuildPlan::new(
+        path,
+        &BuildTarget::Native(target.clone()),
+        options,
+        &emitted.source,
+        "",
+        &foreign_c_hash,
+    )?;
+    fs::create_dir_all(&plan.cache_dir)
+        .map_err(|error| format!("failed to create `{}`: {error}", plan.cache_dir.display()))?;
+
+    let executable_name = executable_name(path)?;
+    let header_path = plan.build_dir.join(format!("{executable_name}.h"));
+    fs::write(&header_path, emitted.header)
+        .map_err(|error| format!("failed to write `{}`: {error}", header_path.display()))?;
+
+    let c_path = plan.cache_dir.join("library.c");
+    if plan.is_native_cdylib_fresh(&c_path) {
+        return Ok(BuildOutput {
+            build_dir: plan.build_dir,
+            executable: plan.executable,
+        });
+    }
+
+    fs::write(&c_path, emitted.source)
+        .map_err(|error| format!("failed to write `{}`: {error}", c_path.display()))?;
+    let foreign_c_objects =
+        compile_foreign_c_sources(&foreign_c_sources, &plan.cache_dir, options, true)?;
+    if let Some(out) = options.emit_llvm.as_deref() {
+        fs::copy(&c_path, out).map_err(|error| {
+            format!(
+                "failed to copy emitted C from `{}` to `{}`: {error}",
+                c_path.display(),
+                out.display()
+            )
+        })?;
+    }
+    remove_stale_runtime_c(&plan.stale_runtime_c_path)?;
+    link_native_cdylib_c(&plan, &c_path, &foreign_c_objects, options)?;
     fs::write(&plan.hash_path, plan.build_hash)
         .map_err(|error| format!("failed to write `{}`: {error}", plan.hash_path.display()))?;
 
@@ -530,9 +604,12 @@ impl BuildPlan {
         let cache_dir = build_dir.join(".cache");
         let executable_name = executable_name(path)?;
         let executable = match target {
-            BuildTarget::Native(_) => {
-                build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX))
-            }
+            BuildTarget::Native(_) => match options.crate_type {
+                CrateType::Bin => {
+                    build_dir.join(format!("{executable_name}{}", std::env::consts::EXE_SUFFIX))
+                }
+                CrateType::Cdylib => build_dir.join(dynamic_library_name(&executable_name)),
+            },
             BuildTarget::Wasm(_) => build_dir.join(format!("{executable_name}.wasm")),
             BuildTarget::Typescript => build_dir.join(format!("{executable_name}.ts")),
             BuildTarget::Javascript => build_dir.join(format!("{executable_name}.mjs")),
@@ -566,6 +643,14 @@ impl BuildPlan {
         self.executable.exists()
             && self.llvm_path.exists()
             && self.object_path.exists()
+            && fs::read_to_string(&self.hash_path)
+                .map(|cached_hash| cached_hash == self.build_hash)
+                .unwrap_or(false)
+    }
+
+    fn is_native_cdylib_fresh(&self, c_path: &Path) -> bool {
+        self.executable.exists()
+            && c_path.exists()
             && fs::read_to_string(&self.hash_path)
                 .map(|cached_hash| cached_hash == self.build_hash)
                 .unwrap_or(false)
@@ -630,10 +715,50 @@ fn link_native_executable(
     Ok(())
 }
 
+fn link_native_cdylib_c(
+    plan: &BuildPlan,
+    c_path: &Path,
+    foreign_c_objects: &[PathBuf],
+    options: &BuildOptions,
+) -> Result<(), String> {
+    let runtime_c = fs::read_to_string(c_path)
+        .map_err(|error| format!("failed to read `{}`: {error}", c_path.display()))?;
+    let mut clang = Command::new("clang");
+    clang
+        .arg(options.optimization.clang_flag())
+        .arg("-pthread")
+        .arg("-fPIC");
+    if cfg!(target_os = "macos") {
+        clang.arg("-dynamiclib");
+    } else {
+        clang.arg("-shared");
+    }
+    clang.args(&options.compiler_flags).arg(c_path);
+    clang.args(foreign_c_objects);
+    add_native_compiler_flags(&mut clang, &runtime_c)?;
+    clang.args(&options.linker_flags);
+    let output = clang
+        .arg("-o")
+        .arg(&plan.executable)
+        .output()
+        .map_err(|error| {
+            "failed to invoke clang for native cdylib backend: ".to_string() + &error.to_string()
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "native cdylib backend failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
 fn compile_foreign_c_sources(
     sources: &[PathBuf],
     cache_dir: &Path,
     options: &BuildOptions,
+    pic: bool,
 ) -> Result<Vec<PathBuf>, String> {
     let mut objects = Vec::new();
     for (index, source) in sources.iter().enumerate() {
@@ -643,6 +768,9 @@ fn compile_foreign_c_sources(
             .arg(options.optimization.clang_flag())
             .arg("-pthread")
             .args(&options.compiler_flags);
+        if pic {
+            clang.arg("-fPIC");
+        }
         if let Some(parent) = source.parent() {
             clang.arg("-I").arg(parent);
         }
@@ -881,6 +1009,16 @@ fn add_native_compiler_flags(clang: &mut Command, runtime_c: &str) -> Result<(),
 fn build_dir(path: &Path, target: &BuildTarget) -> PathBuf {
     let root = path.parent().unwrap_or_else(|| Path::new("."));
     root.join("build").join(target.triple())
+}
+
+fn dynamic_library_name(name: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("{name}.dll")
+    } else if cfg!(target_os = "macos") {
+        format!("lib{name}.dylib")
+    } else {
+        format!("lib{name}.so")
+    }
 }
 
 fn executable_name(path: &Path) -> Result<String, String> {
