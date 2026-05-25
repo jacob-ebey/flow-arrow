@@ -26,5 +26,6 @@ program main(args: Args) -> exit_code: Int {
     50000  -> format_int  -> $iterations_bytes
 
     ["gpu accumulator example\n", "len: ", $len_bytes, "\n", "iterations: ", $iterations_bytes, "\n", "score: ", $score_bytes, "\n"] -> concat_bytes -> $output
-    $output                                                                                                                          -> write_stdout -> $exit_code
+
+    $output -> write_stdout -> $exit_code
 }
