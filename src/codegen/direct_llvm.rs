@@ -13,7 +13,7 @@ use inkwell::targets::{
 };
 use inkwell::types::{AnyType, BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[path = "llvm_seq.rs"]
 mod llvm_seq;
@@ -487,7 +487,30 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             }
         }
 
-        for chain in &callable.chains {
+        let fused_reductions = self.gpu_plan.range_map_reductions(callable);
+        let fused_by_reduce = fused_reductions
+            .iter()
+            .cloned()
+            .map(|reduction| (reduction.reduce_chain, reduction))
+            .collect::<HashMap<_, _>>();
+        let fused_skip = fused_reductions
+            .iter()
+            .flat_map(|reduction| {
+                [
+                    reduction.range_chain,
+                    reduction.map_chain,
+                    reduction.reduce_chain,
+                ]
+            })
+            .collect::<HashSet<_>>();
+        for (chain_index, chain) in callable.chains.iter().enumerate() {
+            if let Some(reduction) = fused_by_reduce.get(&chain_index) {
+                self.emit_gpu_range_map_reduction(reduction, &mut env)?;
+                continue;
+            }
+            if fused_skip.contains(&chain_index) {
+                continue;
+            }
             self.emit_chain(chain, &mut env)?;
         }
         let result = self.emit_outputs(callable, &env, &sig.output)?;
@@ -643,6 +666,98 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             }
         }
         Ok(())
+    }
+
+    fn emit_gpu_range_map_reduction(
+        &mut self,
+        reduction: &gpu::GpuRangeMapReduction,
+        env: &mut HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<(), String> {
+        let gpu::GpuScalarKind::I32 = reduction.map_kernel.scalar else {
+            return Err("GPU range reductions currently require Int range map kernels".to_string());
+        };
+        if reduction.output_ty != Ty::Int {
+            return Err(format!(
+                "GPU range reduction expected Int output, found `{}`",
+                reduction.output_ty
+            ));
+        }
+        let range = self.emit_range_tuple_values(&reduction.range_source, env)?;
+        let identity = self.emit_endpoint(&reduction.identity, env)?;
+        let identity = self.coerce_value_to_ty(identity, &Ty::Int)?;
+        let map_expr = self
+            .builder
+            .build_global_string_ptr(&reduction.map_kernel.map_expr, "gpu_map_expr")
+            .map_err(|error| {
+                format!("LLVM backend failed to build GPU map expression literal: {error}")
+            })?;
+        let function = self.gpu_range_map_reduce_i64_function();
+        let op = self
+            .context
+            .i32_type()
+            .const_int(gpu_reduce_op(&reduction.op) as u64, false);
+        let call = self
+            .builder
+            .build_call(
+                function,
+                &[
+                    map_expr.as_pointer_value().into(),
+                    range[0].into(),
+                    range[1].into(),
+                    range[2].into(),
+                    op.into(),
+                    identity.value.into_int_value().into(),
+                ],
+                "gpu.range.reduce",
+            )
+            .map_err(|error| {
+                format!("LLVM backend failed to call fa_gpu_range_map_reduce_i64: {error}")
+            })?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "fa_gpu_range_map_reduce_i64 did not return a value".to_string())?;
+        if env
+            .insert(
+                reduction.output_name.clone(),
+                LlvmValue {
+                    value: call,
+                    ty: reduction.output_ty.clone(),
+                },
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "value `{}` is bound more than once",
+                reduction.output_name
+            ));
+        }
+        Ok(())
+    }
+
+    fn emit_range_tuple_values(
+        &mut self,
+        endpoint: &TypedEndpoint,
+        env: &HashMap<String, LlvmValue<'ctx>>,
+    ) -> Result<[IntValue<'ctx>; 3], String> {
+        let range_ty = Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]);
+        let value = self.emit_endpoint_expected(endpoint, env, Some(&range_ty))?;
+        let tuple = value.value.into_struct_value();
+        let start = self
+            .builder
+            .build_extract_value(tuple, 0, "gpu.range.start")
+            .map_err(|error| format!("LLVM backend failed to extract GPU range start: {error}"))?
+            .into_int_value();
+        let stop = self
+            .builder
+            .build_extract_value(tuple, 1, "gpu.range.stop")
+            .map_err(|error| format!("LLVM backend failed to extract GPU range stop: {error}"))?
+            .into_int_value();
+        let step = self
+            .builder
+            .build_extract_value(tuple, 2, "gpu.range.step")
+            .map_err(|error| format!("LLVM backend failed to extract GPU range step: {error}"))?
+            .into_int_value();
+        Ok([start, stop, step])
     }
 
     fn emit_endpoint(
@@ -4016,6 +4131,30 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             "fa_gpu_reduce_f64",
             f64_ty.fn_type(
                 &[i32_ty.into(), ptr_ty.into(), i64_ty.into(), f64_ty.into()],
+                false,
+            ),
+            None,
+        )
+    }
+
+    fn gpu_range_map_reduce_i64_function(&mut self) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function("fa_gpu_range_map_reduce_i64") {
+            return function;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
+        self.module.add_function(
+            "fa_gpu_range_map_reduce_i64",
+            i64_ty.fn_type(
+                &[
+                    ptr_ty.into(),
+                    i64_ty.into(),
+                    i64_ty.into(),
+                    i64_ty.into(),
+                    i32_ty.into(),
+                    i64_ty.into(),
+                ],
                 false,
             ),
             None,

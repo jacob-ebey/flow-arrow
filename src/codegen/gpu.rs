@@ -1,14 +1,17 @@
 use super::Ty;
+use crate::ast::BindingTarget;
 use crate::module_resolver::{ResolvedSymbolOrigin, SymbolId};
 use crate::stdlib::Effect;
 use crate::typecheck::{
-    TypedCallable, TypedEndpoint, TypedEndpointKind, TypedModule, TypedStageKind, TypedSymbolKind,
+    TypedCallable, TypedChain, TypedEndpoint, TypedEndpointKind, TypedModule, TypedStageKind,
+    TypedSymbolKind,
 };
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct GpuPlan {
     map_kernels: HashMap<MapKernelKey, GpuMapKernel>,
+    builtins_by_id: HashMap<SymbolId, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -25,7 +28,21 @@ pub(super) struct GpuMapKernel {
     pub input: Ty,
     pub output: Ty,
     pub scalar: GpuScalarKind,
+    pub map_expr: String,
     pub wgsl: String,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct GpuRangeMapReduction {
+    pub range_chain: usize,
+    pub map_chain: usize,
+    pub reduce_chain: usize,
+    pub range_source: TypedEndpoint,
+    pub map_kernel: GpuMapKernel,
+    pub op: String,
+    pub identity: TypedEndpoint,
+    pub output_name: String,
+    pub output_ty: Ty,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +121,7 @@ impl GpuPlan {
     pub(super) fn empty() -> Self {
         Self {
             map_kernels: HashMap::new(),
+            builtins_by_id: HashMap::new(),
         }
     }
 
@@ -130,6 +148,7 @@ impl GpuPlan {
             }
             if let Ok(expr) = ScalarKernelBuilder::new(&names).lower_callable(callable) {
                 let id = format!("fa_gpu_map_{}", sanitize_gpu_ident(&callable.name));
+                let map_expr = expr.wgsl(scalar);
                 let wgsl = map_wgsl(&id, scalar, &expr);
                 let key = MapKernelKey {
                     callable: callable.name.clone(),
@@ -144,12 +163,16 @@ impl GpuPlan {
                         input: input.ty.clone(),
                         output: output.ty.clone(),
                         scalar,
+                        map_expr,
                         wgsl,
                     },
                 );
             }
         }
-        Self { map_kernels }
+        Self {
+            map_kernels,
+            builtins_by_id: names.builtins_by_id,
+        }
     }
 
     pub(super) fn kernel_for_map(
@@ -167,6 +190,189 @@ impl GpuPlan {
 
     pub(super) fn is_empty(&self) -> bool {
         self.map_kernels.is_empty()
+    }
+
+    pub(super) fn range_map_reductions(
+        &self,
+        callable: &TypedCallable,
+    ) -> Vec<GpuRangeMapReduction> {
+        let mut source_uses: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, chain) in callable.chains.iter().enumerate() {
+            if let Some(name) = chain_source_variable(chain) {
+                source_uses.entry(name.to_string()).or_default().push(index);
+            }
+        }
+
+        let mut reductions = Vec::new();
+        for (range_index, range_chain) in callable.chains.iter().enumerate() {
+            let Some((range_source, range_name)) = self.range_step_binding(range_chain) else {
+                continue;
+            };
+            if callable
+                .outputs
+                .iter()
+                .any(|output| output.name == range_name)
+            {
+                continue;
+            }
+            let Some(range_consumers) = source_uses.get(range_name) else {
+                continue;
+            };
+            if range_consumers.is_empty() {
+                continue;
+            }
+
+            let mut group = Vec::new();
+            let mut valid_group = true;
+            for map_index in range_consumers {
+                let Some((map_name, map_output, item_ty, output_item_ty)) =
+                    self.map_binding(&callable.chains[*map_index], range_name)
+                else {
+                    valid_group = false;
+                    break;
+                };
+                if callable
+                    .outputs
+                    .iter()
+                    .any(|output| output.name == map_output)
+                {
+                    valid_group = false;
+                    break;
+                }
+                let Some(kernel) = self
+                    .kernel_for_map(map_name, item_ty, output_item_ty)
+                    .cloned()
+                else {
+                    valid_group = false;
+                    break;
+                };
+                let Some(map_consumers) = source_uses.get(map_output) else {
+                    valid_group = false;
+                    break;
+                };
+                if map_consumers.is_empty() {
+                    valid_group = false;
+                    break;
+                }
+                for reduce_index in map_consumers {
+                    let Some((op, identity, output_name, output_ty)) =
+                        self.reduce_binding(&callable.chains[*reduce_index], map_output)
+                    else {
+                        valid_group = false;
+                        break;
+                    };
+                    group.push(GpuRangeMapReduction {
+                        range_chain: range_index,
+                        map_chain: *map_index,
+                        reduce_chain: *reduce_index,
+                        range_source: range_source.clone(),
+                        map_kernel: kernel.clone(),
+                        op,
+                        identity,
+                        output_name,
+                        output_ty,
+                    });
+                }
+                if !valid_group {
+                    break;
+                }
+            }
+            if valid_group {
+                reductions.extend(group);
+            }
+        }
+        reductions
+    }
+
+    fn range_step_binding<'a>(
+        &self,
+        chain: &'a TypedChain,
+    ) -> Option<(&'a TypedEndpoint, &'a str)> {
+        let [call, bind] = chain.stages.as_slice() else {
+            return None;
+        };
+        let TypedStageKind::Call { name, symbol } = &call.kind else {
+            return None;
+        };
+        if self.canonical_name(name, *symbol) != "range_step" {
+            return None;
+        }
+        if call.output != Ty::Seq(Box::new(Ty::Int)) {
+            return None;
+        }
+        let TypedStageKind::Bind { target } = &bind.kind else {
+            return None;
+        };
+        binding_target_name(target).map(|name| (&chain.source, name))
+    }
+
+    fn map_binding<'a>(
+        &self,
+        chain: &'a TypedChain,
+        expected_source: &str,
+    ) -> Option<(&'a str, &'a str, &'a Ty, &'a Ty)> {
+        if chain_source_variable(chain) != Some(expected_source) {
+            return None;
+        }
+        let [map, bind] = chain.stages.as_slice() else {
+            return None;
+        };
+        let TypedStageKind::Map { name, .. } = &map.kind else {
+            return None;
+        };
+        let Ty::Seq(item_ty) = &map.input else {
+            return None;
+        };
+        let Ty::Seq(output_item_ty) = &map.output else {
+            return None;
+        };
+        let TypedStageKind::Bind { target } = &bind.kind else {
+            return None;
+        };
+        binding_target_name(target).map(|target| {
+            (
+                name.as_str(),
+                target,
+                item_ty.as_ref(),
+                output_item_ty.as_ref(),
+            )
+        })
+    }
+
+    fn reduce_binding(
+        &self,
+        chain: &TypedChain,
+        expected_source: &str,
+    ) -> Option<(String, TypedEndpoint, String, Ty)> {
+        if chain_source_variable(chain) != Some(expected_source) {
+            return None;
+        }
+        let [reduce, bind] = chain.stages.as_slice() else {
+            return None;
+        };
+        let TypedStageKind::Reduce {
+            op,
+            symbol,
+            identity,
+        } = &reduce.kind
+        else {
+            return None;
+        };
+        let op = self.canonical_name(op, *symbol);
+        if !matches!(op.as_str(), "add" | "min" | "max") {
+            return None;
+        }
+        let TypedStageKind::Bind { target } = &bind.kind else {
+            return None;
+        };
+        let output_name = binding_target_name(target)?.to_string();
+        Some((op, identity.clone(), output_name, reduce.output.clone()))
+    }
+
+    fn canonical_name(&self, name: &str, symbol: Option<SymbolId>) -> String {
+        symbol
+            .and_then(|id| self.builtins_by_id.get(&id).cloned())
+            .unwrap_or_else(|| name.to_string())
     }
 
     pub(super) fn emit_c_manifest(&self) -> String {
@@ -198,6 +404,20 @@ impl GpuPlan {
             kernels.len()
         ));
         out
+    }
+}
+
+fn chain_source_variable(chain: &TypedChain) -> Option<&str> {
+    match &chain.source.kind {
+        TypedEndpointKind::Variable(name) => Some(name),
+        _ => None,
+    }
+}
+
+fn binding_target_name(target: &BindingTarget) -> Option<&str> {
+    match target {
+        BindingTarget::Variable(name) => Some(name),
+        _ => None,
     }
 }
 

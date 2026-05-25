@@ -603,21 +603,23 @@ mod tests {
             },
         )
         .expect("typescript gpu concurrency");
-        assert!(emitted.contains("faGpuMapI32"));
-        assert!(emitted.contains("faGpuReduceI32"));
+        assert!(emitted.contains("faGpuRangeMapReduceI32"));
         assert!(emitted.contains("fa_gpu_map_score_job"));
         assert!(emitted.contains("fa_gpu_map_weight_job"));
-        assert!(emitted.contains("array<i32>"));
+        assert!(emitted.contains("faGpuRangeMapReduceWgsl"));
+        assert!(!emitted.contains("const jobs = faRangeStep"));
+        assert!(!emitted.contains("await faGpuMapI32"));
+        assert!(!emitted.contains("await faGpuReduceI32"));
         assert!(!emitted.contains("faParallelMapBigInt"));
 
         let module = parser::parse(source).expect("parse");
         let lowered = codegen::lower_module_with_base(&module, Path::new("examples/concurrency"))
             .expect("lower");
         let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
-        assert!(llvm.contains("@fa_gpu_map_score_job_wgsl"));
-        assert!(llvm.contains("@fa_gpu_map_weight_job_wgsl"));
-        assert!(llvm.contains("call void @fa_gpu_map_i64"));
-        assert!(llvm.contains("call i64 @fa_gpu_reduce_i64"));
+        assert!(llvm.contains("call i64 @fa_gpu_range_map_reduce_i64"));
+        assert!(!llvm.contains("call [2 x i64] @fa_range_step"));
+        assert!(!llvm.contains("call void @fa_gpu_map_i64"));
+        assert!(!llvm.contains("call i64 @fa_gpu_reduce_i64"));
         assert!(!llvm.contains("map.loop"));
         assert!(!llvm.contains("reduce.add.loop"));
         assert!(!llvm.contains("reduce.minmax.loop"));

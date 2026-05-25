@@ -276,6 +276,9 @@ separate evaluator. A backend-neutral GPU planner walks the typed module and
 recognizes GPU-legal typed regions. The implemented scalar path covers pure
 `Seq[Int] -> Seq[Int]` and `Seq[Real] -> Seq[Real]` `map` kernels plus numeric
 `reduce add`, `reduce min`, and `reduce max` over `Seq[Int]` and `Seq[Real]`.
+It also recognizes `range_step -> map Int -> reduce` groups and lowers them as
+GPU-resident virtual-range reductions, so the host does not materialize the
+range or mapped sequence when every downstream consumer is reducible on the GPU.
 The planner lowers map regions to WGSL with explicit storage buffers and a
 workgroup dispatch shape. The TypeScript and JavaScript backends emit WebGPU
 host code that compiles and dispatches the generated WGSL through
@@ -284,8 +287,8 @@ GPU-targeted artifacts require WebGPU at runtime and fail if a device cannot be
 acquired. Native/LLVM builds lower eligible maps and reductions to direct calls
 into a generated wgpu runtime library. That runtime is bundled next to the
 native executable, requires a native adapter at startup, compiles the WGSL
-kernels through wgpu, and aborts instead of falling back to CPU execution when
-no GPU device is available.
+kernels through wgpu, handles the virtual range reduction ABI, and aborts
+instead of falling back to CPU execution when no GPU device is available.
 
 ### 2.5 WASM-hosted TypeScript compiler
 

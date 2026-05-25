@@ -131,6 +131,7 @@ impl<'a> TypedCodegen<'a> {
         if self.gpu_enabled {
             out.push_str("extern int64_t fa_gpu_reduce_i64(uint32_t op, const int64_t *input, size_t count, int64_t identity);\n");
             out.push_str("extern double fa_gpu_reduce_f64(uint32_t op, const double *input, size_t count, double identity);\n");
+            out.push_str("extern int64_t fa_gpu_range_map_reduce_i64(const char *map_expr, int64_t start, int64_t stop, int64_t step, uint32_t op, int64_t identity);\n");
         }
         for name in &names {
             let sig = self.signatures.get(name).expect("signature");
@@ -253,6 +254,7 @@ impl<'a> TypedCodegen<'a> {
         if self.gpu_enabled {
             out.push_str("extern int64_t fa_gpu_reduce_i64(uint32_t op, const int64_t *input, size_t count, int64_t identity);\n");
             out.push_str("extern double fa_gpu_reduce_f64(uint32_t op, const double *input, size_t count, double identity);\n");
+            out.push_str("extern int64_t fa_gpu_range_map_reduce_i64(const char *map_expr, int64_t start, int64_t stop, int64_t step, uint32_t op, int64_t identity);\n");
         }
         for name in &names {
             let sig = self.signatures.get(name).expect("signature");
@@ -1027,10 +1029,39 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         }
 
         let chains = fuse_single_use_chains(callable);
+        let mut fused_callable = callable.clone();
+        fused_callable.chains = chains.clone();
+        let fused_reductions = self.gpu_plan.range_map_reductions(&fused_callable);
+        let fused_by_reduce = fused_reductions
+            .iter()
+            .cloned()
+            .map(|reduction| (reduction.reduce_chain, reduction))
+            .collect::<HashMap<_, _>>();
+        let fused_skip = fused_reductions
+            .iter()
+            .flat_map(|reduction| {
+                [
+                    reduction.range_chain,
+                    reduction.map_chain,
+                    reduction.reduce_chain,
+                ]
+            })
+            .collect::<HashSet<_>>();
         let mut chain_index = 0;
         while chain_index < chains.len() {
+            if let Some(reduction) = fused_by_reduce.get(&chain_index) {
+                self.emit_gpu_range_map_reduction(out, reduction, &mut env)?;
+                chain_index += 1;
+                continue;
+            }
+            if fused_skip.contains(&chain_index) {
+                chain_index += 1;
+                continue;
+            }
             let batch_len = self.parallel_chain_batch_len(&chains[chain_index..], &env)?;
-            if batch_len > 1 {
+            let batch_crosses_fused_chain =
+                (chain_index..chain_index + batch_len).any(|index| fused_skip.contains(&index));
+            if batch_len > 1 && !batch_crosses_fused_chain {
                 self.emit_parallel_chain_batch(
                     out,
                     &chains[chain_index..chain_index + batch_len],
@@ -1644,6 +1675,53 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 }
             }
             index += 1;
+        }
+        Ok(())
+    }
+
+    fn emit_gpu_range_map_reduction(
+        &mut self,
+        out: &mut String,
+        reduction: &gpu::GpuRangeMapReduction,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<(), String> {
+        let gpu::GpuScalarKind::I32 = reduction.map_kernel.scalar else {
+            return Err("GPU range reductions currently require Int range map kernels".to_string());
+        };
+        if reduction.output_ty != Ty::Int {
+            return Err(format!(
+                "GPU range reduction expected Int output, found `{}`",
+                reduction.output_ty
+            ));
+        }
+        let range_ty = Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]);
+        let range =
+            self.emit_endpoint_expected(out, &reduction.range_source, env, Some(&range_ty))?;
+        let identity = self.emit_endpoint(out, &reduction.identity, env)?;
+        let tmp = self.next_temp();
+        out.push_str(&format!(
+            "  int64_t {tmp} = fa_gpu_range_map_reduce_i64(\"{}\", {}.f0, {}.f1, {}.f2, {}, {});\n",
+            c_string(&reduction.map_kernel.map_expr),
+            range.code,
+            range.code,
+            range.code,
+            gpu_reduce_op(&reduction.op),
+            identity.code
+        ));
+        if env
+            .insert(
+                reduction.output_name.clone(),
+                Value {
+                    code: tmp,
+                    ty: reduction.output_ty.clone(),
+                },
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "value `{}` is bound more than once",
+                reduction.output_name
+            ));
         }
         Ok(())
     }
