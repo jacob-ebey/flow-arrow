@@ -81,6 +81,16 @@ struct SyncMapBatchItem {
     output_ty: Ty,
 }
 
+struct ReduceBatchItem {
+    source: TypedEndpoint,
+    source_key: String,
+    target: String,
+    op: String,
+    identity: TypedEndpoint,
+    item_ty: Ty,
+    output_ty: Ty,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncMapOutputStorage {
     Array,
@@ -92,9 +102,69 @@ struct RangeSyncMapBatch {
     items: Vec<SyncMapBatchItem>,
 }
 
+enum AsyncChainBatchItem {
+    Call {
+        source: TypedEndpoint,
+        target: String,
+        output_ty: Ty,
+        callee: String,
+    },
+    Map {
+        source: TypedEndpoint,
+        target: String,
+        output_ty: Ty,
+        function: &'static str,
+        kernel_id: String,
+        wgsl: String,
+    },
+    Reduce {
+        source: TypedEndpoint,
+        target: String,
+        output_ty: Ty,
+        function: &'static str,
+        op: String,
+        identity: TypedEndpoint,
+    },
+}
+
 impl SyncMapBatchItem {
     fn storage(&self) -> SyncMapOutputStorage {
         sync_map_output_storage(&self.output_ty)
+    }
+}
+
+impl ReduceBatchItem {
+    fn references_any(&self, names: &HashSet<String>) -> bool {
+        endpoint_references_any(&self.source, names)
+            || endpoint_references_any(&self.identity, names)
+    }
+}
+
+impl AsyncChainBatchItem {
+    fn target(&self) -> &str {
+        match self {
+            Self::Call { target, .. } | Self::Map { target, .. } | Self::Reduce { target, .. } => {
+                target
+            }
+        }
+    }
+
+    fn output_ty(&self) -> &Ty {
+        match self {
+            Self::Call { output_ty, .. }
+            | Self::Map { output_ty, .. }
+            | Self::Reduce { output_ty, .. } => output_ty,
+        }
+    }
+
+    fn references_any(&self, names: &HashSet<String>) -> bool {
+        match self {
+            Self::Call { source, .. } => endpoint_references_any(source, names),
+            Self::Map { source, .. } => endpoint_references_any(source, names),
+            Self::Reduce {
+                source, identity, ..
+            } => endpoint_references_any(source, names) || endpoint_references_any(identity, names),
+        }
     }
 }
 
@@ -608,9 +678,13 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
 
         let mut chain_index = 0;
         while chain_index < callable.chains.len() {
-            if let Some(reduction) = fused_by_reduce.get(&chain_index) {
-                self.emit_gpu_range_map_reduction(out, reduction, &mut env, "  ")?;
-                chain_index += 1;
+            if fused_by_reduce.contains_key(&chain_index) {
+                let mut reductions = Vec::new();
+                while let Some(reduction) = fused_by_reduce.get(&(chain_index + reductions.len())) {
+                    reductions.push(reduction.clone());
+                }
+                self.emit_gpu_range_map_reductions(out, &reductions, &mut env, "  ")?;
+                chain_index += reductions.len();
                 continue;
             }
             if fused_skip.contains(&chain_index) {
@@ -621,6 +695,32 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 let consumed = 1 + batch.items.len();
                 self.emit_range_sync_map_batch(out, batch, &mut env, "  ")?;
                 chain_index += consumed;
+                continue;
+            }
+            let batch_len = self.async_chain_batch_len(&callable.chains[chain_index..])?;
+            let batch_crosses_fused_chain =
+                (chain_index..chain_index + batch_len).any(|index| fused_skip.contains(&index));
+            if batch_len > 0 && !batch_crosses_fused_chain {
+                self.emit_async_chain_batch(
+                    out,
+                    &callable.chains[chain_index..chain_index + batch_len],
+                    &mut env,
+                    "  ",
+                )?;
+                chain_index += batch_len;
+                continue;
+            }
+            let batch_len = self.reduce_batch_len(&callable.chains[chain_index..])?;
+            let batch_crosses_fused_chain =
+                (chain_index..chain_index + batch_len).any(|index| fused_skip.contains(&index));
+            if batch_len > 1 && !batch_crosses_fused_chain {
+                self.emit_reduce_batch(
+                    out,
+                    &callable.chains[chain_index..chain_index + batch_len],
+                    &mut env,
+                    "  ",
+                )?;
+                chain_index += batch_len;
                 continue;
             }
             let batch_len = self.worker_map_batch_len(&callable.chains[chain_index..], &env)?;
@@ -659,57 +759,76 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         Ok(())
     }
 
-    fn emit_gpu_range_map_reduction(
+    fn emit_gpu_range_map_reductions(
         &mut self,
         out: &mut String,
-        reduction: &gpu::GpuRangeMapReduction,
+        reductions: &[gpu::GpuRangeMapReduction],
         env: &mut HashMap<String, TsValue>,
         indent: &str,
     ) -> Result<(), String> {
+        if reductions.is_empty() {
+            return Ok(());
+        }
         let range_ty = Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]);
-        let range = self.emit_endpoint_expected(
-            out,
-            &reduction.range_source,
-            env,
-            Some(&range_ty),
-            indent,
-        )?;
-        let identity = self.emit_endpoint(out, &reduction.identity, env, indent)?;
-        let tmp = self.next_temp_or_preferred(Some(&reduction.output_name));
-        match reduction.map_kernel.scalar {
-            gpu::GpuScalarKind::I32 => {
-                if reduction.output_ty != Ty::Int {
-                    return Err(format!(
-                        "GPU range reduction expected Int output, found `{}`",
-                        reduction.output_ty
-                    ));
+        let mut targets = Vec::with_capacity(reductions.len());
+        let mut calls = Vec::with_capacity(reductions.len());
+        for reduction in reductions {
+            let range = self.emit_endpoint_expected(
+                out,
+                &reduction.range_source,
+                env,
+                Some(&range_ty),
+                indent,
+            )?;
+            let identity = self.emit_endpoint(out, &reduction.identity, env, indent)?;
+            match reduction.map_kernel.scalar {
+                gpu::GpuScalarKind::I32 => {
+                    if reduction.output_ty != Ty::Int {
+                        return Err(format!(
+                            "GPU range reduction expected Int output, found `{}`",
+                            reduction.output_ty
+                        ));
+                    }
                 }
-                out.push_str(&format!(
-                    "{indent}const {tmp}: bigint = await faGpuRangeMapReduceI32([{}], {}, {}, {}, {});\n",
-                    call_args(&range, 3)?,
-                    ts_string(&reduction.map_kernel.id),
-                    ts_string(&reduction.map_kernel.map_expr),
-                    ts_string(&reduction.op),
-                    identity.code
+                gpu::GpuScalarKind::F32 => {
+                    return Err(
+                        "GPU range reductions currently require Int range map kernels".to_string(),
+                    );
+                }
+            }
+            targets.push(self.next_temp_or_preferred(Some(&reduction.output_name)));
+            calls.push(format!(
+                "faGpuRangeMapReduceI32([{}], {}, {}, {}, {})",
+                call_args(&range, 3)?,
+                ts_string(&reduction.map_kernel.id),
+                ts_string(&reduction.map_kernel.map_expr),
+                ts_string(&reduction.op),
+                identity.code
+            ));
+        }
+        out.push_str(&format!(
+            "{indent}const [{}]: [{}] = await Promise.all([{}]);\n",
+            targets.join(", "),
+            reductions
+                .iter()
+                .map(|_| "bigint")
+                .collect::<Vec<_>>()
+                .join(", "),
+            calls.join(", ")
+        ));
+        for (reduction, target) in reductions.iter().zip(targets) {
+            if env
+                .insert(
+                    reduction.output_name.clone(),
+                    ts_value(target, reduction.output_ty.clone()),
+                )
+                .is_some()
+            {
+                return Err(format!(
+                    "value `{}` is bound more than once",
+                    reduction.output_name
                 ));
             }
-            gpu::GpuScalarKind::F32 => {
-                return Err(
-                    "GPU range reductions currently require Int range map kernels".to_string(),
-                );
-            }
-        }
-        if env
-            .insert(
-                reduction.output_name.clone(),
-                ts_value(tmp, reduction.output_ty.clone()),
-            )
-            .is_some()
-        {
-            return Err(format!(
-                "value `{}` is bound more than once",
-                reduction.output_name
-            ));
         }
         Ok(())
     }
@@ -741,6 +860,217 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                         .collect::<Vec<_>>(),
                 );
                 Ok(ts_tuple_value(values, ty))
+            }
+        }
+    }
+
+    fn async_chain_batch_len(&self, chains: &[TypedChain]) -> Result<usize, String> {
+        let Some(first) = chains.first() else {
+            return Ok(0);
+        };
+        if self.async_chain_batch_item(first)?.is_none() {
+            return Ok(0);
+        }
+        let mut produced = HashSet::new();
+        let mut len = 0;
+        for chain in chains {
+            let Some(item) = self.async_chain_batch_item(chain)? else {
+                break;
+            };
+            if item.references_any(&produced) {
+                break;
+            }
+            produced.insert(item.target().to_string());
+            len += 1;
+        }
+        Ok(len)
+    }
+
+    fn async_chain_batch_item(
+        &self,
+        chain: &TypedChain,
+    ) -> Result<Option<AsyncChainBatchItem>, String> {
+        let [stage, bind] = chain.stages.as_slice() else {
+            return Ok(None);
+        };
+        let TypedStageKind::Bind {
+            target: BindingTarget::Variable(target),
+        } = &bind.kind
+        else {
+            return Ok(None);
+        };
+        match &stage.kind {
+            TypedStageKind::Call { name, .. } => {
+                if !self.async_callables.contains(name) {
+                    return Ok(None);
+                }
+                Ok(Some(AsyncChainBatchItem::Call {
+                    source: chain.source.clone(),
+                    target: target.clone(),
+                    output_ty: stage.output.clone(),
+                    callee: name.clone(),
+                }))
+            }
+            TypedStageKind::Map { name, .. } => {
+                let Ty::Seq(item_ty) = &stage.input else {
+                    return Ok(None);
+                };
+                let Ty::Seq(output_item_ty) = &stage.output else {
+                    return Ok(None);
+                };
+                let Some(kernel) = self
+                    .gpu_plan
+                    .as_ref()
+                    .and_then(|plan| plan.kernel_for_map(name, item_ty, output_item_ty))
+                    .cloned()
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(AsyncChainBatchItem::Map {
+                    source: chain.source.clone(),
+                    target: target.clone(),
+                    output_ty: stage.output.clone(),
+                    function: kernel.scalar.map_function(),
+                    kernel_id: kernel.id,
+                    wgsl: kernel.wgsl,
+                }))
+            }
+            TypedStageKind::Reduce { op, identity, .. } => {
+                if !self.options.gpu {
+                    return Ok(None);
+                }
+                let Ty::Seq(item_ty) = &stage.input else {
+                    return Ok(None);
+                };
+                if matches!(item_ty.as_ref(), Ty::Faultable(_)) {
+                    return Ok(None);
+                }
+                let canonical = self.codegen.canonical_name(op);
+                if !matches!(canonical.as_str(), "add" | "min" | "max") {
+                    return Ok(None);
+                }
+                let function = match item_ty.as_ref() {
+                    Ty::Int => "faGpuReduceI32",
+                    Ty::Real => "faGpuReduceF32",
+                    _ => return Ok(None),
+                };
+                Ok(Some(AsyncChainBatchItem::Reduce {
+                    source: chain.source.clone(),
+                    target: target.clone(),
+                    output_ty: stage.output.clone(),
+                    function,
+                    op: canonical,
+                    identity: identity.clone(),
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn emit_async_chain_batch(
+        &mut self,
+        out: &mut String,
+        chains: &[TypedChain],
+        env: &mut HashMap<String, TsValue>,
+        indent: &str,
+    ) -> Result<(), String> {
+        let items = chains
+            .iter()
+            .map(|chain| {
+                self.async_chain_batch_item(chain)?
+                    .ok_or_else(|| "expected async chain batch item".to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let mut targets = Vec::with_capacity(items.len());
+        let mut output_types = Vec::with_capacity(items.len());
+        let mut calls = Vec::with_capacity(items.len());
+        for item in &items {
+            let target = ts_ident(item.target());
+            if !self.try_reserve_ident(&target) {
+                return Err(format!("value `{}` is bound more than once", item.target()));
+            }
+            targets.push(target);
+            output_types.push(item.output_ty().clone());
+            calls.push(self.async_chain_batch_call(out, item, env, indent)?);
+        }
+        let tuple_ty = format!(
+            "[{}]",
+            output_types
+                .iter()
+                .map(ts_type)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        out.push_str(&format!(
+            "{indent}const [{}]: {tuple_ty} = await Promise.all([{}]);\n",
+            targets.join(", "),
+            calls.join(", ")
+        ));
+        for ((item, target), output_ty) in items.iter().zip(targets).zip(output_types) {
+            if env
+                .insert(item.target().to_string(), ts_value(target, output_ty))
+                .is_some()
+            {
+                return Err(format!("value `{}` is bound more than once", item.target()));
+            }
+        }
+        Ok(())
+    }
+
+    fn async_chain_batch_call(
+        &mut self,
+        out: &mut String,
+        item: &AsyncChainBatchItem,
+        env: &HashMap<String, TsValue>,
+        indent: &str,
+    ) -> Result<String, String> {
+        match item {
+            AsyncChainBatchItem::Call { source, callee, .. } => {
+                let source = self.emit_endpoint(out, source, env, indent)?;
+                let arity = self
+                    .codegen
+                    .callables
+                    .get(callee)
+                    .map(|callable| callable.inputs.len())
+                    .ok_or_else(|| format!("missing callable `{callee}`"))?;
+                Ok(format!(
+                    "{}({})",
+                    ts_ident(callee),
+                    call_args(&source, arity)?
+                ))
+            }
+            AsyncChainBatchItem::Map {
+                source,
+                function,
+                kernel_id,
+                wgsl,
+                ..
+            } => {
+                let source = self.emit_endpoint(out, source, env, indent)?;
+                Ok(format!(
+                    "{}({}, {}, {})",
+                    function,
+                    source.code,
+                    ts_string(kernel_id),
+                    ts_string(wgsl)
+                ))
+            }
+            AsyncChainBatchItem::Reduce {
+                source,
+                function,
+                op,
+                identity,
+                ..
+            } => {
+                let source = self.emit_endpoint(out, source, env, indent)?;
+                let identity = self.emit_endpoint(out, identity, env, indent)?;
+                Ok(format!(
+                    "{}({}, {}, {})",
+                    function,
+                    source.code,
+                    ts_string(op),
+                    identity.code
+                ))
             }
         }
     }
@@ -833,6 +1163,139 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                         preferred,
                     )?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn reduce_batch_len(&self, chains: &[TypedChain]) -> Result<usize, String> {
+        let Some(first_chain) = chains.first() else {
+            return Ok(0);
+        };
+        let Some(first) = self.reduce_batch_item(first_chain)? else {
+            return Ok(0);
+        };
+        let source_key = first.source_key;
+        let mut produced = HashSet::new();
+        let mut len = 0;
+        for chain in chains {
+            let Some(item) = self.reduce_batch_item(chain)? else {
+                break;
+            };
+            if item.source_key != source_key || item.references_any(&produced) {
+                break;
+            }
+            produced.insert(item.target.clone());
+            len += 1;
+        }
+        Ok(len)
+    }
+
+    fn reduce_batch_item(&self, chain: &TypedChain) -> Result<Option<ReduceBatchItem>, String> {
+        let [reduce, bind] = chain.stages.as_slice() else {
+            return Ok(None);
+        };
+        let TypedStageKind::Reduce { op, identity, .. } = &reduce.kind else {
+            return Ok(None);
+        };
+        let TypedStageKind::Bind {
+            target: BindingTarget::Variable(target),
+        } = &bind.kind
+        else {
+            return Ok(None);
+        };
+        if self.reduce_stage_uses_gpu(&reduce.input, op) || self.async_callables.contains(op) {
+            return Ok(None);
+        }
+        let Ty::Seq(item_ty) = &reduce.input else {
+            return Ok(None);
+        };
+        if matches!(item_ty.as_ref(), Ty::Faultable(_))
+            || matches!(&reduce.output, Ty::Faultable(_))
+            || item_ty.as_ref() != &reduce.output
+        {
+            return Ok(None);
+        }
+        Ok(Some(ReduceBatchItem {
+            source: chain.source.clone(),
+            source_key: chain.source.label.clone(),
+            target: target.clone(),
+            op: op.clone(),
+            identity: identity.clone(),
+            item_ty: item_ty.as_ref().clone(),
+            output_ty: reduce.output.clone(),
+        }))
+    }
+
+    fn emit_reduce_batch(
+        &mut self,
+        out: &mut String,
+        chains: &[TypedChain],
+        env: &mut HashMap<String, TsValue>,
+        indent: &str,
+    ) -> Result<(), String> {
+        let items = chains
+            .iter()
+            .map(|chain| {
+                self.reduce_batch_item(chain)?
+                    .ok_or_else(|| "expected reduce batch item".to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let mut targets = Vec::with_capacity(items.len());
+        for item in &items {
+            let target = ts_ident(&item.target);
+            if !self.try_reserve_ident(&target) {
+                return Err(format!("value `{}` is bound more than once", item.target));
+            }
+            targets.push(target);
+        }
+
+        let mut source = self.emit_endpoint(out, &items[0].source, env, indent)?;
+        if !ts_value_code_is_stable(&source.code) {
+            let source_tmp = self.next_temp();
+            out.push_str(&format!(
+                "{indent}const {source_tmp}: {} = {};\n",
+                ts_type(&source.ty),
+                source.code
+            ));
+            source.code = source_tmp;
+        }
+        for (item, target) in items.iter().zip(targets.iter()) {
+            let identity = self.emit_endpoint(out, &item.identity, env, indent)?;
+            out.push_str(&format!(
+                "{indent}let {target}: {} = {};\n",
+                ts_type(&item.output_ty),
+                identity.code
+            ));
+        }
+        let item_name = self.next_temp();
+        out.push_str(&format!(
+            "{indent}for (const {item_name} of {}) {{\n",
+            source.code
+        ));
+        for (item, target) in items.iter().zip(targets.iter()) {
+            let pair_ty = Ty::Tuple(vec![item.output_ty.clone(), item.item_ty.clone()]);
+            let pair = ts_tuple_value(
+                vec![
+                    ts_value(target.clone(), item.output_ty.clone()),
+                    ts_value(item_name.clone(), item.item_ty.clone()),
+                ],
+                pair_ty,
+            );
+            let reduced = self.emit_call(out, &item.op, pair, &(indent.to_string() + "  "))?;
+            out.push_str(&format!("{indent}  {target} = {};\n", reduced.code));
+        }
+        out.push_str(&format!("{indent}}}\n"));
+
+        for (item, target) in items.iter().zip(targets) {
+            if env
+                .insert(
+                    item.target.clone(),
+                    ts_value(target, item.output_ty.clone()),
+                )
+                .is_some()
+            {
+                return Err(format!("value `{}` is bound more than once", item.target));
             }
         }
         Ok(())
@@ -2080,33 +2543,54 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 .and_then(|plan| plan.kernel_for_map(name, item_ty.as_ref(), &output_item_ty))
                 .cloned()
         {
+            let batch = self.next_temp();
             out.push_str(&format!(
-                "{indent}{tmp} = await {}({}, {}, {});\n",
+                "{indent}const {batch}: [{}] = await Promise.all([{}({}, {}, {})]);\n",
+                ts_type(&output_ty),
                 kernel.scalar.map_function(),
                 source,
                 ts_string(&kernel.id),
                 ts_string(&kernel.wgsl)
             ));
+            out.push_str(&format!("{indent}{tmp} = {batch}[0];\n"));
             return Ok(ts_value(tmp, output_ty));
         }
         if !is_faultable
             && let Some((worker_fn, mapper_id)) =
                 self.worker_map_call(name, item_ty.as_ref(), &output_item_ty)?
         {
+            let batch = self.next_temp();
             out.push_str(&format!(
-                "{indent}{tmp} = await {worker_fn}({}, {});\n",
+                "{indent}const {batch}: [{}] = await Promise.all([{worker_fn}({}, {})]);\n",
+                ts_type(&output_ty),
                 source,
                 ts_string(&mapper_id)
             ));
+            out.push_str(&format!("{indent}{tmp} = {batch}[0];\n"));
             return Ok(ts_value(tmp, output_ty));
         }
-        let seq_tmp = self.next_temp();
-        let item = self.next_temp();
         let body_indent = if is_faultable {
             format!("{indent}  ")
         } else {
             indent.to_string()
         };
+        if self.async_callables.contains(name) {
+            let item = self.next_temp();
+            let mapped = format!("{}({item})", ts_ident(name));
+            if is_faultable {
+                out.push_str(&format!(
+                    "{body_indent}{tmp} = faOk(await Promise.all(Array.from({source}, ({item}) => {mapped})));\n"
+                ));
+                out.push_str(&format!("{indent}}}\n"));
+            } else {
+                out.push_str(&format!(
+                    "{body_indent}{tmp} = await Promise.all(Array.from({source}, ({item}) => {mapped}));\n"
+                ));
+            }
+            return Ok(ts_value(tmp, output_ty));
+        }
+        let seq_tmp = self.next_temp();
+        let item = self.next_temp();
         out.push_str(&format!(
             "{body_indent}const {seq_tmp}: {} = [];\n",
             ts_type(&output_seq_ty)
@@ -2136,19 +2620,47 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         &mut self,
         out: &mut String,
         name: &str,
-        input: TsValue,
+        mut input: TsValue,
         indent: &str,
         preferred: Option<&str>,
     ) -> Result<TsValue, String> {
         let Ty::Seq(item_ty) = input.ty.clone() else {
             return Err(format!("`filter {name}` expected Seq input"));
         };
+        if !ts_value_code_is_stable(&input.code) {
+            let input_tmp = self.next_temp();
+            out.push_str(&format!(
+                "{indent}const {input_tmp}: {} = {};\n",
+                ts_type(&input.ty),
+                input.code
+            ));
+            input.code = input_tmp;
+        }
         let tmp = self.next_temp_or_preferred(preferred);
         let item = self.next_temp();
         out.push_str(&format!(
             "{indent}const {tmp}: {} = [];\n",
             ts_type(&input.ty)
         ));
+        if self.async_callables.contains(name) {
+            let decisions = self.next_temp();
+            let index = self.next_temp();
+            out.push_str(&format!(
+                "{indent}const {decisions}: Array<boolean> = await Promise.all(Array.from({}, ({item}) => {}({item})));\n",
+                input.code,
+                ts_ident(name)
+            ));
+            out.push_str(&format!("{indent}let {index} = 0;\n"));
+            out.push_str(&format!(
+                "{indent}for (const {item} of {}) {{\n",
+                input.code
+            ));
+            out.push_str(&format!(
+                "{indent}  if ({decisions}[{index}++]) {tmp}.push({item});\n"
+            ));
+            out.push_str(&format!("{indent}}}\n"));
+            return Ok(ts_value(tmp, input.ty));
+        }
         out.push_str(&format!(
             "{indent}for (const {item} of {}) {{\n",
             input.code
@@ -2239,21 +2751,27 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             if matches!(canonical.as_str(), "add" | "min" | "max") {
                 match plain_item_ty {
                     Ty::Int => {
+                        let batch = self.next_temp();
                         out.push_str(&format!(
-                            "{body_indent}{tmp} = await faGpuReduceI32({}, {}, {});\n",
+                            "{body_indent}const {batch}: [{}] = await Promise.all([faGpuReduceI32({}, {}, {})]);\n",
+                            ts_type(&output_ty),
                             source,
                             ts_string(&canonical),
                             identity.code
                         ));
+                        out.push_str(&format!("{body_indent}{tmp} = {batch}[0];\n"));
                         return Ok(ts_value(tmp, output_ty));
                     }
                     Ty::Real => {
+                        let batch = self.next_temp();
                         out.push_str(&format!(
-                            "{body_indent}{tmp} = await faGpuReduceF32({}, {}, {});\n",
+                            "{body_indent}const {batch}: [{}] = await Promise.all([faGpuReduceF32({}, {}, {})]);\n",
+                            ts_type(&output_ty),
                             source,
                             ts_string(&canonical),
                             identity.code
                         ));
+                        out.push_str(&format!("{body_indent}{tmp} = {batch}[0];\n"));
                         return Ok(ts_value(tmp, output_ty));
                     }
                     _ => {}
@@ -2455,28 +2973,30 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 if state.len() != 3 {
                     return Err("GPU vector accumulator expected three tuple fields".to_string());
                 }
+                let batch = self.next_temp();
                 out.push_str(&format!(
-                    "{indent}  {} = await faGpuRepeatVectorAccumF64({}, {}, {}, {}, {iter});\n",
-                    state[2].code,
+                    "{indent}  const {batch}: [number] = await Promise.all([faGpuRepeatVectorAccumF64({}, {}, {}, {}, {iter})]);\n",
                     ts_string(&plan.wgsl),
                     state[0].code,
                     state[1].code,
                     state[2].code,
                 ));
+                out.push_str(&format!("{indent}  {} = {batch}[0];\n", state[2].code));
             }
             GpuRepeatAccumulatorKind::MatrixScore => {
                 if state.len() != 4 {
                     return Err("GPU matrix accumulator expected four tuple fields".to_string());
                 }
+                let batch = self.next_temp();
                 out.push_str(&format!(
-                    "{indent}  {} = await faGpuRepeatMatrixAccumF64({}, {}, {}, {}, {}, {iter});\n",
-                    state[3].code,
+                    "{indent}  const {batch}: [number] = await Promise.all([faGpuRepeatMatrixAccumF64({}, {}, {}, {}, {}, {iter})]);\n",
                     ts_string(&plan.wgsl),
                     state[0].code,
                     state[1].code,
                     state[2].code,
                     state[3].code,
                 ));
+                out.push_str(&format!("{indent}  {} = {batch}[0];\n", state[3].code));
             }
         }
         out.push_str(&format!("{indent}}}\n"));
@@ -3017,6 +3537,69 @@ fn chain_source_variable(chain: &TypedChain) -> Option<&str> {
     match &chain.source.kind {
         TypedEndpointKind::Variable(name) => Some(name),
         _ => None,
+    }
+}
+
+fn endpoint_references_any(endpoint: &TypedEndpoint, names: &HashSet<String>) -> bool {
+    match &endpoint.kind {
+        TypedEndpointKind::Variable(name) | TypedEndpointKind::NodeRef { name, .. } => {
+            names.contains(name)
+        }
+        TypedEndpointKind::Tuple(items) | TypedEndpointKind::Seq(items) => items
+            .iter()
+            .any(|item| endpoint_references_any(item, names)),
+        TypedEndpointKind::Struct { fields, .. } => fields
+            .iter()
+            .any(|(_, item)| endpoint_references_any(item, names)),
+        TypedEndpointKind::Eval { source, stages } => {
+            endpoint_references_any(source, names)
+                || stages
+                    .iter()
+                    .any(|stage| stage_references_any(stage, names))
+        }
+        TypedEndpointKind::Int(_)
+        | TypedEndpointKind::Real(_)
+        | TypedEndpointKind::Bool(_)
+        | TypedEndpointKind::String(_)
+        | TypedEndpointKind::Unit => false,
+    }
+}
+
+fn stage_references_any(stage: &crate::typecheck::TypedStage, names: &HashSet<String>) -> bool {
+    match &stage.kind {
+        TypedStageKind::Repeat { count, .. } => endpoint_references_any(count, names),
+        TypedStageKind::Reduce { identity, .. } | TypedStageKind::Scan { identity, .. } => {
+            endpoint_references_any(identity, names)
+        }
+        TypedStageKind::Match { arms } => arms.iter().any(|arm| {
+            let guard_refs = match &arm.guard {
+                TypedMatchGuard::Call { args, .. } => {
+                    args.iter().any(|arg| endpoint_references_any(arg, names))
+                }
+                TypedMatchGuard::Fallback => false,
+            };
+            let target_refs = match &arm.target {
+                TypedMatchTarget::Value(endpoint) => endpoint_references_any(endpoint, names),
+                TypedMatchTarget::Node { name, .. } => names.contains(name),
+            };
+            guard_refs || target_refs
+        }),
+        TypedStageKind::Call { name, .. }
+        | TypedStageKind::Map { name, .. }
+        | TypedStageKind::FaultMap { node: name, .. }
+        | TypedStageKind::Filter { name, .. } => names.contains(name),
+        TypedStageKind::Bind { target } => binding_target_references_any(target, names),
+        TypedStageKind::Field { .. } => false,
+    }
+}
+
+fn binding_target_references_any(target: &BindingTarget, names: &HashSet<String>) -> bool {
+    match target {
+        BindingTarget::Variable(name) => names.contains(name),
+        BindingTarget::Tuple(targets) => targets
+            .iter()
+            .any(|target| binding_target_references_any(target, names)),
+        BindingTarget::Discard => false,
     }
 }
 
@@ -3955,14 +4538,29 @@ type FaGpuRuntimeModule = typeof faGpuRuntimeModule;
 
 let faGpuRuntimePromise: Promise<FaGpuRuntimeModule> | null = null;
 
-async function faGpuRuntime(): Promise<FaGpuRuntimeModule> {
+function faGpuRuntimeWasmModule(): URL | Uint8Array {
+  const wasmUrl = new URL("./flowarrow_gpu_runtime_bg.wasm", import.meta.url);
+  const processLike = (globalThis as {
+    process?: {
+      versions?: { node?: string };
+      getBuiltinModule?: (name: string) => any;
+    };
+  }).process;
+  if (processLike?.versions?.node && typeof processLike.getBuiltinModule === "function") {
+    const fs = processLike.getBuiltinModule("node:fs");
+    const url = processLike.getBuiltinModule("node:url");
+    return fs.readFileSync(url.fileURLToPath(wasmUrl));
+  }
+  return wasmUrl;
+}
+
+function faGpuRuntime(): Promise<FaGpuRuntimeModule> {
   if (faGpuRuntimePromise !== null) return faGpuRuntimePromise;
-  faGpuRuntimePromise = (async () => {
-    const runtime = faGpuRuntimeModule;
-    await runtime.default(new URL("./flowarrow_gpu_runtime_bg.wasm", import.meta.url));
-    await runtime.fa_gpu_require_device();
-    return runtime;
-  })();
+  const runtime = faGpuRuntimeModule;
+  faGpuRuntimePromise = runtime
+    .default({ module_or_path: faGpuRuntimeWasmModule() })
+    .then(() => runtime.fa_gpu_require_device())
+    .then(() => runtime);
   return faGpuRuntimePromise;
 }
 
@@ -3980,69 +4578,81 @@ function faGpuReduceOp(op: string): number {
   throw new Error(`unsupported GPU reduce op: ${op}`);
 }
 
-async function faGpuMapI32(input: bigint[], _kernelId: string, wgsl: string): Promise<bigint[]> {
-  const runtime = await faGpuRuntime();
-  const mapped = await runtime.fa_gpu_map_i32(wgsl, new Int32Array(input.map(faGpuAssertI32)));
-  return Array.from(mapped, (value) => BigInt(value));
+function faGpuMapI32(input: bigint[], _kernelId: string, wgsl: string): Promise<bigint[]> {
+  const packed = new Int32Array(input.map(faGpuAssertI32));
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_map_i32(wgsl, packed))
+    .then((mapped) => Array.from(mapped, (value) => BigInt(value)));
 }
 
-async function faGpuMapF32(input: number[], _kernelId: string, wgsl: string): Promise<number[]> {
-  const runtime = await faGpuRuntime();
-  const mapped = await runtime.fa_gpu_map_f64(wgsl, faGpuFloat64Input(input));
-  return mapped as unknown as number[];
+function faGpuMapF32(input: number[], _kernelId: string, wgsl: string): Promise<number[]> {
+  const packed = faGpuFloat64Input(input);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_map_f64(wgsl, packed))
+    .then((mapped) => mapped as unknown as number[]);
 }
 
-async function faGpuReduceI32(input: bigint[], op: string, identity: bigint): Promise<bigint> {
-  const runtime = await faGpuRuntime();
-  const reduced = await runtime.fa_gpu_reduce_i32(
-    faGpuReduceOp(op),
-    new Int32Array(input.map(faGpuAssertI32)),
-    faGpuAssertI32(identity),
-  );
-  return BigInt(reduced);
+function faGpuReduceI32(input: bigint[], op: string, identity: bigint): Promise<bigint> {
+  const reduceOp = faGpuReduceOp(op);
+  const packed = new Int32Array(input.map(faGpuAssertI32));
+  const packedIdentity = faGpuAssertI32(identity);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_reduce_i32(reduceOp, packed, packedIdentity))
+    .then((reduced) => BigInt(reduced));
 }
 
-async function faGpuReduceF32(input: number[], op: string, identity: number): Promise<number> {
-  const runtime = await faGpuRuntime();
-  return await runtime.fa_gpu_reduce_f64(faGpuReduceOp(op), faGpuFloat64Input(input), identity);
+function faGpuReduceF32(input: number[], op: string, identity: number): Promise<number> {
+  const reduceOp = faGpuReduceOp(op);
+  const packed = faGpuFloat64Input(input);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_reduce_f64(reduceOp, packed, identity));
 }
 
-async function faGpuRangeMapReduceI32(
+function faGpuRangeMapReduceI32(
   range: [f0: bigint, f1: bigint, f2: bigint],
   _kernelId: string,
   mapExpr: string,
   op: string,
   identity: bigint,
 ): Promise<bigint> {
-  const runtime = await faGpuRuntime();
-  const reduced = await runtime.fa_gpu_range_map_reduce_i32(
-    mapExpr,
-    faGpuAssertI32(range[0]),
-    faGpuAssertI32(range[1]),
-    faGpuAssertI32(range[2]),
-    faGpuReduceOp(op),
-    faGpuAssertI32(identity),
-  );
-  return BigInt(reduced);
+  const start = faGpuAssertI32(range[0]);
+  const stop = faGpuAssertI32(range[1]);
+  const step = faGpuAssertI32(range[2]);
+  const reduceOp = faGpuReduceOp(op);
+  const packedIdentity = faGpuAssertI32(identity);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_range_map_reduce_i32(
+      mapExpr,
+      start,
+      stop,
+      step,
+      reduceOp,
+      packedIdentity,
+    ))
+    .then((reduced) => BigInt(reduced));
 }
 
-async function faGpuRepeatVectorAccumF64(
+function faGpuRepeatVectorAccumF64(
   wgsl: string,
   left: number[],
   right: number[],
   score: number,
   iterations: bigint,
 ): Promise<number> {
-  return await (await faGpuRuntime()).fa_gpu_repeat_vector_accum_f64(
-    wgsl,
-    faGpuFloat64Input(left),
-    faGpuFloat64Input(right),
-    score,
-    faGpuAssertI32(iterations),
-  );
+  const leftPacked = faGpuFloat64Input(left);
+  const rightPacked = faGpuFloat64Input(right);
+  const packedIterations = faGpuAssertI32(iterations);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_repeat_vector_accum_f64(
+      wgsl,
+      leftPacked,
+      rightPacked,
+      score,
+      packedIterations,
+    ));
 }
 
-async function faGpuRepeatMatrixAccumF64(
+function faGpuRepeatMatrixAccumF64(
   wgsl: string,
   left: number[][],
   right: number[][],
@@ -4052,18 +4662,21 @@ async function faGpuRepeatMatrixAccumF64(
 ): Promise<number> {
   const leftFlat = faGpuFlattenMatrix(left, "left");
   const rightFlat = faGpuFlattenMatrix(right, "right");
-  return await (await faGpuRuntime()).fa_gpu_repeat_matrix_accum_f64(
-    wgsl,
-    leftFlat.values,
-    leftFlat.rows,
-    leftFlat.cols,
-    rightFlat.values,
-    rightFlat.rows,
-    rightFlat.cols,
-    new Float64Array(vector),
-    score,
-    faGpuAssertI32(iterations),
-  );
+  const vectorPacked = faGpuFloat64Input(vector);
+  const packedIterations = faGpuAssertI32(iterations);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_repeat_matrix_accum_f64(
+      wgsl,
+      leftFlat.values,
+      leftFlat.rows,
+      leftFlat.cols,
+      rightFlat.values,
+      rightFlat.rows,
+      rightFlat.cols,
+      vectorPacked,
+      score,
+      packedIterations,
+    ));
 }
 
 function faGpuFlattenMatrix(input: number[][], label: string): { values: Float64Array; rows: number; cols: number } {

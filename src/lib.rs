@@ -560,6 +560,87 @@ mod tests {
     }
 
     #[test]
+    fn javascript_typescript_standard_reductions_share_source_traversals() {
+        let source = include_str!("../examples/concurrency/main.flow");
+        let typescript = compile_typescript_source(source).expect("typescript");
+        let (_, javascript) = compile_javascript_artifacts_source_with_options(
+            source,
+            TypeScriptCompileOptions::default(),
+        )
+        .expect("javascript");
+
+        for emitted in [typescript.as_str(), javascript.as_str()] {
+            let main_body = emitted
+                .split("export function main")
+                .nth(1)
+                .and_then(|rest| rest.split("function score_job").next())
+                .expect("main body");
+            assert_eq!(main_body.matches("of scores").count(), 1);
+            assert_eq!(main_body.matches("of weights").count(), 1);
+            assert!(main_body.contains("total_score ="));
+            assert!(main_body.contains("peak_score ="));
+            assert!(main_body.contains("total_weight ="));
+            assert!(main_body.contains("peak_weight ="));
+        }
+    }
+
+    #[test]
+    fn typescript_async_boundaries_use_promise_all_batches() {
+        let source = r#"
+            import std.math { add, gt, mul }
+
+            extern node double_all(values: Seq[Int]) -> out: Seq[Int] {
+                $values -> map double -> $out
+            }
+
+            extern node pair(a: Seq[Int], b: Seq[Int]) -> (left: Seq[Int], right: Seq[Int]) {
+                $a -> double_all -> $left
+                $b -> double_all -> $right
+            }
+
+            extern node async_map(values: Seq[Int]) -> out: Seq[Int] {
+                $values -> map via_async -> $out
+            }
+
+            extern node async_filter(values: Seq[Int]) -> out: Seq[Int] {
+                $values -> filter positive_async -> $out
+            }
+
+            node via_async(n: Int) -> out: Int {
+                [$n]   -> double_all                -> $items
+                $items -> reduce add(identity: 0)   -> $out
+            }
+
+            node positive_async(n: Int) -> keep: Bool {
+                $n           -> via_async -> $doubled
+                ($doubled, 0) -> gt       -> $keep
+            }
+
+            node double(n: Int) -> out: Int {
+                ($n, 2) -> mul -> $out
+            }
+        "#;
+
+        let emitted = compile_typescript_source_with_options(
+            source,
+            TypeScriptCompileOptions {
+                mode: TypeScriptCompileMode::Library,
+                worker_concurrency: true,
+                ..TypeScriptCompileOptions::default()
+            },
+        )
+        .expect("typescript");
+
+        assert!(emitted.contains("await Promise.all([double_all(a), double_all(b)]"));
+        assert!(emitted.contains("await Promise.all(Array.from(values"));
+        assert!(emitted.contains("=> via_async("));
+        assert!(emitted.contains("=> positive_async("));
+        assert!(!emitted.contains("await double_all("));
+        assert!(!emitted.contains("await via_async("));
+        assert!(!emitted.contains("await positive_async("));
+    }
+
+    #[test]
     fn typescript_gpu_lowering_uses_wasm_wgpu_runtime() {
         let source = r#"
             import std.math { add, mul }
@@ -593,6 +674,11 @@ mod tests {
             )
         );
         assert!(!emitted.contains("await import(\"./flowarrow_gpu_runtime.mjs\")"));
+        assert!(!emitted.contains("await faGpuRuntime()"));
+        assert!(!emitted.contains("await (await faGpuRuntime())"));
+        assert!(emitted.contains("function faGpuRuntimeWasmModule"));
+        assert!(emitted.contains("module_or_path: faGpuRuntimeWasmModule()"));
+        assert!(emitted.contains("fileURLToPath(wasmUrl)"));
         assert!(emitted.contains("fa_gpu_map_f64"));
         assert!(!emitted.contains("createShaderModule"));
         assert!(!emitted.contains("GPUBufferUsage"));
@@ -612,6 +698,8 @@ mod tests {
         )
         .expect("typescript gpu concurrency");
         assert!(emitted.contains("faGpuRangeMapReduceI32"));
+        assert!(emitted.contains("const [total_score, peak_score, total_weight, peak_weight]"));
+        assert!(emitted.contains("await Promise.all(["));
         assert!(emitted.contains("fa_gpu_map_score_job"));
         assert!(emitted.contains("fa_gpu_map_weight_job"));
         assert!(emitted.contains("fa_gpu_range_map_reduce_i32"));
@@ -619,6 +707,7 @@ mod tests {
         assert!(!emitted.contains("const jobs = faRangeStep"));
         assert!(!emitted.contains("await faGpuMapI32"));
         assert!(!emitted.contains("await faGpuReduceI32"));
+        assert!(!emitted.contains("await faGpuRangeMapReduceI32"));
         assert!(!emitted.contains("faParallelMapBigInt"));
 
         let module = parser::parse(source).expect("parse");
@@ -791,6 +880,8 @@ mod tests {
 
         assert!(javascript.contains("export async function run_gpu_accumulator"));
         assert!(javascript.contains("faGpuRepeatVectorAccumF64"));
+        assert!(javascript.contains("await Promise.all([faGpuRepeatVectorAccumF64"));
+        assert!(!javascript.contains("await faGpuRepeatVectorAccumF64"));
         assert!(javascript.contains("new Float64Array(1024)"));
         assert!(javascript.contains("left["));
         assert!(javascript.contains("right["));
