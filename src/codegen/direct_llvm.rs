@@ -28,6 +28,12 @@ struct LlvmValue<'ctx> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+struct ExtractedSeq<'ctx> {
+    count: IntValue<'ctx>,
+    items: PointerValue<'ctx>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) struct DirectLlvm<'ctx, 'a> {
     context: &'ctx Context,
     module: LlvmModule<'ctx>,
@@ -434,6 +440,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     }
 
     fn emit_callable(&mut self, callable: &TypedCallable) -> Result<(), String> {
+        self.codegen.validate_gpu_host_callable(callable)?;
         let function = *self
             .functions
             .get(&callable.name)
@@ -2558,6 +2565,9 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         input: LlvmValue<'ctx>,
         count: LlvmValue<'ctx>,
     ) -> Result<LlvmValue<'ctx>, String> {
+        if let Some(plan) = self.codegen.gpu_repeat_accumulator(node, &input.ty) {
+            return self.emit_gpu_repeat_accumulator(plan, input, count);
+        }
         let Ty::Int = count.ty else {
             return Err(format!(
                 "`repeat {node}` count expected Int, found `{}`",
@@ -2641,6 +2651,117 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             value: result,
             ty: input.ty,
         })
+    }
+
+    fn emit_gpu_repeat_accumulator(
+        &mut self,
+        plan: GpuRepeatAccumulator,
+        input: LlvmValue<'ctx>,
+        count: LlvmValue<'ctx>,
+    ) -> Result<LlvmValue<'ctx>, String> {
+        let tuple = input.value.into_struct_value();
+        let wgsl = self
+            .builder
+            .build_global_string_ptr(&plan.wgsl, "gpu.repeat.program")
+            .map_err(|error| {
+                format!("LLVM backend failed to build GPU repeat program literal: {error}")
+            })?;
+        let score_index = match plan.kind {
+            GpuRepeatAccumulatorKind::VectorScore => 2,
+            GpuRepeatAccumulatorKind::MatrixScore => 3,
+        };
+        let score = self
+            .builder
+            .build_extract_value(tuple, score_index, "gpu.repeat.score")
+            .map_err(|error| format!("LLVM backend failed to extract GPU repeat score: {error}"))?;
+        let next_score = match plan.kind {
+            GpuRepeatAccumulatorKind::VectorScore => {
+                let left = self.extract_tuple_seq(tuple, 0, "gpu.repeat.left")?;
+                let right = self.extract_tuple_seq(tuple, 1, "gpu.repeat.right")?;
+                let function = self.gpu_repeat_vector_accum_f64_function();
+                self.builder
+                    .build_call(
+                        function,
+                        &[
+                            wgsl.as_pointer_value().into(),
+                            left.items.into(),
+                            left.count.into(),
+                            right.items.into(),
+                            right.count.into(),
+                            score.into(),
+                            count.value.into_int_value().into(),
+                        ],
+                        "gpu.repeat.vector",
+                    )
+                    .map_err(|error| {
+                        format!("LLVM backend failed to call GPU vector repeat program: {error}")
+                    })?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| "GPU vector repeat program did not return a value".to_string())?
+            }
+            GpuRepeatAccumulatorKind::MatrixScore => {
+                let left = self.extract_tuple_seq(tuple, 0, "gpu.repeat.left_matrix")?;
+                let right = self.extract_tuple_seq(tuple, 1, "gpu.repeat.right_matrix")?;
+                let vector = self.extract_tuple_seq(tuple, 2, "gpu.repeat.vector")?;
+                let function = self.gpu_repeat_matrix_accum_f64_function();
+                self.builder
+                    .build_call(
+                        function,
+                        &[
+                            wgsl.as_pointer_value().into(),
+                            left.items.into(),
+                            left.count.into(),
+                            right.items.into(),
+                            right.count.into(),
+                            vector.items.into(),
+                            vector.count.into(),
+                            score.into(),
+                            count.value.into_int_value().into(),
+                        ],
+                        "gpu.repeat.matrix",
+                    )
+                    .map_err(|error| {
+                        format!("LLVM backend failed to call GPU matrix repeat program: {error}")
+                    })?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| "GPU matrix repeat program did not return a value".to_string())?
+            }
+        };
+        let out = self
+            .builder
+            .build_insert_value(tuple, next_score, score_index, "gpu.repeat.out")
+            .map_err(|error| format!("LLVM backend failed to update GPU repeat output: {error}"))?
+            .into_struct_value();
+        Ok(LlvmValue {
+            value: out.into(),
+            ty: input.ty,
+        })
+    }
+
+    fn extract_tuple_seq(
+        &mut self,
+        tuple: inkwell::values::StructValue<'ctx>,
+        index: u32,
+        label: &str,
+    ) -> Result<ExtractedSeq<'ctx>, String> {
+        let seq = self
+            .builder
+            .build_extract_value(tuple, index, label)
+            .map_err(|error| format!("LLVM backend failed to extract {label}: {error}"))?
+            .into_struct_value();
+        let count = self
+            .builder
+            .build_extract_value(seq, 0, &format!("{label}.count"))
+            .map_err(|error| format!("LLVM backend failed to extract {label} count: {error}"))?
+            .into_int_value();
+        let items = self
+            .builder
+            .build_extract_value(seq, 1, &format!("{label}.items"))
+            .map_err(|error| format!("LLVM backend failed to extract {label} items: {error}"))?
+            .into_pointer_value();
+        Ok(ExtractedSeq { count, items })
     }
 
     fn emit_scan(
@@ -4153,6 +4274,58 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     i64_ty.into(),
                     i64_ty.into(),
                     i32_ty.into(),
+                    i64_ty.into(),
+                ],
+                false,
+            ),
+            None,
+        )
+    }
+
+    fn gpu_repeat_vector_accum_f64_function(&mut self) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function("fa_gpu_repeat_vector_accum_f64") {
+            return function;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let f64_ty = self.context.f64_type();
+        self.module.add_function(
+            "fa_gpu_repeat_vector_accum_f64",
+            f64_ty.fn_type(
+                &[
+                    ptr_ty.into(),
+                    ptr_ty.into(),
+                    i64_ty.into(),
+                    ptr_ty.into(),
+                    i64_ty.into(),
+                    f64_ty.into(),
+                    i64_ty.into(),
+                ],
+                false,
+            ),
+            None,
+        )
+    }
+
+    fn gpu_repeat_matrix_accum_f64_function(&mut self) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function("fa_gpu_repeat_matrix_accum_f64") {
+            return function;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let f64_ty = self.context.f64_type();
+        self.module.add_function(
+            "fa_gpu_repeat_matrix_accum_f64",
+            f64_ty.fn_type(
+                &[
+                    ptr_ty.into(),
+                    ptr_ty.into(),
+                    i64_ty.into(),
+                    ptr_ty.into(),
+                    i64_ty.into(),
+                    ptr_ty.into(),
+                    i64_ty.into(),
+                    f64_ty.into(),
                     i64_ty.into(),
                 ],
                 false,

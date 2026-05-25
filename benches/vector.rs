@@ -1,4 +1,4 @@
-use flowarrow::build_file;
+use flowarrow::{BuildOptions, build_file_with_options};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,12 +17,13 @@ fn main() {
 
     let root = temp_root();
     fs::create_dir_all(&root).expect("create bench temp dir");
-    let flowarrow_source_path = root.join("vector_bench.flow");
-    fs::write(
-        &flowarrow_source_path,
-        flowarrow_source(&left, &right, config.iterations, expected),
-    )
-    .expect("write FlowArrow benchmark source");
+    let flowarrow_source = flowarrow_source(&left, &right, config.iterations, expected);
+    let flowarrow_cpu_source_path = root.join("vector_bench_cpu.flow");
+    let flowarrow_gpu_source_path = root.join("vector_bench_gpu.flow");
+    fs::write(&flowarrow_cpu_source_path, &flowarrow_source)
+        .expect("write CPU FlowArrow benchmark source");
+    fs::write(&flowarrow_gpu_source_path, &flowarrow_source)
+        .expect("write GPU FlowArrow benchmark source");
     let rust_project_root = root.join("rust_vector_bench");
     let rust_package_name = make_rust_package_name("flowarrow-vector-rust-bench", &root);
     fs::create_dir_all(rust_project_root.join("src")).expect("create Rust benchmark project");
@@ -37,45 +38,92 @@ fn main() {
     )
     .expect("write Rust benchmark source");
 
-    let flowarrow_build_start = Instant::now();
-    let flowarrow_build =
-        build_file(&flowarrow_source_path, None).expect("build FlowArrow benchmark");
-    let flowarrow_build_time = flowarrow_build_start.elapsed();
+    let flowarrow_cpu_build_start = Instant::now();
+    eprintln!("building FlowArrow CPU benchmark...");
+    let flowarrow_cpu_build =
+        build_file_with_options(&flowarrow_cpu_source_path, &BuildOptions::default())
+            .expect("build CPU FlowArrow benchmark");
+    let flowarrow_cpu_build_time = flowarrow_cpu_build_start.elapsed();
+
+    let flowarrow_gpu_build = if config.gpu {
+        let mut gpu_options = BuildOptions::default();
+        gpu_options.gpu = true;
+        let build_start = Instant::now();
+        eprintln!("building FlowArrow GPU benchmark...");
+        let build = build_file_with_options(&flowarrow_gpu_source_path, &gpu_options)
+            .expect("build GPU FlowArrow benchmark");
+        Some((build, build_start.elapsed()))
+    } else {
+        None
+    };
 
     let rust_build_start = Instant::now();
+    eprintln!("building Rust baseline benchmark...");
     let rust_executable = build_rust_executable(&rust_project_root, &rust_package_name);
     let rust_build_time = rust_build_start.elapsed();
 
     run_executable_once(&rust_executable, "Rust benchmark executable");
     run_executable_once(
-        &flowarrow_build.executable,
-        "FlowArrow benchmark executable",
+        &flowarrow_cpu_build.executable,
+        "FlowArrow CPU benchmark executable",
     );
+    if let Some((build, _)) = &flowarrow_gpu_build {
+        run_executable_once(&build.executable, "FlowArrow GPU benchmark executable");
+    }
 
-    let rust_samples = sample(config.samples, || {
+    let rust_samples = sample("rust executable", config.samples, || {
         run_executable_once(&rust_executable, "Rust benchmark executable")
     });
-    let flowarrow_samples = sample(config.samples, || {
+    let flowarrow_cpu_samples = sample("FlowArrow CPU executable", config.samples, || {
         run_executable_once(
-            &flowarrow_build.executable,
-            "FlowArrow benchmark executable",
+            &flowarrow_cpu_build.executable,
+            "FlowArrow CPU benchmark executable",
         )
+    });
+    let flowarrow_gpu_samples = flowarrow_gpu_build.as_ref().map(|(build, _)| {
+        sample("FlowArrow GPU executable", config.gpu_samples, || {
+            run_executable_once(&build.executable, "FlowArrow GPU benchmark executable")
+        })
     });
 
     println!("vector benchmark");
     println!("  len:        {}", config.len);
     println!("  iterations: {}", config.iterations);
     println!("  samples:    {}", config.samples);
-    println!("  rust build: {}", format_duration(rust_build_time));
-    println!("  flow build: {}", format_duration(flowarrow_build_time));
+    if config.gpu {
+        println!("  GPU samples: {}", config.gpu_samples);
+    }
+    println!("  rust build:     {}", format_duration(rust_build_time));
+    println!(
+        "  flow CPU build: {}",
+        format_duration(flowarrow_cpu_build_time)
+    );
+    if let Some((_, build_time)) = &flowarrow_gpu_build {
+        println!("  flow GPU build: {}", format_duration(*build_time));
+    } else {
+        println!("  flow GPU build: disabled; pass --gpu to include it");
+    }
     println!();
     print_summary("rust exe", &rust_samples);
-    print_summary("flowarrow", &flowarrow_samples);
+    print_summary("flow CPU", &flowarrow_cpu_samples);
+    if let Some(samples) = &flowarrow_gpu_samples {
+        print_summary("flow GPU", samples);
+    }
     println!();
     println!(
-        "  mean ratio: {:.2}x",
-        mean(&flowarrow_samples).as_secs_f64() / mean(&rust_samples).as_secs_f64()
+        "  flow CPU / rust: {:.2}x",
+        mean(&flowarrow_cpu_samples).as_secs_f64() / mean(&rust_samples).as_secs_f64()
     );
+    if let Some(samples) = &flowarrow_gpu_samples {
+        println!(
+            "  flow GPU / rust: {:.2}x",
+            mean(samples).as_secs_f64() / mean(&rust_samples).as_secs_f64()
+        );
+        println!(
+            "  flow GPU / CPU:  {:.2}x",
+            mean(samples).as_secs_f64() / mean(&flowarrow_cpu_samples).as_secs_f64()
+        );
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -83,6 +131,8 @@ struct Config {
     len: usize,
     iterations: usize,
     samples: usize,
+    gpu_samples: usize,
+    gpu: bool,
 }
 
 impl Config {
@@ -91,6 +141,8 @@ impl Config {
             len: env_usize("FLOWARROW_BENCH_VECTOR_LEN", DEFAULT_LEN),
             iterations: env_usize("FLOWARROW_BENCH_ITERATIONS", DEFAULT_ITERATIONS),
             samples: env_usize("FLOWARROW_BENCH_SAMPLES", DEFAULT_SAMPLES),
+            gpu_samples: env_usize("FLOWARROW_BENCH_GPU_SAMPLES", 1),
+            gpu: env_bool("FLOWARROW_BENCH_GPU", false),
         };
 
         let mut index = 0;
@@ -108,6 +160,16 @@ impl Config {
                     index += 1;
                     config.samples = parse_usize(args.get(index), "--samples");
                 }
+                "--gpu-samples" => {
+                    index += 1;
+                    config.gpu_samples = parse_usize(args.get(index), "--gpu-samples");
+                }
+                "--gpu" => {
+                    config.gpu = true;
+                }
+                "--no-gpu" => {
+                    config.gpu = false;
+                }
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -122,8 +184,14 @@ impl Config {
             index += 1;
         }
 
-        if config.len == 0 || config.iterations == 0 || config.samples == 0 {
-            eprintln!("--len, --iterations, and --samples must be greater than zero");
+        if config.len == 0
+            || config.iterations == 0
+            || config.samples == 0
+            || config.gpu_samples == 0
+        {
+            eprintln!(
+                "--len, --iterations, --samples, and --gpu-samples must be greater than zero"
+            );
             std::process::exit(2);
         }
 
@@ -133,8 +201,8 @@ impl Config {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo bench --bench vector -- [--len N] [--iterations N] [--samples N]\n\
-         env: FLOWARROW_BENCH_VECTOR_LEN, FLOWARROW_BENCH_ITERATIONS, FLOWARROW_BENCH_SAMPLES"
+        "usage: cargo bench --bench vector -- [--gpu] [--gpu-samples N] [--len N] [--iterations N] [--samples N]\n\
+         env: FLOWARROW_BENCH_GPU=1, FLOWARROW_BENCH_GPU_SAMPLES, FLOWARROW_BENCH_VECTOR_LEN, FLOWARROW_BENCH_ITERATIONS, FLOWARROW_BENCH_SAMPLES"
     );
 }
 
@@ -147,6 +215,17 @@ fn env_usize(name: &str, default: usize) -> usize {
                 .unwrap_or_else(|_| panic!("{name} must be a positive integer"))
         })
         .unwrap_or(default)
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    match env::var(name) {
+        Ok(value) => match value.as_str() {
+            "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON" => true,
+            "0" | "false" | "FALSE" | "no" | "NO" | "off" | "OFF" => false,
+            _ => panic!("{name} must be a boolean"),
+        },
+        Err(_) => default,
+    }
 }
 
 fn parse_usize(value: Option<&String>, flag: &str) -> usize {
@@ -224,21 +303,24 @@ program main(args: Args) -> exit_code: Int {{
 fn rust_source(left: &[f64], right: &[f64], iterations: usize, expected: f64) -> String {
     format!(
         r#"
-use nalgebra::DVector;
 use std::hint::black_box;
 
 static LEFT: &[f64] = &{};
 static RIGHT: &[f64] = &{};
 
 fn kernel(left: &[f64], right: &[f64], iterations: usize) -> f64 {{
-    let left = DVector::from_column_slice(left);
-    let right = DVector::from_column_slice(right);
     let mut score = 0.0;
     for _ in 0..iterations {{
-        let squared_distance = (black_box(&left) - black_box(&right)).norm_squared();
-        score += black_box(left.dot(&right))
-            + black_box(squared_distance)
-            + black_box(left.norm_squared());
+        let mut dot = 0.0;
+        let mut squared_distance = 0.0;
+        let mut squared_norm = 0.0;
+        for (&a, &b) in black_box(left).iter().zip(black_box(right)) {{
+            dot += a * b;
+            let delta = a - b;
+            squared_distance += delta * delta;
+            squared_norm += a * a;
+        }}
+        score += black_box(dot) + black_box(squared_distance) + black_box(squared_norm);
     }}
     score
 }}
@@ -270,9 +352,6 @@ fn rust_manifest(package_name: &str) -> String {
 name = "{package_name}"
 version = "0.1.0"
 edition = "2024"
-
-[dependencies]
-nalgebra = {{ version = "0.34", default-features = false, features = ["std"] }}
 
 [profile.release]
 opt-level = 3
@@ -352,13 +431,13 @@ fn run_executable_once(executable: &PathBuf, label: &str) {
     assert!(status.success(), "{label} failed with {status}");
 }
 
-fn sample(mut samples: usize, mut run: impl FnMut()) -> Vec<Duration> {
+fn sample(label: &str, samples: usize, mut run: impl FnMut()) -> Vec<Duration> {
     let mut durations = Vec::with_capacity(samples);
-    while samples > 0 {
+    for index in 0..samples {
+        eprintln!("running {label} sample {}/{}...", index + 1, samples);
         let start = Instant::now();
         run();
         durations.push(start.elapsed());
-        samples -= 1;
     }
     durations
 }

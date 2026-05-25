@@ -284,11 +284,12 @@ workgroup dispatch shape. The TypeScript and JavaScript backends emit WebGPU
 host code that compiles and dispatches the generated WGSL through
 `navigator.gpu`, and reduction lowering emits WebGPU reduction passes.
 GPU-targeted artifacts require WebGPU at runtime and fail if a device cannot be
-acquired. Native/LLVM builds lower eligible maps and reductions to direct calls
-into a generated wgpu runtime library. That runtime is bundled next to the
-native executable, requires a native adapter at startup, compiles the WGSL
-kernels through wgpu, handles the virtual range reduction ABI, and aborts
-instead of falling back to CPU execution when no GPU device is available.
+acquired. Native/LLVM builds lower eligible maps, reductions, virtual range
+reductions, and generated repeat accumulator programs to direct calls into a
+generated wgpu runtime library. That runtime is bundled next to the native
+executable, requires a native adapter at startup, compiles the WGSL kernels
+through wgpu, and aborts instead of falling back to CPU execution when no GPU
+device is available.
 
 ### 2.5 WASM-hosted TypeScript compiler
 

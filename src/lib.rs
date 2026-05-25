@@ -626,6 +626,113 @@ mod tests {
     }
 
     #[test]
+    fn gpu_mode_does_not_reject_unfused_compute_regions() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { add }
+
+            node step(value: Int) -> out: Int {
+                ($value, 1) -> add -> $out
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                0 -> repeat<4> step -> $exit_code
+            }
+        "#;
+
+        let module = parser::parse(source).expect("parse");
+        let lowered = codegen::lower_module_with_base(&module, Path::new("examples/concurrency"))
+            .expect("lower");
+        let llvm = lowered
+            .emit_direct_llvm_with_gpu(true)
+            .expect("gpu compile should not reject typed pure compute");
+        assert!(llvm.contains("fa_gpu_require_device"));
+    }
+
+    #[test]
+    fn gpu_repeat_vector_accumulator_lowers_to_generated_program() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { add as scalar_add, eq }
+            import std.vector { dot, squared_distance, squared_norm }
+
+            node kernel(left: Seq[Real], right: Seq[Real], score: Real) -> (out_left: Seq[Real], out_right: Seq[Real], out_score: Real) {
+                ($left, $right) -> dot -> $dot
+                ($left, $right) -> squared_distance -> $distance_squared
+                $left -> squared_norm -> $norm_squared
+                ($dot, $distance_squared) -> scalar_add -> $partial
+                ($partial, $norm_squared) -> scalar_add -> $delta
+                ($score, $delta) -> scalar_add -> $out_score
+                $left -> $out_left
+                $right -> $out_right
+            }
+
+            node final_score(left: Seq[Real], right: Seq[Real], score: Real) -> out: Real {
+                $score -> $out
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                ([1.0, 2.0], [3.0, 4.0], 0.0) -> repeat<2> kernel -> final_score -> $score
+                ($score, 48.0) -> eq -> $ok
+                ($ok, 0, 1) -> select -> $exit_code
+            }
+        "#;
+
+        let module = parser::parse(source).expect("parse");
+        let lowered = codegen::lower_module_with_base(&module, Path::new(".")).expect("lower");
+        let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
+        assert!(llvm.contains("fa_gpu_repeat_vector_accum_f64"));
+        assert!(llvm.contains("gpu.repeat.vector"));
+        assert!(!llvm.contains("repeat.loop"));
+    }
+
+    #[test]
+    fn gpu_repeat_matrix_accumulator_lowers_to_generated_program() {
+        let source = r#"
+            import std.cli { Args }
+            import std.math { add as scalar_add, eq }
+            import std.vector { sum as vector_sum }
+            import std.matrix { matmul, matvec, row_sums, sum as matrix_sum }
+
+            node kernel(left: Seq[Seq[Real]], right: Seq[Seq[Real]], vector: Seq[Real], score: Real) -> (out_left: Seq[Seq[Real]], out_right: Seq[Seq[Real]], out_vector: Seq[Real], out_score: Real) {
+                ($left, $right) -> matmul -> $product
+                $product -> matrix_sum -> $product_sum
+                ($left, $vector) -> matvec -> $mv
+                $mv -> vector_sum -> $matvec_sum
+                $left -> row_sums -> vector_sum -> $row_sum_total
+                ($product_sum, $matvec_sum) -> scalar_add -> $partial
+                ($partial, $row_sum_total) -> scalar_add -> $delta
+                ($score, $delta) -> scalar_add -> $out_score
+                $left -> $out_left
+                $right -> $out_right
+                $vector -> $out_vector
+            }
+
+            node final_score(left: Seq[Seq[Real]], right: Seq[Seq[Real]], vector: Seq[Real], score: Real) -> out: Real {
+                $score -> $out
+            }
+
+            program main(args: Args) -> exit_code: Int {
+                (
+                    [[1.0, 2.0], [3.0, 4.0]],
+                    [[5.0, 6.0], [7.0, 8.0]],
+                    [1.0, 1.0],
+                    0.0
+                ) -> repeat<2> kernel -> final_score -> $score
+                ($score, 308.0) -> eq -> $ok
+                ($ok, 0, 1) -> select -> $exit_code
+            }
+        "#;
+
+        let module = parser::parse(source).expect("parse");
+        let lowered = codegen::lower_module_with_base(&module, Path::new(".")).expect("lower");
+        let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
+        assert!(llvm.contains("fa_gpu_repeat_matrix_accum_f64"));
+        assert!(llvm.contains("gpu.repeat.matrix"));
+        assert!(!llvm.contains("repeat.loop"));
+    }
+
+    #[test]
     fn compiles_llvm_ir_preview_in_memory() {
         let fib_source = r#"
             import std.math { add }

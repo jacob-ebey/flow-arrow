@@ -122,6 +122,9 @@ impl<'a> TypedCodegen<'a> {
         }
         if self.gpu_enabled {
             out.push_str("extern void fa_gpu_require_device(void);\n");
+            out.push_str("typedef struct { size_t count; const double *items; } FaGpuSliceF64;\n");
+            out.push_str("extern double fa_gpu_repeat_vector_accum_f64(const char *wgsl, const double *left, size_t left_count, const double *right, size_t right_count, double score, int64_t iterations);\n");
+            out.push_str("extern double fa_gpu_repeat_matrix_accum_f64(const char *wgsl, const FaGpuSliceF64 *left_rows, size_t left_count, const FaGpuSliceF64 *right_rows, size_t right_count, const double *vector, size_t vector_count, double score, int64_t iterations);\n");
         }
         if !self.gpu_plan.is_empty() {
             out.push_str("extern void fa_gpu_map_i64(const char *wgsl, const int64_t *input, int64_t *output, size_t count);\n");
@@ -245,6 +248,9 @@ impl<'a> TypedCodegen<'a> {
         }
         if self.gpu_enabled {
             out.push_str("extern void fa_gpu_require_device(void);\n");
+            out.push_str("typedef struct { size_t count; const double *items; } FaGpuSliceF64;\n");
+            out.push_str("extern double fa_gpu_repeat_vector_accum_f64(const char *wgsl, const double *left, size_t left_count, const double *right, size_t right_count, double score, int64_t iterations);\n");
+            out.push_str("extern double fa_gpu_repeat_matrix_accum_f64(const char *wgsl, const FaGpuSliceF64 *left_rows, size_t left_count, const FaGpuSliceF64 *right_rows, size_t right_count, const double *vector, size_t vector_count, double score, int64_t iterations);\n");
         }
         if !self.gpu_plan.is_empty() {
             out.push_str("extern void fa_gpu_map_i64(const char *wgsl, const int64_t *input, int64_t *output, size_t count);\n");
@@ -987,6 +993,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     }
 
     fn emit_callable(&mut self, out: &mut String, callable: &TypedCallable) -> Result<(), String> {
+        self.validate_gpu_host_callable(callable)?;
         self.temp = 0;
         let symbol = if matches!(callable.kind, crate::typecheck::TypedCallableKind::Program) {
             "flow_program_main".to_string()
@@ -3218,6 +3225,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         input: Value,
         count: Value,
     ) -> Result<Value, String> {
+        if let Some(plan) = self.gpu_repeat_accumulator(node, &input.ty) {
+            return self.emit_gpu_repeat_accumulator(out, plan, input, count);
+        }
         let c_ty = self.types.c_type(&input.ty);
         let tmp = self.next_temp();
         let next = self.next_temp();
@@ -3230,6 +3240,61 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         out.push_str(&format!("    {c_ty} {next};\n"));
         self.emit_assign_call(out, &next, &input.ty, node, &tmp, &input.ty)?;
         out.push_str(&format!("    {tmp} = {next};\n"));
+        out.push_str("  }\n");
+        Ok(Value {
+            code: tmp,
+            ty: input.ty,
+        })
+    }
+
+    fn emit_gpu_repeat_accumulator(
+        &mut self,
+        out: &mut String,
+        plan: GpuRepeatAccumulator,
+        input: Value,
+        count: Value,
+    ) -> Result<Value, String> {
+        let Ty::Tuple(items) = input.ty.clone() else {
+            return Err("GPU repeat accumulator expected tuple state".to_string());
+        };
+        let c_ty = self.types.c_type(&input.ty);
+        let tmp = self.next_temp();
+        let iter = self.next_temp();
+        out.push_str(&format!("  {c_ty} {tmp} = {};\n", input.code));
+        out.push_str(&format!("  int64_t {iter} = {};\n", count.code));
+        out.push_str(&format!("  if ({iter} > 0) {{\n"));
+        match plan.kind {
+            GpuRepeatAccumulatorKind::VectorScore => {
+                if items.len() != 3 {
+                    return Err("GPU vector accumulator expected three tuple fields".to_string());
+                }
+                out.push_str(&format!(
+                    "    {tmp}.f2 = fa_gpu_repeat_vector_accum_f64({}, {}.f0.items, {}.f0.count, {}.f1.items, {}.f1.count, {}.f2, {iter});\n",
+                    c_string_literal(&plan.wgsl),
+                    input.code,
+                    input.code,
+                    input.code,
+                    input.code,
+                    input.code
+                ));
+            }
+            GpuRepeatAccumulatorKind::MatrixScore => {
+                if items.len() != 4 {
+                    return Err("GPU matrix accumulator expected four tuple fields".to_string());
+                }
+                out.push_str(&format!(
+                    "    {tmp}.f3 = fa_gpu_repeat_matrix_accum_f64({}, (const FaGpuSliceF64 *){}.f0.items, {}.f0.count, (const FaGpuSliceF64 *){}.f1.items, {}.f1.count, {}.f2.items, {}.f2.count, {}.f3, {iter});\n",
+                    c_string_literal(&plan.wgsl),
+                    input.code,
+                    input.code,
+                    input.code,
+                    input.code,
+                    input.code,
+                    input.code,
+                    input.code
+                ));
+            }
+        }
         out.push_str("  }\n");
         Ok(Value {
             code: tmp,
@@ -4495,9 +4560,387 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             .unwrap_or_else(|| name.to_string())
     }
 
+    pub(super) fn validate_gpu_host_callable(
+        &self,
+        _callable: &TypedCallable,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    pub(super) fn gpu_repeat_accumulator(
+        &self,
+        node: &str,
+        input_ty: &Ty,
+    ) -> Option<GpuRepeatAccumulator> {
+        if !self.gpu_enabled {
+            return None;
+        }
+        let callable = self.callables.get(node)?;
+        if callable.effect != Effect::Pure {
+            return None;
+        }
+        if self.recognize_vector_score_accumulator(callable, input_ty) {
+            return Some(GpuRepeatAccumulator {
+                kind: GpuRepeatAccumulatorKind::VectorScore,
+                wgsl: vector_score_accumulator_wgsl(),
+            });
+        }
+        if self.recognize_matrix_score_accumulator(callable, input_ty) {
+            return Some(GpuRepeatAccumulator {
+                kind: GpuRepeatAccumulatorKind::MatrixScore,
+                wgsl: matrix_score_accumulator_wgsl(),
+            });
+        }
+        None
+    }
+
+    fn recognize_vector_score_accumulator(&self, callable: &TypedCallable, input_ty: &Ty) -> bool {
+        if input_ty
+            != &Ty::Tuple(vec![
+                Ty::Seq(Box::new(Ty::Real)),
+                Ty::Seq(Box::new(Ty::Real)),
+                Ty::Real,
+            ])
+        {
+            return false;
+        }
+        let [left_port, right_port, score_port] = callable.inputs.as_slice() else {
+            return false;
+        };
+        let [out_left, out_right, out_score] = callable.outputs.as_slice() else {
+            return false;
+        };
+        if left_port.ty != Ty::Seq(Box::new(Ty::Real))
+            || right_port.ty != Ty::Seq(Box::new(Ty::Real))
+            || score_port.ty != Ty::Real
+            || out_left.ty != left_port.ty
+            || out_right.ty != right_port.ty
+            || out_score.ty != Ty::Real
+        {
+            return false;
+        }
+
+        let mut reductions: HashMap<String, ReductionTerm> = HashMap::new();
+        let mut additions: HashMap<String, (String, String)> = HashMap::new();
+        let mut left_passthrough = false;
+        let mut right_passthrough = false;
+
+        let chains = fuse_single_use_chains(callable);
+        for chain in &chains {
+            let Some(binding) = final_variable(chain) else {
+                return false;
+            };
+            let Some(stages) = stages_binding_output(chain, binding) else {
+                return false;
+            };
+            if stages.is_empty() {
+                match (&chain.source.kind, binding) {
+                    (TypedEndpointKind::Variable(name), out)
+                        if name == &left_port.name && out == out_left.name =>
+                    {
+                        left_passthrough = true;
+                        continue;
+                    }
+                    (TypedEndpointKind::Variable(name), out)
+                        if name == &right_port.name && out == out_right.name =>
+                    {
+                        right_passthrough = true;
+                        continue;
+                    }
+                    _ => return false,
+                }
+            }
+            if let [stage] = stages
+                && let TypedStageKind::Call { name, .. } = &stage.kind
+            {
+                if matches_pair_source(&chain.source, &left_port.name, &right_port.name) {
+                    match self.fusion_for_name(name) {
+                        Some(Fusion::ZipMapReduceAdd(BinaryOp::Mul)) => {
+                            reductions.insert(binding.to_string(), ReductionTerm::PairMul);
+                            continue;
+                        }
+                        Some(Fusion::ZipDifferenceSquareSum) => {
+                            reductions.insert(binding.to_string(), ReductionTerm::PairDiffSquare);
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+                if matches!(&chain.source.kind, TypedEndpointKind::Variable(name) if name == &left_port.name)
+                    && self.fusion_for_name(name) == Some(Fusion::MapReduceAdd(MapOp::Square))
+                {
+                    reductions.insert(binding.to_string(), ReductionTerm::LeftSquare);
+                    continue;
+                }
+            }
+            if let [stage] = stages
+                && let TypedStageKind::Call { name, .. } = &stage.kind
+                && self.is_add(name)
+            {
+                let TypedEndpointKind::Tuple(items) = &chain.source.kind else {
+                    return false;
+                };
+                let [left, right] = items.as_slice() else {
+                    return false;
+                };
+                let (TypedEndpointKind::Variable(left), TypedEndpointKind::Variable(right)) =
+                    (&left.kind, &right.kind)
+                else {
+                    return false;
+                };
+                additions.insert(binding.to_string(), (left.clone(), right.clone()));
+                continue;
+            }
+            return false;
+        }
+
+        if !left_passthrough || !right_passthrough || reductions.is_empty() {
+            return false;
+        }
+        let mut expected = reductions.keys().cloned().collect::<Vec<_>>();
+        expected.push(score_port.name.clone());
+        expected.sort();
+        let mut actual = flatten_add_terms(&out_score.name, &additions);
+        actual.sort();
+        actual == expected
+    }
+
+    fn recognize_matrix_score_accumulator(&self, callable: &TypedCallable, input_ty: &Ty) -> bool {
+        let matrix_ty = Ty::Seq(Box::new(Ty::Seq(Box::new(Ty::Real))));
+        let vector_ty = Ty::Seq(Box::new(Ty::Real));
+        if input_ty
+            != &Ty::Tuple(vec![
+                matrix_ty.clone(),
+                matrix_ty.clone(),
+                vector_ty.clone(),
+                Ty::Real,
+            ])
+        {
+            return false;
+        }
+        let [left_port, right_port, vector_port, score_port] = callable.inputs.as_slice() else {
+            return false;
+        };
+        let [out_left, out_right, out_vector, out_score] = callable.outputs.as_slice() else {
+            return false;
+        };
+        if left_port.ty != matrix_ty
+            || right_port.ty != matrix_ty
+            || vector_port.ty != vector_ty
+            || score_port.ty != Ty::Real
+            || out_left.ty != matrix_ty
+            || out_right.ty != matrix_ty
+            || out_vector.ty != vector_ty
+            || out_score.ty != Ty::Real
+        {
+            return false;
+        }
+
+        let mut reductions: HashMap<String, MatrixReductionTerm> = HashMap::new();
+        let mut additions: HashMap<String, (String, String)> = HashMap::new();
+        let mut left_passthrough = false;
+        let mut right_passthrough = false;
+        let mut vector_passthrough = false;
+
+        let chains = fuse_single_use_chains(callable);
+        for chain in &chains {
+            let Some(binding) = final_variable(chain) else {
+                return false;
+            };
+            let Some(stages) = stages_binding_output(chain, binding) else {
+                return false;
+            };
+            if stages.is_empty() {
+                match (&chain.source.kind, binding) {
+                    (TypedEndpointKind::Variable(name), out)
+                        if name == &left_port.name && out == out_left.name =>
+                    {
+                        left_passthrough = true;
+                        continue;
+                    }
+                    (TypedEndpointKind::Variable(name), out)
+                        if name == &right_port.name && out == out_right.name =>
+                    {
+                        right_passthrough = true;
+                        continue;
+                    }
+                    (TypedEndpointKind::Variable(name), out)
+                        if name == &vector_port.name && out == out_vector.name =>
+                    {
+                        vector_passthrough = true;
+                        continue;
+                    }
+                    _ => return false,
+                }
+            }
+            if let [first, second] = stages {
+                if let (
+                    TypedStageKind::Call {
+                        name: first_name, ..
+                    },
+                    TypedStageKind::Call {
+                        name: second_name, ..
+                    },
+                ) = (&first.kind, &second.kind)
+                {
+                    if matches_pair_source(&chain.source, &left_port.name, &right_port.name)
+                        && self.is_matmul_name(first_name)
+                        && self.fusion_for_name(second_name) == Some(Fusion::NestedSum)
+                    {
+                        reductions.insert(binding.to_string(), MatrixReductionTerm::ProductSum);
+                        continue;
+                    }
+                    if matches_pair_source(&chain.source, &left_port.name, &vector_port.name)
+                        && self.is_matvec_name(first_name)
+                        && self.fusion_for_name(second_name) == Some(Fusion::Sum)
+                    {
+                        reductions.insert(binding.to_string(), MatrixReductionTerm::MatvecSum);
+                        continue;
+                    }
+                    if matches!(&chain.source.kind, TypedEndpointKind::Variable(name) if name == &left_port.name)
+                        && self.is_map_sum_callable(first_name)
+                        && self.fusion_for_name(second_name) == Some(Fusion::Sum)
+                    {
+                        reductions.insert(binding.to_string(), MatrixReductionTerm::RowSumTotal);
+                        continue;
+                    }
+                }
+            }
+            if let [stage] = stages
+                && let TypedStageKind::Call { name, .. } = &stage.kind
+                && self.is_add(name)
+            {
+                let TypedEndpointKind::Tuple(items) = &chain.source.kind else {
+                    return false;
+                };
+                let [left, right] = items.as_slice() else {
+                    return false;
+                };
+                let (TypedEndpointKind::Variable(left), TypedEndpointKind::Variable(right)) =
+                    (&left.kind, &right.kind)
+                else {
+                    return false;
+                };
+                additions.insert(binding.to_string(), (left.clone(), right.clone()));
+                continue;
+            }
+            return false;
+        }
+
+        if !left_passthrough || !right_passthrough || !vector_passthrough || reductions.is_empty() {
+            return false;
+        }
+        let mut expected = reductions.keys().cloned().collect::<Vec<_>>();
+        expected.push(score_port.name.clone());
+        expected.sort();
+        let mut actual = flatten_add_terms(&out_score.name, &additions);
+        actual.sort();
+        actual == expected
+    }
+
     pub(super) fn next_temp(&mut self) -> String {
         let tmp = format!("t{}", self.temp);
         self.temp += 1;
         tmp
     }
+}
+
+fn vector_score_accumulator_wgsl() -> String {
+    r#"struct FaGpuProgramParams {
+  work_items: u32,
+  iterations: u32,
+  slice0_len: u32,
+  slice1_len: u32,
+  slice2_len: u32,
+  slice3_len: u32,
+  matrix0_rows: u32,
+  matrix0_cols: u32,
+  matrix1_rows: u32,
+  matrix1_cols: u32,
+  matrix2_rows: u32,
+  matrix2_cols: u32,
+  matrix3_rows: u32,
+  matrix3_cols: u32,
+  scalar0: f32,
+  scalar1: f32,
+  scalar2: f32,
+  scalar3: f32,
+};
+@group(0) @binding(0) var<storage, read_write> fa_output: array<f32>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuProgramParams;
+@group(0) @binding(2) var<storage, read> fa_left: array<f32>;
+@group(0) @binding(3) var<storage, read> fa_right: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  if (i >= fa_params.work_items) { return; }
+  let left = fa_left[i];
+  let right = fa_right[i];
+  let delta = left - right;
+  fa_output[i] = left * right + delta * delta + left * left;
+}
+"#
+    .to_string()
+}
+
+fn matrix_score_accumulator_wgsl() -> String {
+    r#"struct FaGpuProgramParams {
+  work_items: u32,
+  iterations: u32,
+  slice0_len: u32,
+  slice1_len: u32,
+  slice2_len: u32,
+  slice3_len: u32,
+  matrix0_rows: u32,
+  matrix0_cols: u32,
+  matrix1_rows: u32,
+  matrix1_cols: u32,
+  matrix2_rows: u32,
+  matrix2_cols: u32,
+  matrix3_rows: u32,
+  matrix3_cols: u32,
+  scalar0: f32,
+  scalar1: f32,
+  scalar2: f32,
+  scalar3: f32,
+};
+@group(0) @binding(0) var<storage, read_write> fa_output: array<f32>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuProgramParams;
+@group(0) @binding(2) var<storage, read> fa_vector: array<f32>;
+@group(0) @binding(3) var<storage, read> fa_left: array<f32>;
+@group(0) @binding(4) var<storage, read> fa_right: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  if (i >= fa_params.work_items) { return; }
+  let inner = fa_params.matrix0_cols;
+  let k = i % inner;
+  let left = fa_left[i];
+  var right_sum = 0.0;
+  for (var col = 0u; col < fa_params.matrix1_cols; col = col + 1u) {
+    right_sum = right_sum + fa_right[k * fa_params.matrix1_cols + col];
+  }
+  fa_output[i] = left * right_sum + left * fa_vector[k] + left;
+}
+"#
+    .to_string()
+}
+
+fn c_string_literal(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n\"\n\""),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_ascii_graphic() || ch == ' ' => out.push(ch),
+            ch => out.push_str(&format!("\\x{:02x}", ch as u32)),
+        }
+    }
+    out.push('"');
+    out
 }

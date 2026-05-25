@@ -82,8 +82,10 @@ pub(super) struct WorkerMapper {
 }
 
 impl<'a> TypeScriptCodegen<'a> {
-    fn new(codegen: TypedCodegen<'a>, options: TypeScriptEmitOptions) -> Self {
+    fn new(mut codegen: TypedCodegen<'a>, options: TypeScriptEmitOptions) -> Self {
+        codegen.gpu_enabled = options.gpu;
         let gpu_plan = options.gpu.then(|| gpu::GpuPlan::analyze(codegen.typed));
+        codegen.gpu_plan = gpu_plan.clone().unwrap_or_else(gpu::GpuPlan::empty);
         Self {
             codegen,
             options,
@@ -278,6 +280,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     }
 
     fn emit_callable(&mut self, out: &mut String, callable: &TypedCallable) -> Result<(), String> {
+        self.codegen.validate_gpu_host_callable(callable)?;
         self.temp = 0;
         self.used_idents.clear();
         self.reserve_internal_idents();

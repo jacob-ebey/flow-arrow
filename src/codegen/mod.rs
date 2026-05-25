@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::module_resolver;
 use crate::monomorphize;
-use crate::stdlib::{self, RuntimeSupport};
+use crate::stdlib::{self, Effect, RuntimeSupport};
 use crate::typecheck::{
     self, CheckMode, TypedCallable, TypedChain, TypedEndpoint, TypedEndpointKind, TypedMatchArm,
     TypedMatchGuard, TypedMatchTarget, TypedModule, TypedStage, TypedStageKind,
@@ -90,7 +90,7 @@ impl LoweredModule {
     pub(crate) fn emit_direct_llvm_with_gpu(&self, gpu: bool) -> Result<String, String> {
         self.reject_foreign_js()?;
         Ok(DirectLlvm::emit_with_options(
-            self.typed()?,
+            TypedCodegen::from_typed_with_gpu(&self.typed, gpu)?,
             DirectLlvmOptions {
                 gpu,
                 ..DirectLlvmOptions::default()
@@ -487,6 +487,25 @@ enum ReductionTerm {
     PairMul,
     PairDiffSquare,
     LeftSquare,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatrixReductionTerm {
+    ProductSum,
+    MatvecSum,
+    RowSumTotal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GpuRepeatAccumulatorKind {
+    VectorScore,
+    MatrixScore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GpuRepeatAccumulator {
+    kind: GpuRepeatAccumulatorKind,
+    wgsl: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
