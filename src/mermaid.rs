@@ -1,4 +1,8 @@
-use crate::ast::*;
+use crate::ast::{BindingTarget, Decl, ImportClause, ImportSource, Module};
+use crate::typecheck::{
+    TypedCallable, TypedEndpoint, TypedEndpointKind, TypedMatchGuard, TypedMatchTarget,
+    TypedModule, TypedStageKind,
+};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
@@ -7,14 +11,11 @@ pub struct MermaidOptions {
     pub compact: bool,
 }
 
-pub fn emit_module(module: &Module) -> Result<String, String> {
-    emit_module_with_options(module, MermaidOptions::default())
-}
-
-pub fn emit_module_with_options(
-    module: &Module,
+pub(crate) fn emit_typed_module_with_options(
+    typed: &TypedModule,
     options: MermaidOptions,
 ) -> Result<String, String> {
+    let module = typed.module();
     let mut emitter = MermaidEmitter {
         out: String::new(),
         id_counts: HashMap::new(),
@@ -26,19 +27,20 @@ pub fn emit_module_with_options(
         options,
     };
     emitter.line("flowchart TD");
-    for decl in &module.declarations {
-        match decl {
-            Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Import(_) | Decl::Foreign(_) => {}
-            Decl::Node(callable) => {
-                let kind = if callable.is_extern {
+    for callable in &typed.callables {
+        let kind = match callable.kind {
+            crate::typecheck::TypedCallableKind::Node => {
+                if module.declarations.iter().any(|decl| {
+                    matches!(decl, Decl::Node(ast_callable) if ast_callable.name == callable.name && ast_callable.is_extern)
+                }) {
                     "extern node"
                 } else {
                     "node"
-                };
-                emitter.emit_callable(callable, kind)?;
+                }
             }
-            Decl::Program(callable) => emitter.emit_callable(callable, "program")?,
-        }
+            crate::typecheck::TypedCallableKind::Program => "program",
+        };
+        emitter.emit_typed_callable(callable, kind)?;
     }
     emitter.emit_legend();
     emitter.emit_styles();
@@ -63,7 +65,7 @@ struct NodeRef {
 }
 
 impl MermaidEmitter {
-    fn emit_callable(&mut self, callable: &Callable, kind: &str) -> Result<(), String> {
+    fn emit_typed_callable(&mut self, callable: &TypedCallable, kind: &str) -> Result<(), String> {
         self.current_callable = sanitize_id(&callable.name);
         self.output_names = callable
             .outputs
@@ -87,139 +89,119 @@ impl MermaidEmitter {
         }
 
         for chain in &callable.chains {
-            self.emit_chain(chain, &mut env)?;
-        }
-
-        self.line("  end");
-        Ok(())
-    }
-
-    fn emit_chain(
-        &mut self,
-        chain: &Chain,
-        env: &mut HashMap<String, Vec<NodeRef>>,
-    ) -> Result<(), String> {
-        let mut current = self.emit_source_endpoint(&chain.source, env)?;
-        for (index, stage) in chain.stages.iter().enumerate() {
-            let is_last = index + 1 == chain.stages.len();
-            match stage {
-                Stage::Bind(target) if is_last => {
-                    self.bind_target(target, &current, env, None)?;
-                }
-                Stage::Endpoint(Endpoint::Name(name)) => {
-                    let operation = self.operation_node(name, "call", "    ");
-                    self.edges(&current, &operation, None, "    ");
-                    current = vec![operation];
-                }
-                Stage::Endpoint(Endpoint::Variable(_)) => {
-                    return Err(
-                        "variables may only appear as source values or final bindings".to_string(),
-                    );
-                }
-                Stage::Endpoint(_) => {
-                    return Err("non-name endpoints may only appear as source values".to_string());
-                }
-                Stage::Bind(_) => {
-                    return Err("binding targets may only appear as final stages".to_string());
-                }
-                Stage::Map(name) => {
-                    let operation = self.collection_node(&format!("map {name}"), "map", "    ");
-                    self.edges(&current, &operation, None, "    ");
-                    current = vec![operation];
-                }
-                Stage::FaultMap { node, ok, fault } => {
-                    if !is_last {
-                        return Err("`fault map` must be the final stage in a chain".to_string());
+            let mut current = self.emit_typed_source_endpoint(&chain.source, &env)?;
+            for stage in &chain.stages {
+                match &stage.kind {
+                    TypedStageKind::Bind { target } => {
+                        self.bind_target(target, &current, &mut env, None)?;
+                        current = Vec::new();
                     }
-                    let operation =
-                        self.fault_node(&format!("fault map {node}"), "fault_map", "    ");
-                    self.edges(&current, &operation, None, "    ");
-                    if self.options.compact {
-                        self.bind_fault_result(ok, "ok", &operation, env, "    ")?;
-                        self.bind_fault_result(fault, "fault", &operation, env, "    ")?;
-                    } else {
-                        let result_id = self.unique_id("fault_results", node);
-                        self.line(&format!("    subgraph {result_id}[\"fault map results\"]"));
-                        self.bind_fault_result(ok, "ok", &operation, env, "      ")?;
-                        self.bind_fault_result(fault, "fault", &operation, env, "      ")?;
-                        self.line("    end");
+                    TypedStageKind::Call { name, .. } => {
+                        let operation = self.operation_node(name, "call", "    ");
+                        self.edges(&current, &operation, None, "    ");
+                        current = vec![operation];
                     }
-                    current = Vec::new();
-                }
-                Stage::Filter(name) => {
-                    let operation =
-                        self.collection_node(&format!("filter {name}"), "filter", "    ");
-                    self.edges(&current, &operation, None, "    ");
-                    current = vec![operation];
-                }
-                Stage::Field(name) => {
-                    let operation = self.operation_node(&format!("field {name}"), "field", "    ");
-                    self.edges(&current, &operation, None, "    ");
-                    current = vec![operation];
-                }
-                Stage::Repeat { count, node } => {
-                    let operation = self.collection_node(
-                        &format!("repeat<{}> {node}", endpoint_label(count)),
-                        "repeat",
-                        "    ",
-                    );
-                    self.edges(&current, &operation, None, "    ");
-                    let count = self.emit_endpoint(count, env)?;
-                    self.edges(&count, &operation, Some("count"), "    ");
-                    current = vec![operation];
-                }
-                Stage::Reduce { op, identity } => {
-                    let operation = self.collection_node(
-                        &format!("reduce {op}\nidentity: {}", endpoint_label(identity)),
-                        "reduce",
-                        "    ",
-                    );
-                    self.edges(&current, &operation, None, "    ");
-                    let identity = self.emit_endpoint(identity, env)?;
-                    self.edges(&identity, &operation, Some("identity"), "    ");
-                    current = vec![operation];
-                }
-                Stage::Scan { op, identity } => {
-                    let operation = self.collection_node(
-                        &format!("scan {op}\nidentity: {}", endpoint_label(identity)),
-                        "scan",
-                        "    ",
-                    );
-                    self.edges(&current, &operation, None, "    ");
-                    let identity = self.emit_endpoint(identity, env)?;
-                    self.edges(&identity, &operation, Some("identity"), "    ");
-                    current = vec![operation];
-                }
-                Stage::Match { arms } => {
-                    let operation = self.decision_node("match ?", "    ");
-                    self.edges(&current, &operation, Some("subject"), "    ");
-                    let mut branches = Vec::new();
-                    for (arm_index, arm) in arms.iter().enumerate() {
-                        if let MatchGuard::Call { args, .. } = &arm.guard {
-                            for arg in args {
-                                let arg_nodes = self.emit_endpoint(arg, env)?;
-                                self.edges(&arg_nodes, &operation, Some("guard arg"), "    ");
-                            }
+                    TypedStageKind::Map { name, .. } => {
+                        let operation = self.collection_node(&format!("map {name}"), "map", "    ");
+                        self.edges(&current, &operation, None, "    ");
+                        current = vec![operation];
+                    }
+                    TypedStageKind::FaultMap {
+                        node, ok, fault, ..
+                    } => {
+                        let operation =
+                            self.fault_node(&format!("fault map {node}"), "fault_map", "    ");
+                        self.edges(&current, &operation, None, "    ");
+                        if self.options.compact {
+                            self.bind_fault_result(ok, "ok", &operation, &mut env, "    ")?;
+                            self.bind_fault_result(fault, "fault", &operation, &mut env, "    ")?;
+                        } else {
+                            let result_id = self.unique_id("fault_results", node);
+                            self.line(&format!("    subgraph {result_id}[\"fault map results\"]"));
+                            self.bind_fault_result(ok, "ok", &operation, &mut env, "      ")?;
+                            self.bind_fault_result(fault, "fault", &operation, &mut env, "      ")?;
+                            self.line("    end");
                         }
-                        let arm_id = self.unique_id("match_arm", &arm_index.to_string());
-                        self.line(&format!(
-                            "    subgraph {arm_id}[\"arm: {}\"]",
-                            escape_label(&match_guard_label(&arm.guard))
-                        ));
-                        let branch = self.match_target_node(&arm.target, "      ");
-                        self.line("    end");
-                        self.edge(
-                            &operation,
-                            &branch,
-                            Some(&match_guard_label(&arm.guard)),
+                        current = Vec::new();
+                    }
+                    TypedStageKind::Filter { name, .. } => {
+                        let operation =
+                            self.collection_node(&format!("filter {name}"), "filter", "    ");
+                        self.edges(&current, &operation, None, "    ");
+                        current = vec![operation];
+                    }
+                    TypedStageKind::Field { name } => {
+                        let operation =
+                            self.operation_node(&format!("field {name}"), "field", "    ");
+                        self.edges(&current, &operation, None, "    ");
+                        current = vec![operation];
+                    }
+                    TypedStageKind::Repeat { node, count, .. } => {
+                        let operation = self.collection_node(
+                            &format!("repeat<{}> {node}", count.label),
+                            "repeat",
                             "    ",
                         );
-                        branches.push(branch);
+                        self.edges(&current, &operation, None, "    ");
+                        let count = self.emit_typed_endpoint(count, &env)?;
+                        self.edges(&count, &operation, Some("count"), "    ");
+                        current = vec![operation];
                     }
-                    current = branches;
+                    TypedStageKind::Reduce { op, identity, .. } => {
+                        let operation = self.collection_node(
+                            &format!("reduce {op}\nidentity: {}", identity.label),
+                            "reduce",
+                            "    ",
+                        );
+                        self.edges(&current, &operation, None, "    ");
+                        let identity = self.emit_typed_endpoint(identity, &env)?;
+                        self.edges(&identity, &operation, Some("identity"), "    ");
+                        current = vec![operation];
+                    }
+                    TypedStageKind::Scan { op, identity, .. } => {
+                        let operation = self.collection_node(
+                            &format!("scan {op}\nidentity: {}", identity.label),
+                            "scan",
+                            "    ",
+                        );
+                        self.edges(&current, &operation, None, "    ");
+                        let identity = self.emit_typed_endpoint(identity, &env)?;
+                        self.edges(&identity, &operation, Some("identity"), "    ");
+                        current = vec![operation];
+                    }
+                    TypedStageKind::Match { arms } => {
+                        let operation = self.decision_node("match ?", "    ");
+                        self.edges(&current, &operation, Some("subject"), "    ");
+                        let mut branches = Vec::new();
+                        for (arm_index, arm) in arms.iter().enumerate() {
+                            if let TypedMatchGuard::Call { args, .. } = &arm.guard {
+                                for arg in args {
+                                    let arg_nodes = self.emit_typed_endpoint(arg, &env)?;
+                                    self.edges(&arg_nodes, &operation, Some("guard arg"), "    ");
+                                }
+                            }
+                            let arm_id = self.unique_id("match_arm", &arm_index.to_string());
+                            self.line(&format!(
+                                "    subgraph {arm_id}[\"arm: {}\"]",
+                                escape_label(&typed_match_guard_label(&arm.guard))
+                            ));
+                            let branch = self.typed_match_target_node(&arm.target, "      ");
+                            self.line("    end");
+                            self.edge(
+                                &operation,
+                                &branch,
+                                Some(&typed_match_guard_label(&arm.guard)),
+                                "    ",
+                            );
+                            branches.push(branch);
+                        }
+                        current = branches;
+                    }
                 }
             }
         }
+
+        self.line("  end");
         Ok(())
     }
 
@@ -304,102 +286,84 @@ impl MermaidEmitter {
         Ok(())
     }
 
-    fn emit_source_endpoint(
+    fn emit_typed_source_endpoint(
         &mut self,
-        endpoint: &Endpoint,
+        endpoint: &TypedEndpoint,
         env: &HashMap<String, Vec<NodeRef>>,
     ) -> Result<Vec<NodeRef>, String> {
-        match endpoint {
-            Endpoint::Variable(name) => env
+        match &endpoint.kind {
+            TypedEndpointKind::Variable(name) => env
                 .get(name)
                 .cloned()
                 .ok_or_else(|| format!("unknown value `{name}`")),
-            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
-            Endpoint::Tuple(items) | Endpoint::Seq(items) => {
-                let source = self.literal_node(
-                    &format!("input\n{}", endpoint_label(endpoint)),
-                    "input",
-                    "    ",
-                );
-                let dependencies = self.emit_endpoint_items(items, env)?;
+            TypedEndpointKind::NodeRef { name, .. } => {
+                Err(format!("expected value, found node `{name}`"))
+            }
+            TypedEndpointKind::Tuple(_) | TypedEndpointKind::Seq(_) => {
+                let source =
+                    self.literal_node(&format!("input\n{}", endpoint.label), "input", "    ");
+                let dependencies = self.emit_typed_endpoint(endpoint, env)?;
                 self.edges(&dependencies, &source, Some("item"), "    ");
                 Ok(vec![source])
             }
-            Endpoint::Struct { fields, .. } => {
-                let source = self.literal_node(
-                    &format!("input\n{}", endpoint_label(endpoint)),
-                    "input",
-                    "    ",
-                );
-                let dependencies = self.emit_struct_field_items(fields, env)?;
+            TypedEndpointKind::Struct { .. } => {
+                let source =
+                    self.literal_node(&format!("input\n{}", endpoint.label), "input", "    ");
+                let dependencies = self.emit_typed_endpoint(endpoint, env)?;
                 self.edges(&dependencies, &source, Some("field"), "    ");
                 Ok(vec![source])
             }
-            Endpoint::Eval { .. } => {
-                let source = self.literal_node(
-                    &format!("input\n{}", endpoint_label(endpoint)),
-                    "input",
-                    "    ",
-                );
-                let dependencies = self.emit_endpoint(endpoint, env)?;
+            TypedEndpointKind::Eval { .. } => {
+                let source =
+                    self.literal_node(&format!("input\n{}", endpoint.label), "input", "    ");
+                let dependencies = self.emit_typed_endpoint(endpoint, env)?;
                 self.edges(&dependencies, &source, Some("item"), "    ");
                 Ok(vec![source])
             }
-            Endpoint::Unit => Ok(Vec::new()),
-            _ => Ok(vec![self.literal_node(
-                &endpoint_label(endpoint),
-                "literal",
-                "    ",
-            )]),
+            TypedEndpointKind::Unit => Ok(Vec::new()),
+            TypedEndpointKind::Int(_)
+            | TypedEndpointKind::Real(_)
+            | TypedEndpointKind::Bool(_)
+            | TypedEndpointKind::String(_) => {
+                Ok(vec![self.literal_node(&endpoint.label, "literal", "    ")])
+            }
         }
     }
 
-    fn emit_endpoint(
+    fn emit_typed_endpoint(
         &mut self,
-        endpoint: &Endpoint,
+        endpoint: &TypedEndpoint,
         env: &HashMap<String, Vec<NodeRef>>,
     ) -> Result<Vec<NodeRef>, String> {
-        match endpoint {
-            Endpoint::Variable(name) => env
+        match &endpoint.kind {
+            TypedEndpointKind::Variable(name) => env
                 .get(name)
                 .cloned()
                 .ok_or_else(|| format!("unknown value `{name}`")),
-            Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
-            Endpoint::Tuple(items) | Endpoint::Seq(items) => {
+            TypedEndpointKind::NodeRef { name, .. } => {
+                Err(format!("expected value, found node `{name}`"))
+            }
+            TypedEndpointKind::Tuple(items) | TypedEndpointKind::Seq(items) => {
                 let mut sources = Vec::new();
                 for item in items {
-                    sources.extend(self.emit_endpoint(item, env)?);
+                    sources.extend(self.emit_typed_endpoint(item, env)?);
                 }
                 Ok(sources)
             }
-            Endpoint::Struct { fields, .. } => self.emit_struct_field_items(fields, env),
-            Endpoint::Eval { source, .. } => self.emit_endpoint(source, env),
-            _ => Ok(Vec::new()),
+            TypedEndpointKind::Struct { fields, .. } => {
+                let mut sources = Vec::new();
+                for (_, item) in fields {
+                    sources.extend(self.emit_typed_endpoint(item, env)?);
+                }
+                Ok(sources)
+            }
+            TypedEndpointKind::Eval { source, .. } => self.emit_typed_endpoint(source, env),
+            TypedEndpointKind::Int(_)
+            | TypedEndpointKind::Real(_)
+            | TypedEndpointKind::Bool(_)
+            | TypedEndpointKind::String(_)
+            | TypedEndpointKind::Unit => Ok(Vec::new()),
         }
-    }
-
-    fn emit_endpoint_items(
-        &mut self,
-        items: &[Endpoint],
-        env: &HashMap<String, Vec<NodeRef>>,
-    ) -> Result<Vec<NodeRef>, String> {
-        let mut sources = Vec::new();
-        for item in items {
-            sources.extend(self.emit_endpoint(item, env)?);
-        }
-        Ok(sources)
-    }
-
-    fn emit_struct_field_items(
-        &mut self,
-        fields: &[(String, Endpoint)],
-        env: &HashMap<String, Vec<NodeRef>>,
-    ) -> Result<Vec<NodeRef>, String> {
-        let mut sources = Vec::new();
-        for (_, item) in fields {
-            sources.extend(self.emit_endpoint(item, env)?);
-        }
-        Ok(sources)
     }
 
     fn operation_node(&mut self, label: &str, role: &str, indent: &str) -> NodeRef {
@@ -443,14 +407,14 @@ impl MermaidEmitter {
         self.node(label, "match", NodeShape::Diamond, "decision", indent)
     }
 
-    fn match_target_node(&mut self, target: &MatchTarget, indent: &str) -> NodeRef {
+    fn typed_match_target_node(&mut self, target: &TypedMatchTarget, indent: &str) -> NodeRef {
         match target {
-            MatchTarget::Node(node) => self.operation_node(node, "match_target", indent),
-            MatchTarget::Value(endpoint) => self.literal_node(
-                &match_target_label(&MatchTarget::Value(endpoint.clone())),
-                "match_value",
-                indent,
-            ),
+            TypedMatchTarget::Node { name, .. } => {
+                self.operation_node(name, "match_target", indent)
+            }
+            TypedMatchTarget::Value(endpoint) => {
+                self.literal_node(&endpoint.label, "match_value", indent)
+            }
         }
     }
 
@@ -611,115 +575,18 @@ impl NodeRef {
     }
 }
 
-fn endpoint_label(endpoint: &Endpoint) -> String {
-    match endpoint {
-        Endpoint::Variable(name) => format!("${name}"),
-        Endpoint::Name(name) => name.clone(),
-        Endpoint::Int(value) => value.to_string(),
-        Endpoint::Real(value) => {
-            let mut text = value.to_string();
-            if !text.contains('.') && !text.contains('e') && !text.contains('E') {
-                text.push_str(".0");
-            }
-            text
-        }
-        Endpoint::Bool(value) => value.to_string(),
-        Endpoint::String(value) => {
-            let mut out = String::from("\"");
-            for ch in value.chars() {
-                match ch {
-                    '\\' => out.push_str("\\\\"),
-                    '"' => out.push_str("\\\""),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    other => out.push(other),
-                }
-            }
-            out.push('"');
-            out
-        }
-        Endpoint::Unit => "()".to_string(),
-        Endpoint::Tuple(items) => endpoint_list_label(items, "(", ")"),
-        Endpoint::Seq(items) => endpoint_list_label(items, "[", "]"),
-        Endpoint::Struct { name, fields } => format!(
-            "{name} {{ {} }}",
-            fields
-                .iter()
-                .map(|(field, value)| format!("{field}: {}", endpoint_label(value)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Endpoint::Eval { source, stages } => {
-            let mut parts = Vec::with_capacity(stages.len() + 1);
-            parts.push(endpoint_label(source));
-            parts.extend(stages.iter().map(stage_label));
-            parts.join(" -> ")
-        }
-    }
-}
-
-fn stage_label(stage: &Stage) -> String {
-    match stage {
-        Stage::Endpoint(endpoint) => endpoint_label(endpoint),
-        Stage::Bind(target) => binding_target_label(target),
-        Stage::Map(name) => format!("map {name}"),
-        Stage::FaultMap { node, .. } => format!("fault map {node}"),
-        Stage::Filter(name) => format!("filter {name}"),
-        Stage::Field(name) => format!("field {name}"),
-        Stage::Repeat { node, .. } => format!("repeat {node}"),
-        Stage::Reduce { op, .. } => format!("reduce {op}"),
-        Stage::Scan { op, .. } => format!("scan {op}"),
-        Stage::Match { .. } => "match".to_string(),
-    }
-}
-
-fn binding_target_label(target: &BindingTarget) -> String {
-    match target {
-        BindingTarget::Discard => "$".to_string(),
-        BindingTarget::Variable(name) => format!("${name}"),
-        BindingTarget::Tuple(items) => format!(
-            "({})",
-            items
-                .iter()
-                .map(binding_target_label)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
-}
-
-fn match_guard_label(guard: &MatchGuard) -> String {
+fn typed_match_guard_label(guard: &TypedMatchGuard) -> String {
     match guard {
-        MatchGuard::Fallback => "_".to_string(),
-        MatchGuard::Call { node, args } => format!(
+        TypedMatchGuard::Fallback => "_".to_string(),
+        TypedMatchGuard::Call { node, args, .. } => format!(
             "{}({})",
             node,
             args.iter()
-                .map(endpoint_label)
+                .map(|arg| arg.label.clone())
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
     }
-}
-
-fn match_target_label(target: &MatchTarget) -> String {
-    match target {
-        MatchTarget::Node(node) => node.clone(),
-        MatchTarget::Value(endpoint) => endpoint_label(endpoint),
-    }
-}
-
-fn endpoint_list_label(items: &[Endpoint], open: &str, close: &str) -> String {
-    let mut out = String::from(open);
-    for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        out.push_str(&endpoint_label(item));
-    }
-    out.push_str(close);
-    out
 }
 
 fn collect_boundary_names(module: &Module) -> HashSet<String> {

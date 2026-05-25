@@ -32,13 +32,6 @@ pub(crate) fn check_library_module_with_base(
     typed_library_module_with_base(module, base_dir).map(|_| ())
 }
 
-pub(crate) fn semantic_summary_with_base(
-    module: &Module,
-    base_dir: &Path,
-) -> Result<SemanticSummary, String> {
-    Ok(typed_library_module_with_base(module, base_dir)?.semantic_summary())
-}
-
 pub(crate) fn typed_module(module: &Module) -> Result<TypedModule, String> {
     let resolved = module_resolver::resolve_stdlib_sources(module)?;
     typed_resolved_module(resolved, CheckMode::Program)
@@ -71,43 +64,6 @@ pub(crate) fn typed_resolved_module(
 ) -> Result<TypedModule, String> {
     let module = resolved.module().clone();
     Checker::new(&module)?.typed_module(resolved, mode)
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct SemanticSummary {
-    pub callables: Vec<CallableSummary>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct CallableSummary {
-    pub name: String,
-    pub variables: Vec<ValueSummary>,
-    pub chains: Vec<ChainSummary>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ValueSummary {
-    pub name: String,
-    pub ty: String,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ChainSummary {
-    pub source: EndpointSummary,
-    pub stages: Vec<StageSummary>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct EndpointSummary {
-    pub label: String,
-    pub ty: String,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct StageSummary {
-    pub label: String,
-    pub input: String,
-    pub output: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,16 +271,6 @@ impl TypedModule {
         self.resolved.module()
     }
 
-    pub(crate) fn semantic_summary(&self) -> SemanticSummary {
-        SemanticSummary {
-            callables: self
-                .callables
-                .iter()
-                .map(TypedCallable::semantic_summary)
-                .collect(),
-        }
-    }
-
     pub(crate) fn signature_for(&self, name: &str) -> Option<Signature> {
         let id = self.resolved.symbol_id(name)?;
         self.symbols.iter().find_map(|symbol| {
@@ -350,42 +296,6 @@ impl TypedModule {
                 TypedSymbolKind::Callable(_) => None,
             }
         })
-    }
-}
-
-impl TypedCallable {
-    fn semantic_summary(&self) -> CallableSummary {
-        let variables = self
-            .variables
-            .iter()
-            .map(|port| ValueSummary {
-                name: port.name.clone(),
-                ty: port.ty.to_string(),
-            })
-            .collect::<Vec<_>>();
-        CallableSummary {
-            name: self.name.clone(),
-            variables,
-            chains: self
-                .chains
-                .iter()
-                .map(|chain| ChainSummary {
-                    source: EndpointSummary {
-                        label: chain.source.label.clone(),
-                        ty: chain.source.ty.to_string(),
-                    },
-                    stages: chain
-                        .stages
-                        .iter()
-                        .map(|stage| StageSummary {
-                            label: stage.label.clone(),
-                            input: stage.input.to_string(),
-                            output: stage.output.to_string(),
-                        })
-                        .collect(),
-                })
-                .collect(),
-        }
     }
 }
 
@@ -452,23 +362,6 @@ impl<'a> Checker<'a> {
             }
         }
         Ok(())
-    }
-
-    fn semantic_summary(&self) -> Result<SemanticSummary, String> {
-        let mut summary = SemanticSummary::default();
-        for decl in &self.module.declarations {
-            let (callable, kind) = match decl {
-                Decl::Node(callable) => (callable, CallableKind::Node),
-                Decl::Program(callable) => (callable, CallableKind::Program),
-                Decl::TypeAlias(_) | Decl::Struct(_) | Decl::Foreign(_) | Decl::Import(_) => {
-                    continue;
-                }
-            };
-            summary
-                .callables
-                .push(self.summarize_callable(callable, kind)?);
-        }
-        Ok(summary)
     }
 
     fn typed_module(
@@ -1703,177 +1596,6 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn summarize_callable(
-        &self,
-        callable: &Callable,
-        kind: CallableKind,
-    ) -> Result<CallableSummary, String> {
-        let mut env = HashMap::new();
-        let mut summary = CallableSummary {
-            name: callable.name.clone(),
-            variables: Vec::new(),
-            chains: Vec::new(),
-        };
-        for port in &callable.inputs {
-            let ty = self.parse_declared_type(&port.ty)?;
-            if env.insert(port.name.clone(), ty.clone()).is_some() {
-                return Err(format!(
-                    "`{}` declares input `{}` more than once",
-                    callable.name, port.name
-                ));
-            }
-            summary.variables.push(ValueSummary {
-                name: port.name.clone(),
-                ty: ty.to_string(),
-            });
-        }
-        for chain in &callable.chains {
-            let chain_summary =
-                self.summarize_chain(callable, kind, chain, &mut env, &mut summary)?;
-            summary.chains.push(chain_summary);
-        }
-        for output in &callable.outputs {
-            let expected = self.parse_declared_type(&output.ty)?;
-            let actual = env.get(&output.name).ok_or_else(|| {
-                format!(
-                    "`{}` declares output `{}` but it is never bound",
-                    callable.name, output.name
-                )
-            })?;
-            self.expect_assignable_type(
-                &format!("output `{}` of `{}`", output.name, callable.name),
-                actual,
-                &expected,
-            )?;
-        }
-        Ok(summary)
-    }
-
-    fn summarize_chain(
-        &self,
-        callable: &Callable,
-        kind: CallableKind,
-        chain: &Chain,
-        env: &mut HashMap<String, Type>,
-        callable_summary: &mut CallableSummary,
-    ) -> Result<ChainSummary, String> {
-        let mut value_type = self.endpoint_type(&chain.source, env)?;
-        let mut summary = ChainSummary {
-            source: EndpointSummary {
-                label: format_endpoint_for_error(&chain.source),
-                ty: value_type.to_string(),
-            },
-            stages: Vec::new(),
-        };
-        for (index, stage) in chain.stages.iter().enumerate() {
-            let is_last = index + 1 == chain.stages.len();
-            let input_type = value_type.clone();
-            let (label, output_type) = match stage {
-                Stage::Bind(target) if is_last => {
-                    let bindings = binding_target_types(target, &value_type)?;
-                    for (name, ty) in bindings {
-                        if contains_empty_seq(&ty) {
-                            return Err("empty sequence literals need a type context".to_string());
-                        }
-                        if env.insert(name.clone(), ty.clone()).is_some() {
-                            return Err(format!("value `{name}` is bound more than once"));
-                        }
-                        callable_summary.variables.push(ValueSummary {
-                            name,
-                            ty: ty.to_string(),
-                        });
-                    }
-                    (format_binding_target_for_error(target), value_type.clone())
-                }
-                Stage::Endpoint(Endpoint::Name(name)) => (
-                    name.clone(),
-                    self.apply_node(callable, kind, name, &value_type, false, false)?,
-                ),
-                Stage::Endpoint(Endpoint::Variable(_)) => {
-                    return Err(
-                        "variables may only appear as source values or final bindings".to_string(),
-                    );
-                }
-                Stage::Endpoint(_) => {
-                    return Err("non-name endpoints may only appear as source values".to_string());
-                }
-                Stage::Bind(_) => {
-                    return Err("binding targets may only appear as final stages".to_string());
-                }
-                Stage::Map(name) => (
-                    format!("map {name}"),
-                    self.apply_map(callable, name, &value_type)?,
-                ),
-                Stage::FaultMap { node, ok, fault } => {
-                    if !is_last {
-                        return Err("`fault map` must be the final stage in a chain".to_string());
-                    }
-                    let (ok_type, fault_type) =
-                        self.apply_fault_map(callable, node, &value_type)?;
-                    if env.insert(ok.clone(), ok_type.clone()).is_some() {
-                        return Err(format!("value `{ok}` is bound more than once"));
-                    }
-                    if env.insert(fault.clone(), fault_type.clone()).is_some() {
-                        return Err(format!("value `{fault}` is bound more than once"));
-                    }
-                    callable_summary.variables.push(ValueSummary {
-                        name: ok.clone(),
-                        ty: ok_type.to_string(),
-                    });
-                    callable_summary.variables.push(ValueSummary {
-                        name: fault.clone(),
-                        ty: fault_type.to_string(),
-                    });
-                    (
-                        format!("fault map {node}"),
-                        Type::Tuple(vec![ok_type, fault_type]),
-                    )
-                }
-                Stage::Filter(name) => (
-                    format!("filter {name}"),
-                    self.apply_filter(callable, name, &value_type)?,
-                ),
-                Stage::Field(name) => (
-                    format!("field {name}"),
-                    self.apply_field(name, &value_type)?,
-                ),
-                Stage::Repeat { count, node } => {
-                    let count_type = self.endpoint_type(count, env)?;
-                    self.expect_type("repeat count", &count_type, &Type::Int)?;
-                    (
-                        format!("repeat {node}"),
-                        self.apply_repeat(callable, node, &value_type)?,
-                    )
-                }
-                Stage::Reduce { op, identity } => {
-                    let identity_type = self.endpoint_type(identity, env)?;
-                    (
-                        format!("reduce {op}"),
-                        self.apply_reduce(callable, op, &value_type, &identity_type)?,
-                    )
-                }
-                Stage::Scan { op, identity } => {
-                    let identity_type = self.endpoint_type(identity, env)?;
-                    (
-                        format!("scan {op}"),
-                        self.apply_scan(callable, op, &value_type, &identity_type)?,
-                    )
-                }
-                Stage::Match { arms } => (
-                    "match".to_string(),
-                    self.apply_match(callable, kind, arms, &value_type, env)?,
-                ),
-            };
-            value_type = output_type;
-            summary.stages.push(StageSummary {
-                label,
-                input: input_type.to_string(),
-                output: value_type.to_string(),
-            });
-        }
-        Ok(summary)
-    }
-
     fn check_chain(
         &self,
         callable: &Callable,
@@ -2738,7 +2460,13 @@ fn format_endpoint_for_error(endpoint: &Endpoint) -> String {
         Endpoint::Variable(name) => format!("${name}"),
         Endpoint::Name(name) => name.clone(),
         Endpoint::Int(value) => value.to_string(),
-        Endpoint::Real(value) => value.to_string(),
+        Endpoint::Real(value) => {
+            let mut text = value.to_string();
+            if !text.contains('.') && !text.contains('e') && !text.contains('E') {
+                text.push_str(".0");
+            }
+            text
+        }
         Endpoint::Bool(value) => value.to_string(),
         Endpoint::String(value) => format!("{value:?}"),
         Endpoint::Unit => "()".to_string(),

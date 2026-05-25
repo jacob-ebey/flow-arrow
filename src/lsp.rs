@@ -291,12 +291,12 @@ fn diagnostics_for(uri: &str, source: &str) -> String {
     }
 }
 
-fn semantic_summary_for(uri: &str, source: &str) -> Option<typecheck::SemanticSummary> {
+fn typed_module_for(uri: &str, source: &str) -> Option<typecheck::TypedModule> {
     let module = parser::parse(source).ok()?;
     let base_dir = uri_to_path(uri)
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
-    typecheck::semantic_summary_with_base(&module, &base_dir).ok()
+    typecheck::typed_library_module_with_base(&module, &base_dir).ok()
 }
 
 fn diagnostics_json(message: &str, range: Range) -> String {
@@ -630,7 +630,7 @@ struct Analysis {
     symbols: Vec<Symbol>,
     imports: Vec<ImportInfo>,
     callables: Vec<CallableScope>,
-    semantic: Option<typecheck::SemanticSummary>,
+    semantic: Option<typecheck::TypedModule>,
 }
 
 #[derive(Debug, Clone)]
@@ -732,7 +732,7 @@ impl Analysis {
     fn new(uri: String, source: String) -> Self {
         let tokens = lex_lsp(&source);
         let mut analysis = Self {
-            semantic: semantic_summary_for(&uri, &source),
+            semantic: typed_module_for(&uri, &source),
             uri,
             tokens,
             symbols: Vec::new(),
@@ -1237,7 +1237,7 @@ impl Analysis {
             .find(|callable| callable.body_range.contains(position))
     }
 
-    fn semantic_callable(&self, callable_name: &str) -> Option<&typecheck::CallableSummary> {
+    fn semantic_callable(&self, callable_name: &str) -> Option<&typecheck::TypedCallable> {
         self.semantic
             .as_ref()?
             .callables
@@ -1245,13 +1245,13 @@ impl Analysis {
             .find(|callable| callable.name == callable_name)
     }
 
-    fn semantic_variable_type(&self, callable_name: &str, name: &str) -> Option<&str> {
+    fn semantic_variable_type(&self, callable_name: &str, name: &str) -> Option<String> {
         self.semantic_callable(callable_name)?
             .variables
             .iter()
             .rev()
             .find(|variable| variable.name == name)
-            .map(|variable| variable.ty.as_str())
+            .map(|variable| variable.ty.to_string())
     }
 
     fn semantic_stage_at(
@@ -1271,8 +1271,8 @@ impl Analysis {
             .get(stage_use.stage_index)?;
         Some(StageHover {
             label: stage.label.clone(),
-            input: stage.input.clone(),
-            output: stage.output.clone(),
+            input: stage.input.to_string(),
+            output: stage.output.to_string(),
             is_arrow: stage_use.arrow_range.contains(position),
         })
     }
@@ -1281,7 +1281,7 @@ impl Analysis {
         &self,
         callable: &CallableScope,
         position: Position,
-    ) -> Option<&typecheck::EndpointSummary> {
+    ) -> Option<&typecheck::TypedEndpoint> {
         let source = callable
             .sources
             .iter()
@@ -1467,7 +1467,7 @@ impl Analysis {
             for variable in &callable.variables {
                 let detail = self
                     .semantic_variable_type(&callable.name, &variable.name)
-                    .unwrap_or(&variable.detail);
+                    .unwrap_or_else(|| variable.detail.clone());
                 completions.push(Completion {
                     label: format!("${}", variable.name),
                     kind: CompletionKind::Variable,
@@ -1952,7 +1952,7 @@ fn hover_result(analysis: &Analysis, position: Position) -> Option<String> {
                 .find(|variable| variable.name == name)?;
             let ty = analysis
                 .semantic_variable_type(&callable.name, &variable.name)
-                .unwrap_or(&variable.detail);
+                .unwrap_or_else(|| variable.detail.clone());
             format!("${}: {}", variable.name, ty)
         }
         SymbolRef::Name(name) => {

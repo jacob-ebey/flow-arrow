@@ -13,8 +13,6 @@ mod diagnostic;
 mod fmt;
 mod lexer;
 #[cfg(not(target_arch = "wasm32"))]
-mod llvm_backend;
-#[cfg(not(target_arch = "wasm32"))]
 mod lsp;
 #[cfg(not(target_arch = "wasm32"))]
 mod mermaid;
@@ -182,8 +180,11 @@ pub fn mermaid_file(path: &Path) -> Result<String, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
     let module = parser::parse(&source)?;
-    typecheck::check_module_with_base(&module, path.parent().unwrap_or_else(|| Path::new(".")))?;
-    mermaid::emit_module(&module)
+    let typed = typecheck::typed_module_with_base(
+        &module,
+        path.parent().unwrap_or_else(|| Path::new(".")),
+    )?;
+    mermaid::emit_typed_module_with_options(&typed, mermaid::MermaidOptions::default())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -199,8 +200,11 @@ fn mermaid_file_with_options(
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
     let module = parser::parse(&source)?;
-    typecheck::check_module_with_base(&module, path.parent().unwrap_or_else(|| Path::new(".")))?;
-    mermaid::emit_module_with_options(&module, options)
+    let typed = typecheck::typed_module_with_base(
+        &module,
+        path.parent().unwrap_or_else(|| Path::new(".")),
+    )?;
+    mermaid::emit_typed_module_with_options(&typed, options)
 }
 
 #[cfg(test)]
@@ -238,12 +242,13 @@ mod tests {
     fn emits_llvm_for_map_reduce() {
         let source = include_str!("../examples/99-bottles/main.flow");
         let module = parser::parse(source).expect("parse");
-        let llvm = codegen::emit_module(&module).expect("llvm");
+        let llvm = codegen::emit_llvm_ir_preview(&module).expect("llvm");
         let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
         assert!(runtime_c.contains("static inline FaBytes flow_node_verse_for"));
         assert!(runtime_c.contains("for (size_t"));
         assert!(!runtime_c.contains("FaValue"));
-        assert!(llvm.contains("define i32 @main"));
+        assert!(llvm.starts_with("; FlowArrow LLVM IR preview\n"));
+        assert!(llvm.contains("define i64 @flow_program_main"));
     }
 
     #[test]

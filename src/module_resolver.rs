@@ -88,10 +88,6 @@ impl ResolvedModule {
         &self.module
     }
 
-    pub(crate) fn into_module(self) -> Module {
-        self.module
-    }
-
     #[allow(dead_code)]
     pub(crate) fn modules(&self) -> &[ResolvedSourceModule] {
         &self.modules
@@ -110,15 +106,6 @@ impl ResolvedModule {
     pub(crate) fn symbol(&self, id: SymbolId) -> Option<&ResolvedSymbol> {
         self.symbols.get(id.0)
     }
-}
-
-#[allow(dead_code)]
-pub fn expand_stdlib_sources(module: &Module) -> Result<Module, String> {
-    Ok(resolve_stdlib_sources(module)?.into_module())
-}
-
-pub fn expand_sources(module: &Module, base_dir: Option<&Path>) -> Result<Module, String> {
-    Ok(resolve_sources(module, base_dir)?.into_module())
 }
 
 pub(crate) fn resolve_stdlib_sources(module: &Module) -> Result<ResolvedModule, String> {

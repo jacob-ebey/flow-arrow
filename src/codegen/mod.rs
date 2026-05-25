@@ -41,36 +41,24 @@ mod llvm_text;
 mod oxc_postprocess;
 mod typescript;
 
-#[allow(dead_code)]
-#[cfg(not(target_arch = "wasm32"))]
-pub fn emit_module(module: &Module) -> Result<String, String> {
-    crate::llvm_backend::emit_module(module)
-}
-
-#[allow(dead_code)]
-#[cfg(target_arch = "wasm32")]
-pub fn emit_module(_module: &Module) -> Result<String, String> {
-    Err("LLVM output is unavailable in the wasm compiler; use TypeScript output".to_string())
-}
-
 pub(crate) struct LoweredModule {
     typed: TypedModule,
 }
 
 impl LoweredModule {
     pub(crate) fn with_stdlib_sources(module: &Module) -> Result<Self, String> {
-        let expanded = module_resolver::expand_stdlib_sources(module)?;
-        Self::from_expanded(expanded)
+        let resolved = module_resolver::resolve_stdlib_sources(module)?;
+        Self::from_resolved(resolved)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn with_base(module: &Module, base_dir: &Path) -> Result<Self, String> {
-        let expanded = module_resolver::expand_sources(module, Some(base_dir))?;
-        Self::from_expanded(expanded)
+        let resolved = module_resolver::resolve_sources(module, Some(base_dir))?;
+        Self::from_resolved(resolved)
     }
 
-    fn from_expanded(module: Module) -> Result<Self, String> {
-        let module = monomorphize::expand_module(&module)?;
+    fn from_resolved(resolved: module_resolver::ResolvedModule) -> Result<Self, String> {
+        let module = monomorphize::expand_module(resolved.module())?;
         let resolved = module_resolver::ResolvedModule::synthetic(module);
         let typed = typecheck::typed_resolved_module(resolved, CheckMode::Library)?;
         Ok(Self { typed })
@@ -492,7 +480,7 @@ enum BroadcastSide {
 
 struct TypedCodegen<'a> {
     module: &'a Module,
-    typed: Option<&'a TypedModule>,
+    typed: &'a TypedModule,
     temp: usize,
     parallel_helper: usize,
     stream_helper: usize,
@@ -514,18 +502,9 @@ struct ForeignCBinding {
 }
 
 impl<'a> TypedCodegen<'a> {
-    #[allow(dead_code)]
-    fn new(module: &'a Module) -> Result<Self, String> {
-        Self::new_inner(module, None)
-    }
-
     fn from_typed(typed: &'a TypedModule) -> Result<Self, String> {
-        Self::new_inner(typed.module(), Some(typed))
-    }
-
-    fn new_inner(module: &'a Module, typed: Option<&'a TypedModule>) -> Result<Self, String> {
         let mut codegen = Self {
-            module,
+            module: typed.module(),
             typed,
             temp: 0,
             parallel_helper: 0,
@@ -1364,13 +1343,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             {
                 return Err(format!("duplicate declaration `{}`", callable.name));
             }
-            let signature = match self.typed_signature(&callable.name)? {
-                Some(signature) => signature,
-                None => Signature {
-                    input: self.port_types(&callable.inputs)?,
-                    output: self.port_types(&callable.outputs)?,
-                },
-            };
+            let signature = self.typed_signature(&callable.name)?;
             if self
                 .signatures
                 .insert(callable.name.clone(), signature)
@@ -1417,13 +1390,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                         ));
                     }
                 }
-                let signature = match self.typed_signature(&node.name)? {
-                    Some(signature) => signature,
-                    None => Signature {
-                        input: self.port_types(&node.inputs)?,
-                        output: self.port_types(&node.outputs)?,
-                    },
-                };
+                let signature = self.typed_signature(&node.name)?;
                 if self
                     .signatures
                     .insert(node.name.clone(), signature)
@@ -1436,20 +1403,10 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         Ok(())
     }
 
-    fn typed_signature(&self, name: &str) -> Result<Option<Signature>, String> {
-        Ok(self.typed.and_then(|typed| typed.signature_for(name)))
-    }
-
-    fn port_types(&self, ports: &[Port]) -> Result<Ty, String> {
-        let mut types = ports
-            .iter()
-            .map(|port| self.parse_declared_type(&port.ty))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(match types.len() {
-            0 => Ty::Unit,
-            1 => types.remove(0),
-            _ => Ty::Tuple(types),
-        })
+    fn typed_signature(&self, name: &str) -> Result<Signature, String> {
+        self.typed
+            .signature_for(name)
+            .ok_or_else(|| format!("missing typed signature for `{name}`"))
     }
 
     fn parse_declared_type(&self, text: &str) -> Result<Ty, String> {
@@ -11886,6 +11843,10 @@ mod tests {
         module
     }
 
+    fn lowered_module(module: &Module) -> LoweredModule {
+        LoweredModule::with_stdlib_sources(module).expect("lowered module")
+    }
+
     fn function_body<'a>(runtime_c: &'a str, name: &str) -> &'a str {
         let start = runtime_c.find(name).expect("function name");
         let body_start = runtime_c[start..].find(" {\n").expect("function body") + start;
@@ -11914,9 +11875,10 @@ mod tests {
     #[test]
     fn typescript_exports_only_extern_nodes() {
         let module = extern_visibility_module();
+        let lowered = lowered_module(&module);
 
-        let ts = typescript::emit_module(TypedCodegen::new(&module).expect("typed codegen"))
-            .expect("typescript");
+        let ts =
+            typescript::emit_module(lowered.typed().expect("typed codegen")).expect("typescript");
 
         assert!(ts.contains("export function exposed(value: bigint): bigint"));
         assert!(ts.contains("\nfunction hidden(value: bigint): bigint"));
@@ -11926,8 +11888,9 @@ mod tests {
     #[test]
     fn wasm_exports_only_extern_nodes() {
         let module = extern_visibility_module();
+        let lowered = lowered_module(&module);
         let emitted = DirectLlvm::emit_with_options(
-            TypedCodegen::new(&module).expect("typed codegen"),
+            lowered.typed().expect("typed codegen"),
             DirectLlvmOptions {
                 emit_entrypoint: false,
                 export_abi: Some(DirectExportAbi::Wasm),
@@ -11958,7 +11921,8 @@ mod tests {
             "#,
         )
         .expect("parse");
-        let mut codegen = TypedCodegen::new(&module).expect("typed codegen");
+        let lowered = lowered_module(&module);
+        let mut codegen = lowered.typed().expect("typed codegen");
         let emitted = codegen.emit_native_cdylib_c().expect("native c");
 
         assert_eq!(emitted.exports, vec!["parts", "label"]);
@@ -11993,9 +11957,10 @@ mod tests {
             "#,
         );
 
-        let llvm = emit_module(&module).expect("llvm");
+        let lowered = lowered_module(&module);
+        let llvm = DirectLlvm::emit(lowered.typed().expect("typed codegen")).expect("llvm");
 
-        assert!(llvm.contains("declare i32 @flow_unboxed_main(i32, ptr)"));
+        assert!(llvm.contains("define i32 @flow_unboxed_main(i32"));
         assert!(llvm.contains("define i32 @main(i32"));
         assert!(llvm.contains("call i32 @flow_unboxed_main(i32"));
         assert!(llvm.contains("ret i32"));
@@ -12092,7 +12057,8 @@ mod tests {
         )
         .expect("parse");
 
-        let mut codegen = TypedCodegen::new(&module).expect("typed codegen");
+        let lowered = lowered_module(&module);
+        let mut codegen = lowered.typed().expect("typed codegen");
         let emitted = codegen.emit_native_cdylib_c().expect("native c");
 
         assert!(emitted.source.contains("fa_parallel_tasks"));
@@ -12192,8 +12158,9 @@ mod tests {
             "#,
         );
 
-        let ts = typescript::emit_module(TypedCodegen::new(&module).expect("typed codegen"))
-            .expect("typescript");
+        let lowered = lowered_module(&module);
+        let ts =
+            typescript::emit_module(lowered.typed().expect("typed codegen")).expect("typescript");
 
         assert!(ts.contains("point: { x: bigint; y: bigint }"));
         assert!(ts.contains("point.x"));
