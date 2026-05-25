@@ -21,9 +21,10 @@ import std.real { format_real }
 program main(args: Args) -> exit_code: Int {
     50000 -> run_gpu_accumulator -> $score
 
-    $score                                                                                                                           -> format_real  -> $score_bytes
-    1024                                                                                                                             -> format_int   -> $len_bytes
-    50000                                                                                                                            -> format_int   -> $iterations_bytes
+    $score -> format_real -> $score_bytes
+    1024   -> format_int  -> $len_bytes
+    50000  -> format_int  -> $iterations_bytes
+
     ["gpu accumulator example\n", "len: ", $len_bytes, "\n", "iterations: ", $iterations_bytes, "\n", "score: ", $score_bytes, "\n"] -> concat_bytes -> $output
     $output                                                                                                                          -> write_stdout -> $exit_code
 }
