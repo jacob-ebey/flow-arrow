@@ -19,3 +19,21 @@ cargo run -- run examples/gpu-accumulator-benchmark/main.flow
 The workload is intentionally shaped for the native GPU backend: immutable
 vectors stay at the compute boundary, the repeated kernel is pure, and only the
 final scalar crosses back to host I/O for printing.
+
+## Browser validation
+
+Build the JavaScript/WebGPU artifact:
+
+```sh
+cargo run -- build --target javascript --crate-type cdylib --gpu examples/gpu-accumulator-benchmark/lib.flow
+```
+
+Serve this directory and open `index.html`:
+
+```sh
+cd examples/gpu-accumulator-benchmark
+npx serve
+```
+
+The page imports `build/javascript/lib.mjs`, calls the exported
+`run_gpu_accumulator` node, and compares the score with the expected value.
