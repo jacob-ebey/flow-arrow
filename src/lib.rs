@@ -732,6 +732,76 @@ mod tests {
     }
 
     #[test]
+    fn javascript_gpu_accumulator_keeps_pure_initializers_synchronous() {
+        let source = r#"
+            import std.math { add, rem }
+            import std.real { from_int }
+            import std.vector { dot, squared_distance, squared_norm }
+
+            extern node run_gpu_accumulator(iterations: Int) -> score: Real {
+                (1, 1025, 1)         -> range_step                       -> $indices
+                $indices             -> map left_value                   -> $left
+                $indices             -> map right_value                  -> $right
+                ($left, $right, 0.0) -> repeat<$iterations> score_kernel -> final_score -> $score
+            }
+
+            node left_value(index: Int) -> value: Real {
+                ($index, 11)  -> rem      -> $wrapped
+                ($wrapped, 1) -> add      -> $offset
+                $offset       -> from_int -> $value
+            }
+
+            node right_value(index: Int) -> value: Real {
+                ($index, 3)    -> add      -> $shifted
+                ($shifted, 11) -> rem      -> $wrapped
+                ($wrapped, 1)  -> add      -> $offset
+                $offset        -> from_int -> $value
+            }
+
+            node score_kernel(left: Seq[Real], right: Seq[Real], score: Real) -> (out_left: Seq[Real], out_right: Seq[Real], out_score: Real) {
+                ($left, $right)           -> dot              -> $dot
+                ($left, $right)           -> squared_distance -> $distance_squared
+                $left                     -> squared_norm     -> $norm_squared
+                ($dot, $distance_squared) -> add              -> $partial
+                ($partial, $norm_squared) -> add              -> $delta
+                ($score, $delta)          -> add              -> $out_score
+                $left                     -> $out_left
+                $right                    -> $out_right
+            }
+
+            node final_score(left: Seq[Real], right: Seq[Real], score: Real) -> out: Real {
+                $score -> $out
+            }
+        "#;
+
+        let (_, javascript) = compile_javascript_artifacts_source_with_options(
+            source,
+            TypeScriptCompileOptions {
+                mode: TypeScriptCompileMode::Library,
+                gpu: true,
+                ..TypeScriptCompileOptions::default()
+            },
+        )
+        .expect("javascript gpu");
+
+        assert!(javascript.contains("export async function run_gpu_accumulator"));
+        assert!(javascript.contains("faGpuRepeatVectorAccumF64"));
+        assert!(javascript.contains("left.push(left_value("));
+        assert!(javascript.contains("right.push(right_value("));
+        assert!(javascript.contains("function left_value"));
+        assert!(javascript.contains("function right_value"));
+        assert!(!javascript.contains("async function left_value"));
+        assert!(!javascript.contains("async function right_value"));
+        assert!(!javascript.contains("await left_value"));
+        assert!(!javascript.contains("await right_value"));
+        assert!(!javascript.contains("const indices = faRangeStep"));
+        assert!(!javascript.contains("of indices"));
+        assert!(!javascript.contains("else if"));
+        assert!(!javascript.contains("range_step: step cannot be zero"));
+        assert!(!javascript.contains("await final_score"));
+    }
+
+    #[test]
     fn gpu_repeat_matrix_accumulator_lowers_to_generated_program() {
         let source = r#"
             import std.cli { Args }

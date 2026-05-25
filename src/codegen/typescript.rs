@@ -40,8 +40,8 @@ pub(super) struct TypeScriptEmitOptions {
 }
 
 impl TypeScriptEmitOptions {
-    fn requires_async(&self) -> bool {
-        self.worker_concurrency || self.gpu
+    fn has_runtime_lifecycle(&self) -> bool {
+        self.worker_concurrency
     }
 }
 
@@ -60,6 +60,7 @@ struct TypeScriptCodegen<'a> {
     worker_mappers: Vec<WorkerMapper>,
     seen_worker_mapper_sources: HashMap<String, String>,
     gpu_plan: Option<gpu::GpuPlan>,
+    async_callables: HashSet<String>,
 }
 
 struct WorkerMapBatchItem {
@@ -71,9 +72,46 @@ struct WorkerMapBatchItem {
     mapper_id: String,
 }
 
+struct SyncMapBatchItem {
+    source: TypedEndpoint,
+    source_key: String,
+    target: String,
+    mapper: String,
+    item_ty: Ty,
+    output_ty: Ty,
+}
+
+struct RangeSyncMapBatch {
+    range_source: TypedEndpoint,
+    items: Vec<SyncMapBatchItem>,
+}
+
 pub(super) struct TypeScriptEmitOutput {
     pub source: String,
     pub worker_mappers: Vec<WorkerMapper>,
+}
+
+trait AnyResultExt: Iterator + Sized {
+    fn any_result<E, F>(self, predicate: F) -> Result<bool, E>
+    where
+        F: FnMut(Self::Item) -> Result<bool, E>;
+}
+
+impl<I> AnyResultExt for I
+where
+    I: Iterator + Sized,
+{
+    fn any_result<E, F>(self, mut predicate: F) -> Result<bool, E>
+    where
+        F: FnMut(Self::Item) -> Result<bool, E>,
+    {
+        for item in self {
+            if predicate(item)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +133,7 @@ impl<'a> TypeScriptCodegen<'a> {
             worker_mappers: Vec::new(),
             seen_worker_mapper_sources: HashMap::new(),
             gpu_plan,
+            async_callables: HashSet::new(),
         }
     }
 
@@ -103,6 +142,7 @@ impl<'a> TypeScriptCodegen<'a> {
     }
 
     fn emit_artifacts(mut self) -> Result<TypeScriptEmitOutput, String> {
+        self.analyze_async_callables()?;
         let mut out = String::new();
         self.emit_foreign_js_imports(&mut out);
         out.push_str(TS_PRELUDE);
@@ -124,17 +164,24 @@ impl<'a> TypeScriptCodegen<'a> {
         if self.options.worker_concurrency {
             self.emit_worker_lifecycle_exports(&mut out);
         }
-        if self.options.requires_async() {
+        let main_is_async = self.async_callables.contains("main");
+        if self.options.has_runtime_lifecycle() || (has_program_main && main_is_async) {
             self.emit_runtime_lifecycle_exports(&mut out);
         }
 
         if has_program_main {
-            if self.options.requires_async() {
-                out.push_str(
+            if self.options.has_runtime_lifecycle() || main_is_async {
+                let main_call = if main_is_async {
+                    "await main({ argv: __flowarrow_process.argv.slice(2) })"
+                } else {
+                    "main({ argv: __flowarrow_process.argv.slice(2) })"
+                };
+                let bootstrap =
                     "\nconst __flowarrow_process = (globalThis as any).process;\n\
 const __flowarrow_main_url = __flowarrow_process?.argv?.[1]\n  ? new URL(__flowarrow_process.argv[1], \"file:\").href\n  : \"\";\n\
-if (import.meta.url === __flowarrow_main_url) {\n  (async () => {\n    await __flowarrow_setup_runtime();\n    let __flowarrow_exit = 1n;\n    try {\n      const __flowarrow_result = await main({ argv: __flowarrow_process.argv.slice(2) });\n      __flowarrow_exit = faExitCode(__flowarrow_result);\n    } finally {\n      await __flowarrow_teardown_runtime();\n    }\n    __flowarrow_process.exit(Number(__flowarrow_exit));\n  })();\n}\n",
-                );
+if (import.meta.url === __flowarrow_main_url) {\n  (async () => {\n    await __flowarrow_setup_runtime();\n    let __flowarrow_exit = 1n;\n    try {\n      const __flowarrow_result = __FLOWARROW_MAIN_CALL__;\n      __flowarrow_exit = faExitCode(__flowarrow_result);\n    } finally {\n      await __flowarrow_teardown_runtime();\n    }\n    __flowarrow_process.exit(Number(__flowarrow_exit));\n  })();\n}\n"
+                    .replace("__FLOWARROW_MAIN_CALL__", main_call);
+                out.push_str(&bootstrap);
             } else {
                 out.push_str(
                     "\nconst __flowarrow_process = (globalThis as any).process;\n\
@@ -280,6 +327,185 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         Ok(())
     }
 
+    fn analyze_async_callables(&mut self) -> Result<(), String> {
+        let mut async_callables = HashSet::new();
+        loop {
+            let mut changed = false;
+            for callable in &self.codegen.typed.callables {
+                if async_callables.contains(&callable.name) {
+                    continue;
+                }
+                if self.callable_needs_async(callable, &async_callables)? {
+                    async_callables.insert(callable.name.clone());
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        self.async_callables = async_callables;
+        Ok(())
+    }
+
+    fn callable_needs_async(
+        &self,
+        callable: &TypedCallable,
+        async_callables: &HashSet<String>,
+    ) -> Result<bool, String> {
+        if self
+            .gpu_plan
+            .as_ref()
+            .map(|plan| !plan.range_map_reductions(callable).is_empty())
+            .unwrap_or(false)
+        {
+            return Ok(true);
+        }
+        callable.chains.iter().any_result(|chain| {
+            Ok(self.endpoint_needs_async(&chain.source, async_callables)?
+                || chain
+                    .stages
+                    .iter()
+                    .any_result(|stage| self.stage_needs_async(stage, async_callables))?)
+        })
+    }
+
+    fn endpoint_needs_async(
+        &self,
+        endpoint: &TypedEndpoint,
+        async_callables: &HashSet<String>,
+    ) -> Result<bool, String> {
+        match &endpoint.kind {
+            TypedEndpointKind::Tuple(items) | TypedEndpointKind::Seq(items) => items
+                .iter()
+                .any_result(|item| self.endpoint_needs_async(item, async_callables)),
+            TypedEndpointKind::Struct { fields, .. } => fields
+                .iter()
+                .any_result(|(_, item)| self.endpoint_needs_async(item, async_callables)),
+            TypedEndpointKind::Eval { source, stages } => Ok(self
+                .endpoint_needs_async(source, async_callables)?
+                || stages
+                    .iter()
+                    .any_result(|stage| self.stage_needs_async(stage, async_callables))?),
+            TypedEndpointKind::Variable(_)
+            | TypedEndpointKind::NodeRef { .. }
+            | TypedEndpointKind::Int(_)
+            | TypedEndpointKind::Real(_)
+            | TypedEndpointKind::Bool(_)
+            | TypedEndpointKind::String(_)
+            | TypedEndpointKind::Unit => Ok(false),
+        }
+    }
+
+    fn stage_needs_async(
+        &self,
+        stage: &crate::typecheck::TypedStage,
+        async_callables: &HashSet<String>,
+    ) -> Result<bool, String> {
+        match &stage.kind {
+            TypedStageKind::Bind { .. } | TypedStageKind::Field { .. } => Ok(false),
+            TypedStageKind::Call { name, .. } => Ok(async_callables.contains(name)),
+            TypedStageKind::Map { name, .. } => {
+                self.map_stage_needs_async(name, &stage.input, &stage.output, async_callables)
+            }
+            TypedStageKind::FaultMap { node, .. } => Ok(async_callables.contains(node)),
+            TypedStageKind::Filter { name, .. } => Ok(async_callables.contains(name)),
+            TypedStageKind::Repeat { count, node, .. } => Ok(self
+                .endpoint_needs_async(count, async_callables)?
+                || self
+                    .codegen
+                    .gpu_repeat_accumulator(node, &stage.input)
+                    .is_some()
+                || async_callables.contains(node)),
+            TypedStageKind::Reduce { op, identity, .. } => Ok(self
+                .endpoint_needs_async(identity, async_callables)?
+                || self.reduce_stage_uses_gpu(&stage.input, op)
+                || async_callables.contains(op)),
+            TypedStageKind::Scan { op, identity, .. } => Ok(self
+                .endpoint_needs_async(identity, async_callables)?
+                || async_callables.contains(op)),
+            TypedStageKind::Match { arms } => arms.iter().any_result(|arm| {
+                let guard_async = match &arm.guard {
+                    TypedMatchGuard::Call { node, args, .. } => {
+                        async_callables.contains(node)
+                            || args
+                                .iter()
+                                .any_result(|arg| self.endpoint_needs_async(arg, async_callables))?
+                    }
+                    TypedMatchGuard::Fallback => false,
+                };
+                let target_async = match &arm.target {
+                    TypedMatchTarget::Node { name, .. } => async_callables.contains(name),
+                    TypedMatchTarget::Value(endpoint) => {
+                        self.endpoint_needs_async(endpoint, async_callables)?
+                    }
+                };
+                Ok(guard_async || target_async)
+            }),
+        }
+    }
+
+    fn map_stage_needs_async(
+        &self,
+        name: &str,
+        input_ty: &Ty,
+        output_ty: &Ty,
+        async_callables: &HashSet<String>,
+    ) -> Result<bool, String> {
+        if async_callables.contains(name) {
+            return Ok(true);
+        }
+        let (is_faultable, seq_ty) = match input_ty {
+            Ty::Faultable(inner) => (true, inner.as_ref()),
+            other => (false, other),
+        };
+        let Ty::Seq(item_ty) = seq_ty else {
+            return Ok(false);
+        };
+        let Ty::Seq(output_item_ty) = output_ty else {
+            return Ok(false);
+        };
+        if !is_faultable
+            && self.options.gpu
+            && self
+                .gpu_plan
+                .as_ref()
+                .and_then(|plan| plan.kernel_for_map(name, item_ty, output_item_ty))
+                .is_some()
+        {
+            return Ok(true);
+        }
+        if !is_faultable
+            && self.options.worker_concurrency
+            && self
+                .worker_mapper_source(name, item_ty, output_item_ty)?
+                .is_some()
+        {
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn reduce_stage_uses_gpu(&self, input_ty: &Ty, op: &str) -> bool {
+        if !self.options.gpu {
+            return false;
+        }
+        let seq_ty = match input_ty {
+            Ty::Faultable(_) => return false,
+            other => other,
+        };
+        let Ty::Seq(item_ty) = seq_ty else {
+            return false;
+        };
+        if matches!(item_ty.as_ref(), Ty::Faultable(_)) {
+            return false;
+        }
+        matches!(
+            self.codegen.canonical_name(op).as_str(),
+            "add" | "min" | "max"
+        ) && matches!(item_ty.as_ref(), Ty::Int | Ty::Real)
+    }
+
     fn emit_callable(&mut self, out: &mut String, callable: &TypedCallable) -> Result<(), String> {
         self.codegen.validate_gpu_host_callable(callable)?;
         self.temp = 0;
@@ -326,7 +552,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             })
             .collect::<Result<Vec<_>, String>>()?
             .join(", ");
-        if self.options.requires_async() {
+        if self.async_callables.contains(&callable.name) {
             out.push_str(&format!(
                 "\n{export}async function {fn_name}({params}): Promise<{return_ty}> {{\n"
             ));
@@ -376,6 +602,12 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 chain_index += 1;
                 continue;
             }
+            if let Some(batch) = self.range_sync_map_batch(callable, chain_index, &fused_skip)? {
+                let consumed = 1 + batch.items.len();
+                self.emit_range_sync_map_batch(out, batch, &mut env, "  ")?;
+                chain_index += consumed;
+                continue;
+            }
             let batch_len = self.worker_map_batch_len(&callable.chains[chain_index..], &env)?;
             let batch_crosses_fused_chain =
                 (chain_index..chain_index + batch_len).any(|index| fused_skip.contains(&index));
@@ -388,8 +620,21 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 )?;
                 chain_index += batch_len;
             } else {
-                self.emit_chain(out, &callable.chains[chain_index], &mut env, "  ")?;
-                chain_index += 1;
+                let batch_len = self.sync_map_batch_len(&callable.chains[chain_index..])?;
+                let batch_crosses_fused_chain =
+                    (chain_index..chain_index + batch_len).any(|index| fused_skip.contains(&index));
+                if batch_len > 1 && !batch_crosses_fused_chain {
+                    self.emit_sync_map_batch(
+                        out,
+                        &callable.chains[chain_index..chain_index + batch_len],
+                        &mut env,
+                        "  ",
+                    )?;
+                    chain_index += batch_len;
+                } else {
+                    self.emit_chain(out, &callable.chains[chain_index], &mut env, "  ")?;
+                    chain_index += 1;
+                }
             }
         }
 
@@ -714,6 +959,345 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 return Err("expected worker map batch binding".to_string());
             };
             self.bind_target(out, target, value, env, indent)?;
+        }
+        Ok(())
+    }
+
+    fn range_sync_map_batch(
+        &self,
+        callable: &TypedCallable,
+        range_index: usize,
+        fused_skip: &HashSet<usize>,
+    ) -> Result<Option<RangeSyncMapBatch>, String> {
+        if fused_skip.contains(&range_index) {
+            return Ok(None);
+        }
+        let Some(range_chain) = callable.chains.get(range_index) else {
+            return Ok(None);
+        };
+        let Some((range_source, range_name)) = self.range_step_binding(range_chain) else {
+            return Ok(None);
+        };
+        if callable
+            .outputs
+            .iter()
+            .any(|output| output.name == range_name)
+        {
+            return Ok(None);
+        }
+
+        let mut items = Vec::new();
+        for (offset, chain) in callable.chains.iter().enumerate().skip(range_index + 1) {
+            if fused_skip.contains(&offset) {
+                break;
+            }
+            let Some(item) = self.sync_map_batch_item(chain)? else {
+                break;
+            };
+            if item.source_key != range_name {
+                break;
+            }
+            items.push(item);
+        }
+        if items.is_empty() {
+            return Ok(None);
+        }
+
+        let expected_uses = (range_index + 1..range_index + 1 + items.len()).collect::<Vec<_>>();
+        let actual_uses = callable
+            .chains
+            .iter()
+            .enumerate()
+            .filter_map(|(index, chain)| {
+                (chain_source_variable(chain) == Some(range_name)).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if actual_uses != expected_uses {
+            return Ok(None);
+        }
+
+        Ok(Some(RangeSyncMapBatch {
+            range_source: range_source.clone(),
+            items,
+        }))
+    }
+
+    fn range_step_binding<'b>(
+        &self,
+        chain: &'b TypedChain,
+    ) -> Option<(&'b TypedEndpoint, &'b str)> {
+        let [call, bind] = chain.stages.as_slice() else {
+            return None;
+        };
+        let TypedStageKind::Call { name, .. } = &call.kind else {
+            return None;
+        };
+        if self.codegen.canonical_name(name) != "range_step" {
+            return None;
+        }
+        if call.output != Ty::Seq(Box::new(Ty::Int)) {
+            return None;
+        }
+        let TypedStageKind::Bind { target } = &bind.kind else {
+            return None;
+        };
+        binding_target_name(target).map(|name| (&chain.source, name))
+    }
+
+    fn sync_map_batch_len(&self, chains: &[TypedChain]) -> Result<usize, String> {
+        let Some(first_chain) = chains.first() else {
+            return Ok(0);
+        };
+        let Some(first) = self.sync_map_batch_item(first_chain)? else {
+            return Ok(0);
+        };
+        let source_key = first.source_key;
+        let mut len = 1;
+        for chain in chains.iter().skip(1) {
+            let Some(item) = self.sync_map_batch_item(chain)? else {
+                break;
+            };
+            if item.source_key != source_key {
+                break;
+            }
+            len += 1;
+        }
+        Ok(len)
+    }
+
+    fn sync_map_batch_item(&self, chain: &TypedChain) -> Result<Option<SyncMapBatchItem>, String> {
+        let Some(source_key) = chain_source_variable(chain) else {
+            return Ok(None);
+        };
+        let [map, bind] = chain.stages.as_slice() else {
+            return Ok(None);
+        };
+        let TypedStageKind::Map { name, .. } = &map.kind else {
+            return Ok(None);
+        };
+        let TypedStageKind::Bind {
+            target: BindingTarget::Variable(target),
+        } = &bind.kind
+        else {
+            return Ok(None);
+        };
+        let Ty::Seq(item_ty) = &map.input else {
+            return Ok(None);
+        };
+        let Ty::Seq(output_item_ty) = &map.output else {
+            return Ok(None);
+        };
+        if !self.map_can_emit_sync_loop(name, &map.input, output_item_ty)? {
+            return Ok(None);
+        }
+        Ok(Some(SyncMapBatchItem {
+            source: chain.source.clone(),
+            source_key: source_key.to_string(),
+            target: target.clone(),
+            mapper: name.clone(),
+            item_ty: item_ty.as_ref().clone(),
+            output_ty: map.output.clone(),
+        }))
+    }
+
+    fn map_can_emit_sync_loop(
+        &self,
+        name: &str,
+        input_ty: &Ty,
+        output_item_ty: &Ty,
+    ) -> Result<bool, String> {
+        if self.async_callables.contains(name) {
+            return Ok(false);
+        }
+        let Ty::Seq(item_ty) = input_ty else {
+            return Ok(false);
+        };
+        if self.options.gpu
+            && self
+                .gpu_plan
+                .as_ref()
+                .and_then(|plan| plan.kernel_for_map(name, item_ty, output_item_ty))
+                .is_some()
+        {
+            return Ok(false);
+        }
+        if self.options.worker_concurrency
+            && self
+                .worker_mapper_source(name, item_ty, output_item_ty)?
+                .is_some()
+        {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn emit_range_sync_map_batch(
+        &mut self,
+        out: &mut String,
+        batch: RangeSyncMapBatch,
+        env: &mut HashMap<String, TsValue>,
+        indent: &str,
+    ) -> Result<(), String> {
+        let range_ty = Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]);
+        self.emit_sync_map_batch_outputs(out, &batch.items, env, indent)?;
+        let item = self.next_temp();
+
+        if let Some((start, stop, step)) = const_int_range_endpoint(&batch.range_source) {
+            if step == 0 {
+                out.push_str(&format!(
+                    "{indent}throw new Error(\"range_step: step cannot be zero\");\n"
+                ));
+            } else {
+                let cmp = if step > 0 { "<" } else { ">" };
+                out.push_str(&format!(
+                    "{indent}for (let {item} = {start}n; {item} {cmp} {stop}n; {item} += {step}n) {{\n"
+                ));
+                self.emit_sync_map_batch_loop_body(
+                    out,
+                    &batch.items,
+                    &item,
+                    &(indent.to_string() + "  "),
+                )?;
+                out.push_str(&format!("{indent}}}\n"));
+            }
+            self.bind_sync_map_batch_outputs(&batch.items, env)?;
+            return Ok(());
+        }
+
+        let range =
+            self.emit_endpoint_expected(out, &batch.range_source, env, Some(&range_ty), indent)?;
+        let range_tmp = self.next_temp();
+        out.push_str(&format!(
+            "{indent}const {range_tmp}: {} = {};\n",
+            ts_type(&range_ty),
+            range.code
+        ));
+        out.push_str(&format!("{indent}if ({range_tmp}[2] === 0n) {{\n"));
+        out.push_str(&format!(
+            "{indent}  throw new Error(\"range_step: step cannot be zero\");\n"
+        ));
+        out.push_str(&format!("{indent}}} else if ({range_tmp}[2] > 0n) {{\n"));
+        out.push_str(&format!(
+            "{indent}  for (let {item} = {range_tmp}[0]; {item} < {range_tmp}[1]; {item} += {range_tmp}[2]) {{\n"
+        ));
+        self.emit_sync_map_batch_loop_body(
+            out,
+            &batch.items,
+            &item,
+            &(indent.to_string() + "    "),
+        )?;
+        out.push_str(&format!("{indent}  }}\n"));
+        out.push_str(&format!("{indent}}} else {{\n"));
+        out.push_str(&format!(
+            "{indent}  for (let {item} = {range_tmp}[0]; {item} > {range_tmp}[1]; {item} += {range_tmp}[2]) {{\n"
+        ));
+        self.emit_sync_map_batch_loop_body(
+            out,
+            &batch.items,
+            &item,
+            &(indent.to_string() + "    "),
+        )?;
+        out.push_str(&format!("{indent}  }}\n"));
+        out.push_str(&format!("{indent}}}\n"));
+        self.bind_sync_map_batch_outputs(&batch.items, env)?;
+        Ok(())
+    }
+
+    fn emit_sync_map_batch(
+        &mut self,
+        out: &mut String,
+        chains: &[TypedChain],
+        env: &mut HashMap<String, TsValue>,
+        indent: &str,
+    ) -> Result<(), String> {
+        let items = chains
+            .iter()
+            .map(|chain| {
+                self.sync_map_batch_item(chain)?
+                    .ok_or_else(|| "expected synchronous map batch item".to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let mut source = self.emit_endpoint(out, &items[0].source, env, indent)?;
+        if !ts_value_code_is_stable(&source.code) {
+            let source_tmp = self.next_temp();
+            out.push_str(&format!(
+                "{indent}const {source_tmp}: {} = {};\n",
+                ts_type(&source.ty),
+                source.code
+            ));
+            source.code = source_tmp;
+        }
+        self.emit_sync_map_batch_outputs(out, &items, env, indent)?;
+        let item = self.next_temp();
+        out.push_str(&format!(
+            "{indent}for (const {item} of {}) {{\n",
+            source.code
+        ));
+        self.emit_sync_map_batch_loop_body(out, &items, &item, &(indent.to_string() + "  "))?;
+        out.push_str(&format!("{indent}}}\n"));
+        self.bind_sync_map_batch_outputs(&items, env)?;
+        Ok(())
+    }
+
+    fn emit_sync_map_batch_outputs(
+        &mut self,
+        out: &mut String,
+        items: &[SyncMapBatchItem],
+        _env: &HashMap<String, TsValue>,
+        indent: &str,
+    ) -> Result<(), String> {
+        for item in items {
+            let target = ts_ident(&item.target);
+            if !self.try_reserve_ident(&target) {
+                return Err(format!("value `{}` is bound more than once", item.target));
+            }
+            out.push_str(&format!(
+                "{indent}const {target}: {} = [];\n",
+                ts_type(&item.output_ty)
+            ));
+        }
+        Ok(())
+    }
+
+    fn emit_sync_map_batch_loop_body(
+        &mut self,
+        out: &mut String,
+        items: &[SyncMapBatchItem],
+        item_name: &str,
+        indent: &str,
+    ) -> Result<(), String> {
+        for item in items {
+            let mapped = self.emit_call(
+                out,
+                &item.mapper,
+                ts_value(item_name.to_string(), item.item_ty.clone()),
+                indent,
+            )?;
+            out.push_str(&format!(
+                "{indent}{}.push({});\n",
+                ts_ident(&item.target),
+                mapped.code
+            ));
+        }
+        Ok(())
+    }
+
+    fn bind_sync_map_batch_outputs(
+        &self,
+        items: &[SyncMapBatchItem],
+        env: &mut HashMap<String, TsValue>,
+    ) -> Result<(), String> {
+        for item in items {
+            let target = ts_ident(&item.target);
+            if env
+                .insert(
+                    item.target.clone(),
+                    ts_value(target, item.output_ty.clone()),
+                )
+                .is_some()
+            {
+                return Err(format!("value `{}` is bound more than once", item.target));
+            }
         }
         Ok(())
     }
@@ -1144,7 +1728,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 .map(|callable| callable.inputs.len())
                 .ok_or_else(|| format!("missing callable `{name}`"))?;
             let call = format!("{}({})", ts_ident(name), call_args(&input, arity)?);
-            if self.options.requires_async() {
+            if self.async_callables.contains(name) {
                 format!("await {call}")
             } else {
                 call
@@ -2335,6 +2919,34 @@ fn binding_target_name(target: &BindingTarget) -> Option<&str> {
     match target {
         BindingTarget::Variable(name) => Some(name),
         BindingTarget::Discard | BindingTarget::Tuple(_) => None,
+    }
+}
+
+fn chain_source_variable(chain: &TypedChain) -> Option<&str> {
+    match &chain.source.kind {
+        TypedEndpointKind::Variable(name) => Some(name),
+        _ => None,
+    }
+}
+
+fn const_int_range_endpoint(endpoint: &TypedEndpoint) -> Option<(i64, i64, i64)> {
+    let TypedEndpointKind::Tuple(items) = &endpoint.kind else {
+        return None;
+    };
+    let [start, stop, step] = items.as_slice() else {
+        return None;
+    };
+    Some((
+        const_int_endpoint(start)?,
+        const_int_endpoint(stop)?,
+        const_int_endpoint(step)?,
+    ))
+}
+
+fn const_int_endpoint(endpoint: &TypedEndpoint) -> Option<i64> {
+    match &endpoint.kind {
+        TypedEndpointKind::Int(value) => Some(*value),
+        _ => None,
     }
 }
 
