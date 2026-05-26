@@ -1543,6 +1543,7 @@ use wgpu::util::DeviceExt;
 struct GpuRuntime {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    features: wgpu::Features,
 }
 
 #[repr(C)]
@@ -1555,7 +1556,7 @@ struct FaGpuSliceF64 {
 struct GpuMatrixInput {
     rows: usize,
     cols: usize,
-    values: Vec<f32>,
+    values: Vec<f64>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1578,10 +1579,10 @@ pub async fn fa_gpu_require_device() -> Result<(), JsValue> {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fa_gpu_map_i64(
+pub unsafe extern "C" fn fa_gpu_map_i32(
     wgsl: *const c_char,
-    input: *const i64,
-    output: *mut i64,
+    input: *const i32,
+    output: *mut i32,
     count: usize,
 ) {
     let wgsl = read_wgsl(wgsl);
@@ -1598,14 +1599,11 @@ pub unsafe extern "C" fn fa_gpu_map_i64(
     } else {
         unsafe { slice::from_raw_parts_mut(output, count) }
     };
-    let input_i32 = input.iter().map(|value| checked_i32(*value)).collect::<Vec<_>>();
     let mut runtime = runtime().lock().unwrap_or_else(|_| {
         fail("FlowArrow GPU target runtime lock was poisoned");
     });
-    let mapped = runtime.map_i32(&wgsl, &input_i32);
-    for (dst, src) in output.iter_mut().zip(mapped) {
-        *dst = i64::from(src);
-    }
+    let mapped = runtime.map_i32(&wgsl, input);
+    output.copy_from_slice(&mapped);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1615,6 +1613,43 @@ pub async fn fa_gpu_map_i32(wgsl: String, input: Vec<i32>) -> Result<Vec<i32>, J
         .await
         .map_err(|error| JsValue::from_str(&error))?;
     Ok(runtime.map_i32(&wgsl, &input).await)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fa_gpu_map_f32(
+    wgsl: *const c_char,
+    input: *const f32,
+    output: *mut f32,
+    count: usize,
+) {
+    let wgsl = read_wgsl(wgsl);
+    if count > 0 && (input.is_null() || output.is_null()) {
+        fail("FlowArrow GPU target received null sequence storage");
+    }
+    let input = if count == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(input, count) }
+    };
+    let output = if count == 0 {
+        &mut []
+    } else {
+        unsafe { slice::from_raw_parts_mut(output, count) }
+    };
+    let mut runtime = runtime().lock().unwrap_or_else(|_| {
+        fail("FlowArrow GPU target runtime lock was poisoned");
+    });
+    runtime.map_f32(&wgsl, input, output);
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_map_f32(wgsl: String, input: Vec<f32>) -> Result<Vec<f32>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.map_f32(&wgsl, &input).await)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1651,17 +1686,17 @@ pub async fn fa_gpu_map_f64(wgsl: String, input: Vec<f64>) -> Result<Vec<f64>, J
     let mut runtime = GpuRuntime::new()
         .await
         .map_err(|error| JsValue::from_str(&error))?;
-    Ok(runtime.map_f64(&wgsl, &input).await)
+    runtime.map_f64(&wgsl, &input).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fa_gpu_reduce_i64(
+pub unsafe extern "C" fn fa_gpu_reduce_i32(
     op: u32,
-    input: *const i64,
+    input: *const i32,
     count: usize,
-    identity: i64,
-) -> i64 {
+    identity: i32,
+) -> i32 {
     if count > 0 && input.is_null() {
         fail("FlowArrow GPU target received null reduce input");
     }
@@ -1670,11 +1705,10 @@ pub unsafe extern "C" fn fa_gpu_reduce_i64(
     } else {
         unsafe { slice::from_raw_parts(input, count) }
     };
-    let input_i32 = input.iter().map(|value| checked_i32(*value)).collect::<Vec<_>>();
     let mut runtime = runtime().lock().unwrap_or_else(|_| {
         fail("FlowArrow GPU target runtime lock was poisoned");
     });
-    i64::from(runtime.reduce_i32(op, &input_i32, checked_i32(identity)))
+    runtime.reduce_i32(op, input, identity)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1688,6 +1722,41 @@ pub async fn fa_gpu_reduce_i32(
         .await
         .map_err(|error| JsValue::from_str(&error))?;
     Ok(runtime.reduce_i32(op, &input, identity).await)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fa_gpu_reduce_f32(
+    op: u32,
+    input: *const f32,
+    count: usize,
+    identity: f32,
+) -> f32 {
+    if count > 0 && input.is_null() {
+        fail("FlowArrow GPU target received null reduce input");
+    }
+    let input = if count == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(input, count) }
+    };
+    let mut runtime = runtime().lock().unwrap_or_else(|_| {
+        fail("FlowArrow GPU target runtime lock was poisoned");
+    });
+    runtime.reduce_f32(op, input, identity)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_reduce_f32(
+    op: u32,
+    input: Vec<f32>,
+    identity: f32,
+) -> Result<f32, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.reduce_f32(op, &input, identity).await)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1706,11 +1775,10 @@ pub unsafe extern "C" fn fa_gpu_reduce_f64(
     } else {
         unsafe { slice::from_raw_parts(input, count) }
     };
-    let input_f32 = input.iter().map(|value| *value as f32).collect::<Vec<_>>();
     let mut runtime = runtime().lock().unwrap_or_else(|_| {
         fail("FlowArrow GPU target runtime lock was poisoned");
     });
-    f64::from(runtime.reduce_f32(op, &input_f32, identity as f32))
+    runtime.reduce_f64(op, input, identity)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1720,53 +1788,10 @@ pub async fn fa_gpu_reduce_f64(
     input: Vec<f64>,
     identity: f64,
 ) -> Result<f64, JsValue> {
-    let input_f32 = input.iter().map(|value| *value as f32).collect::<Vec<_>>();
     let mut runtime = GpuRuntime::new()
         .await
         .map_err(|error| JsValue::from_str(&error))?;
-    Ok(f64::from(runtime.reduce_f32(op, &input_f32, identity as f32).await))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fa_gpu_range_map_reduce_i64(
-    map_expr: *const c_char,
-    start: i64,
-    stop: i64,
-    step: i64,
-    op: u32,
-    identity: i64,
-) -> i64 {
-    let map_expr = read_wgsl(map_expr);
-    let mut runtime = runtime().lock().unwrap_or_else(|_| {
-        fail("FlowArrow GPU target runtime lock was poisoned");
-    });
-    i64::from(runtime.range_map_reduce_i32(
-        &map_expr,
-        checked_i32(start),
-        checked_i32(stop),
-        checked_i32(step),
-        op,
-        checked_i32(identity),
-    ))
-}
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen]
-pub async fn fa_gpu_range_map_reduce_i32(
-    map_expr: String,
-    start: i32,
-    stop: i32,
-    step: i32,
-    op: u32,
-    identity: i32,
-) -> Result<i32, JsValue> {
-    let mut runtime = GpuRuntime::new()
-        .await
-        .map_err(|error| JsValue::from_str(&error))?;
-    Ok(runtime
-        .range_map_reduce_i32(&map_expr, start, stop, step, op, identity)
-        .await)
+    runtime.reduce_f64(op, &input, identity).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1803,15 +1828,8 @@ pub unsafe extern "C" fn fa_gpu_repeat_vector_accum_f64(
     let mut runtime = runtime().lock().unwrap_or_else(|_| {
         fail("FlowArrow GPU target runtime lock was poisoned");
     });
-    let delta = runtime.reduce_program_f64(
-        &wgsl,
-        &[f64_to_f32(left), f64_to_f32(right)],
-        &[],
-        &[score as f32],
-        checked_u32(iterations, "repeat iteration count"),
-        left_count,
-    );
-    score + iterations as f64 * f64::from(delta)
+    let delta = runtime.reduce_program_f64(&wgsl, &[left.to_vec(), right.to_vec()], &[], left_count);
+    score + iterations as f64 * delta
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1821,7 +1839,7 @@ pub async fn fa_gpu_repeat_vector_accum_f64(
     left: Vec<f64>,
     right: Vec<f64>,
     score: f64,
-    iterations: i32,
+    iterations: i64,
 ) -> Result<f64, JsValue> {
     if iterations <= 0 {
         return Ok(score);
@@ -1834,17 +1852,11 @@ pub async fn fa_gpu_repeat_vector_accum_f64(
     let mut runtime = GpuRuntime::new()
         .await
         .map_err(|error| JsValue::from_str(&error))?;
+    let work_items = left.len();
     let delta = runtime
-        .reduce_program_f64(
-            &wgsl,
-            &[f64_to_f32(&left), f64_to_f32(&right)],
-            &[],
-            &[score as f32],
-            checked_u32(i64::from(iterations), "repeat iteration count"),
-            left.len(),
-        )
-        .await;
-    Ok(score + f64::from(iterations) * f64::from(delta))
+        .reduce_program_f64(&wgsl, &[left, right], &[], work_items)
+        .await?;
+    Ok(score + iterations as f64 * delta)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1904,7 +1916,7 @@ pub unsafe extern "C" fn fa_gpu_repeat_matrix_accum_f64(
     });
     let delta = runtime.reduce_program_f64(
         &wgsl,
-        &[f64_to_f32(vector)],
+        &[vector.to_vec()],
         &[
             GpuMatrixInput {
                 rows: left_shape.0,
@@ -1917,11 +1929,9 @@ pub unsafe extern "C" fn fa_gpu_repeat_matrix_accum_f64(
                 values: right,
             },
         ],
-        &[score as f32],
-        checked_u32(iterations, "repeat iteration count"),
         work_items,
     );
-    score + iterations as f64 * f64::from(delta)
+    score + iterations as f64 * delta
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1936,7 +1946,7 @@ pub async fn fa_gpu_repeat_matrix_accum_f64(
     right_cols: u32,
     vector: Vec<f64>,
     score: f64,
-    iterations: i32,
+    iterations: i64,
 ) -> Result<f64, JsValue> {
     if iterations <= 0 {
         return Ok(score);
@@ -1973,25 +1983,23 @@ pub async fn fa_gpu_repeat_matrix_accum_f64(
     let delta = runtime
         .reduce_program_f64(
             &wgsl,
-            &[f64_to_f32(&vector)],
+            &[vector],
             &[
                 GpuMatrixInput {
                     rows: left_shape.0,
                     cols: left_shape.1,
-                    values: f64_to_f32(&left_values),
+                    values: left_values,
                 },
                 GpuMatrixInput {
                     rows: right_shape.0,
                     cols: right_shape.1,
-                    values: f64_to_f32(&right_values),
+                    values: right_values,
                 },
             ],
-            &[score as f32],
-            checked_u32(i64::from(iterations), "repeat iteration count"),
             work_items,
         )
-        .await;
-    Ok(score + f64::from(iterations) * f64::from(delta))
+        .await?;
+    Ok(score + iterations as f64 * delta)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2030,16 +2038,36 @@ impl GpuRuntime {
             })
             .await
             .map_err(|error| error.to_string())?;
+        let features = adapter.features() & wgpu::Features::SHADER_F64;
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: features,
+                ..wgpu::DeviceDescriptor::default()
+            })
             .await
             .map_err(|error| error.to_string())?;
-        Ok(Self { device, queue })
+        Ok(Self {
+            device,
+            queue,
+            features,
+        })
     }
 
     fn map_i32(&mut self, wgsl: &str, input: &[i32]) -> Vec<i32> {
         let bytes = self.dispatch_map(wgsl, i32_as_bytes(input), input.len());
         bytes_as_i32(&bytes).to_vec()
+    }
+
+    fn map_f32(&mut self, wgsl: &str, input: &[f32], output: &mut [f32]) {
+        if input.len() != output.len() {
+            fail("FlowArrow GPU map received mismatched input and output lengths");
+        }
+        if input.is_empty() {
+            return;
+        }
+
+        let mapped = self.dispatch_map(wgsl, f32_as_bytes(input), input.len());
+        output.copy_from_slice(bytes_as_f32(&mapped));
     }
 
     fn map_f64(&mut self, wgsl: &str, input: &[f64], output: &mut [f64]) {
@@ -2049,12 +2077,9 @@ impl GpuRuntime {
         if input.is_empty() {
             return;
         }
-
-        let input_f32 = input.iter().map(|value| *value as f32).collect::<Vec<_>>();
-        let mapped = self.dispatch_map(wgsl, f32_as_bytes(&input_f32), input.len());
-        for (dst, src) in output.iter_mut().zip(bytes_as_f32(&mapped).iter()) {
-            *dst = f64::from(*src);
-        }
+        self.require_f64_support();
+        let mapped = self.dispatch_map(wgsl, f64_as_bytes(input), input.len());
+        output.copy_from_slice(bytes_as_f64(&mapped));
     }
 
     fn dispatch_map(&mut self, wgsl: &str, input_bytes: &[u8], len: usize) -> Vec<u8> {
@@ -2137,101 +2162,37 @@ impl GpuRuntime {
         bytes_as_f32(&bytes)[0]
     }
 
-    fn range_map_reduce_i32(
-        &mut self,
-        map_expr: &str,
-        start: i32,
-        stop: i32,
-        step: i32,
-        op: u32,
-        identity: i32,
-    ) -> i32 {
-        let len = range_count(start, stop, step);
-        if len == 0 {
-            return identity;
-        }
-        let output_len = (len + 1).div_ceil(2);
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("flowarrow.gpu.range_reduce.output"),
-            size: (output_len * 4).max(4) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let params_buffer = self.range_reduce_params_buffer(start, step, len, op, identity);
-        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("flowarrow.gpu.range_reduce.kernel"),
-            source: wgpu::ShaderSource::Wgsl(range_map_reduce_wgsl(map_expr).into()),
-        });
-        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("flowarrow.gpu.range_reduce.pipeline"),
-            layout: None,
-            module: &shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("flowarrow.gpu.range_reduce.bind_group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: output_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("flowarrow.gpu.range_reduce.encoder"),
-            });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("flowarrow.gpu.range_reduce.pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(checked_workgroups(output_len, "reduce output length"), 1, 1);
-        }
-        self.queue.submit(Some(encoder.finish()));
-        let bytes =
-            self.dispatch_reduce_buffer("i32", op, output_buffer, output_len, identity, false);
-        bytes_as_i32(&bytes)[0]
+    fn reduce_f64(&mut self, op: u32, input: &[f64], identity: f64) -> f64 {
+        self.require_f64_support();
+        let bytes = self.dispatch_reduce("f64", op, f64_as_bytes(input), input.len(), identity);
+        bytes_as_f64(&bytes)[0]
     }
 
     fn reduce_program_f64(
         &mut self,
         wgsl: &str,
-        slices: &[Vec<f32>],
+        slices: &[Vec<f64>],
         matrices: &[GpuMatrixInput],
-        scalars: &[f32],
-        iterations: u32,
         work_items: usize,
-    ) -> f32 {
+    ) -> f64 {
+        self.require_f64_support();
         if work_items == 0 {
             return 0.0;
         }
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("flowarrow.gpu.program.output"),
-            size: (work_items * 4).max(4) as wgpu::BufferAddress,
+            size: (work_items * 8).max(8) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let params_buffer =
-            self.program_params_buffer(slices, matrices, scalars, iterations, work_items);
+        let params_buffer = self.program_params_buffer(slices, matrices, work_items);
         let mut storage_buffers = Vec::with_capacity(slices.len() + matrices.len());
         for slice in slices {
-            storage_buffers.push(self.storage_f32_buffer("flowarrow.gpu.program.slice", slice));
+            storage_buffers.push(self.storage_f64_buffer("flowarrow.gpu.program.slice", slice));
         }
         for matrix in matrices {
             storage_buffers
-                .push(self.storage_f32_buffer("flowarrow.gpu.program.matrix", &matrix.values));
+                .push(self.storage_f64_buffer("flowarrow.gpu.program.matrix", &matrix.values));
         }
 
         let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2282,8 +2243,8 @@ impl GpuRuntime {
             pass.dispatch_workgroups(checked_workgroups(work_items, "GPU program work item count"), 1, 1);
         }
         self.queue.submit(Some(encoder.finish()));
-        let bytes = self.dispatch_reduce_buffer("f32", 0, output_buffer, work_items, 0.0, false);
-        bytes_as_f32(&bytes)[0]
+        let bytes = self.dispatch_reduce_buffer("f64", 0, output_buffer, work_items, 0.0, false);
+        bytes_as_f64(&bytes)[0]
     }
 
     fn dispatch_reduce<T: GpuParam>(
@@ -2295,7 +2256,7 @@ impl GpuRuntime {
         identity: T,
     ) -> Vec<u8> {
         if len == 0 {
-            return identity.to_bytes().to_vec();
+            return identity.to_bytes();
         }
         let input_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flowarrow.gpu.reduce.input"),
@@ -2333,9 +2294,10 @@ impl GpuRuntime {
         while current_len > 1 || include_identity {
             let virtual_len = current_len + usize::from(include_identity);
             let output_len = virtual_len.div_ceil(2);
+            let byte_len = (output_len * T::BYTE_LEN).max(T::BYTE_LEN) as wgpu::BufferAddress;
             let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("flowarrow.gpu.reduce.output"),
-                size: (output_len * 4).max(4) as wgpu::BufferAddress,
+                size: byte_len,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
@@ -2380,13 +2342,13 @@ impl GpuRuntime {
             current_len = output_len;
             include_identity = false;
         }
-        let readback = self.readback_buffer(4);
+        let readback = self.readback_buffer(T::BYTE_LEN as wgpu::BufferAddress);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("flowarrow.gpu.reduce.readback.encoder"),
             });
-        encoder.copy_buffer_to_buffer(&current_buffer, 0, &readback, 0, 4);
+        encoder.copy_buffer_to_buffer(&current_buffer, 0, &readback, 0, T::BYTE_LEN as u64);
         self.queue.submit(Some(encoder.finish()));
         self.read_buffer(&readback)
     }
@@ -2408,62 +2370,37 @@ impl GpuRuntime {
         identity: T,
         include_identity: bool,
     ) -> wgpu::Buffer {
-        let mut params = [0u8; 16];
+        let mut params = vec![0u8; if T::BYTE_LEN == 8 { 24 } else { 16 }];
         params[0..4].copy_from_slice(&checked_usize_u32(len, "GPU reduce input length").to_le_bytes());
         params[4..8].copy_from_slice(&op.to_le_bytes());
-        params[8..12].copy_from_slice(&identity.to_bytes());
-        params[12..16].copy_from_slice(&(u32::from(include_identity)).to_le_bytes());
+        identity.write_bytes(&mut params[8..8 + T::BYTE_LEN]);
+        let include_offset = 8 + T::BYTE_LEN;
+        params[include_offset..include_offset + 4]
+            .copy_from_slice(&(u32::from(include_identity)).to_le_bytes());
         self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flowarrow.gpu.reduce.params"),
-            contents: &params,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        })
-    }
-
-    fn range_reduce_params_buffer(
-        &self,
-        start: i32,
-        step: i32,
-        len: usize,
-        op: u32,
-        identity: i32,
-    ) -> wgpu::Buffer {
-        let mut params = [0u8; 32];
-        params[0..4].copy_from_slice(&start.to_le_bytes());
-        params[4..8].copy_from_slice(&step.to_le_bytes());
-        params[8..12].copy_from_slice(&checked_usize_u32(len, "GPU range reduce length").to_le_bytes());
-        params[12..16].copy_from_slice(&op.to_le_bytes());
-        params[16..20].copy_from_slice(&identity.to_le_bytes());
-        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("flowarrow.gpu.range_reduce.params"),
-            contents: &params,
+            contents: params.as_slice(),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })
     }
 
     fn program_params_buffer(
         &self,
-        slices: &[Vec<f32>],
+        slices: &[Vec<f64>],
         matrices: &[GpuMatrixInput],
-        scalars: &[f32],
-        iterations: u32,
         work_items: usize,
     ) -> wgpu::Buffer {
-        if slices.len() > 4 || matrices.len() > 4 || scalars.len() > 4 {
+        if slices.len() > 4 || matrices.len() > 4 {
             fail("FlowArrow GPU generated program exceeded runtime descriptor capacity");
         }
-        let mut words = [0u32; 32];
+        let mut words = [0u32; 14];
         words[0] = checked_usize_u32(work_items, "GPU program work item count");
-        words[1] = iterations;
         for (index, slice) in slices.iter().enumerate() {
             words[2 + index] = checked_usize_u32(slice.len(), "GPU slice length");
         }
         for (index, matrix) in matrices.iter().enumerate() {
             words[6 + index * 2] = checked_usize_u32(matrix.rows, "GPU matrix row count");
             words[7 + index * 2] = checked_usize_u32(matrix.cols, "GPU matrix column count");
-        }
-        for (index, scalar) in scalars.iter().enumerate() {
-            words[14 + index] = scalar.to_bits();
         }
         self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flowarrow.gpu.program.params"),
@@ -2472,19 +2409,25 @@ impl GpuRuntime {
         })
     }
 
-    fn storage_f32_buffer(&self, label: &'static str, values: &[f32]) -> wgpu::Buffer {
+    fn storage_f64_buffer(&self, label: &'static str, values: &[f64]) -> wgpu::Buffer {
         if values.is_empty() {
             self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
-                contents: &[0u8; 4],
+                contents: &[0u8; 8],
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             })
         } else {
             self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
-                contents: f32_as_bytes(values),
+                contents: f64_as_bytes(values),
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             })
+        }
+    }
+
+    fn require_f64_support(&self) {
+        if !self.features.contains(wgpu::Features::SHADER_F64) {
+            fail("FlowArrow GPU f64 requires a device with wgpu SHADER_F64 support");
         }
     }
 
@@ -2536,11 +2479,19 @@ impl GpuRuntime {
             })
             .await
             .map_err(|error| error.to_string())?;
+        let features = adapter.features() & wgpu::Features::SHADER_F64;
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: features,
+                ..wgpu::DeviceDescriptor::default()
+            })
             .await
             .map_err(|error| error.to_string())?;
-        Ok(Self { device, queue })
+        Ok(Self {
+            device,
+            queue,
+            features,
+        })
     }
 
     async fn map_i32(&mut self, wgsl: &str, input: &[i32]) -> Vec<i32> {
@@ -2548,16 +2499,21 @@ impl GpuRuntime {
         bytes_as_i32(&bytes).to_vec()
     }
 
-    async fn map_f64(&mut self, wgsl: &str, input: &[f64]) -> Vec<f64> {
+    async fn map_f32(&mut self, wgsl: &str, input: &[f32]) -> Vec<f32> {
         if input.is_empty() {
             return Vec::new();
         }
-        let input_f32 = input.iter().map(|value| *value as f32).collect::<Vec<_>>();
-        let mapped = self.dispatch_map(wgsl, f32_as_bytes(&input_f32), input.len()).await;
-        bytes_as_f32(&mapped)
-            .iter()
-            .map(|value| f64::from(*value))
-            .collect()
+        let mapped = self.dispatch_map(wgsl, f32_as_bytes(input), input.len()).await;
+        bytes_as_f32(&mapped).to_vec()
+    }
+
+    async fn map_f64(&mut self, wgsl: &str, input: &[f64]) -> Result<Vec<f64>, JsValue> {
+        if input.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.require_f64_support()?;
+        let mapped = self.dispatch_map(wgsl, f64_as_bytes(input), input.len()).await;
+        Ok(bytes_as_f64(&mapped).to_vec())
     }
 
     async fn dispatch_map(&mut self, wgsl: &str, input_bytes: &[u8], len: usize) -> Vec<u8> {
@@ -2644,102 +2600,39 @@ impl GpuRuntime {
         bytes_as_f32(&bytes)[0]
     }
 
-    async fn range_map_reduce_i32(
-        &mut self,
-        map_expr: &str,
-        start: i32,
-        stop: i32,
-        step: i32,
-        op: u32,
-        identity: i32,
-    ) -> i32 {
-        let len = range_count(start, stop, step);
-        if len == 0 {
-            return identity;
-        }
-        let output_len = (len + 1).div_ceil(2);
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("flowarrow.gpu.range_reduce.output"),
-            size: (output_len * 4).max(4) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let params_buffer = self.range_reduce_params_buffer(start, step, len, op, identity);
-        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("flowarrow.gpu.range_reduce.kernel"),
-            source: wgpu::ShaderSource::Wgsl(range_map_reduce_wgsl(map_expr).into()),
-        });
-        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("flowarrow.gpu.range_reduce.pipeline"),
-            layout: None,
-            module: &shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("flowarrow.gpu.range_reduce.bind_group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: output_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("flowarrow.gpu.range_reduce.encoder"),
-            });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("flowarrow.gpu.range_reduce.pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(checked_workgroups(output_len, "reduce output length"), 1, 1);
-        }
-        self.queue.submit(Some(encoder.finish()));
+    async fn reduce_f64(&mut self, op: u32, input: &[f64], identity: f64) -> Result<f64, JsValue> {
+        self.require_f64_support()?;
         let bytes = self
-            .dispatch_reduce_buffer("i32", op, output_buffer, output_len, identity, false)
+            .dispatch_reduce("f64", op, f64_as_bytes(input), input.len(), identity)
             .await;
-        bytes_as_i32(&bytes)[0]
+        Ok(bytes_as_f64(&bytes)[0])
     }
 
     async fn reduce_program_f64(
         &mut self,
         wgsl: &str,
-        slices: &[Vec<f32>],
+        slices: &[Vec<f64>],
         matrices: &[GpuMatrixInput],
-        scalars: &[f32],
-        iterations: u32,
         work_items: usize,
-    ) -> f32 {
+    ) -> Result<f64, JsValue> {
+        self.require_f64_support()?;
         if work_items == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("flowarrow.gpu.program.output"),
-            size: (work_items * 4).max(4) as wgpu::BufferAddress,
+            size: (work_items * 8).max(8) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let params_buffer =
-            self.program_params_buffer(slices, matrices, scalars, iterations, work_items);
+        let params_buffer = self.program_params_buffer(slices, matrices, work_items);
         let mut storage_buffers = Vec::with_capacity(slices.len() + matrices.len());
         for slice in slices {
-            storage_buffers.push(self.storage_f32_buffer("flowarrow.gpu.program.slice", slice));
+            storage_buffers.push(self.storage_f64_buffer("flowarrow.gpu.program.slice", slice));
         }
         for matrix in matrices {
             storage_buffers
-                .push(self.storage_f32_buffer("flowarrow.gpu.program.matrix", &matrix.values));
+                .push(self.storage_f64_buffer("flowarrow.gpu.program.matrix", &matrix.values));
         }
 
         let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2791,9 +2684,9 @@ impl GpuRuntime {
         }
         self.queue.submit(Some(encoder.finish()));
         let bytes = self
-            .dispatch_reduce_buffer("f32", 0, output_buffer, work_items, 0.0, false)
+            .dispatch_reduce_buffer("f64", 0, output_buffer, work_items, 0.0, false)
             .await;
-        bytes_as_f32(&bytes)[0]
+        Ok(bytes_as_f64(&bytes)[0])
     }
 
     async fn dispatch_reduce<T: GpuParam>(
@@ -2805,7 +2698,7 @@ impl GpuRuntime {
         identity: T,
     ) -> Vec<u8> {
         if len == 0 {
-            return identity.to_bytes().to_vec();
+            return identity.to_bytes();
         }
         let input_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flowarrow.gpu.reduce.input"),
@@ -2844,9 +2737,10 @@ impl GpuRuntime {
         while current_len > 1 || include_identity {
             let virtual_len = current_len + usize::from(include_identity);
             let output_len = virtual_len.div_ceil(2);
+            let byte_len = (output_len * T::BYTE_LEN).max(T::BYTE_LEN) as wgpu::BufferAddress;
             let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("flowarrow.gpu.reduce.output"),
-                size: (output_len * 4).max(4) as wgpu::BufferAddress,
+                size: byte_len,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
@@ -2892,13 +2786,13 @@ impl GpuRuntime {
             current_len = output_len;
             include_identity = false;
         }
-        let readback = self.readback_buffer(4);
+        let readback = self.readback_buffer(T::BYTE_LEN as wgpu::BufferAddress);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("flowarrow.gpu.reduce.readback.encoder"),
             });
-        encoder.copy_buffer_to_buffer(&current_buffer, 0, &readback, 0, 4);
+        encoder.copy_buffer_to_buffer(&current_buffer, 0, &readback, 0, T::BYTE_LEN as u64);
         self.queue.submit(Some(encoder.finish()));
         self.read_buffer(&readback).await
     }
@@ -2920,62 +2814,37 @@ impl GpuRuntime {
         identity: T,
         include_identity: bool,
     ) -> wgpu::Buffer {
-        let mut params = [0u8; 16];
+        let mut params = vec![0u8; if T::BYTE_LEN == 8 { 24 } else { 16 }];
         params[0..4].copy_from_slice(&checked_usize_u32(len, "GPU reduce input length").to_le_bytes());
         params[4..8].copy_from_slice(&op.to_le_bytes());
-        params[8..12].copy_from_slice(&identity.to_bytes());
-        params[12..16].copy_from_slice(&(u32::from(include_identity)).to_le_bytes());
+        identity.write_bytes(&mut params[8..8 + T::BYTE_LEN]);
+        let include_offset = 8 + T::BYTE_LEN;
+        params[include_offset..include_offset + 4]
+            .copy_from_slice(&(u32::from(include_identity)).to_le_bytes());
         self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flowarrow.gpu.reduce.params"),
-            contents: &params,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        })
-    }
-
-    fn range_reduce_params_buffer(
-        &self,
-        start: i32,
-        step: i32,
-        len: usize,
-        op: u32,
-        identity: i32,
-    ) -> wgpu::Buffer {
-        let mut params = [0u8; 32];
-        params[0..4].copy_from_slice(&start.to_le_bytes());
-        params[4..8].copy_from_slice(&step.to_le_bytes());
-        params[8..12].copy_from_slice(&checked_usize_u32(len, "GPU range reduce length").to_le_bytes());
-        params[12..16].copy_from_slice(&op.to_le_bytes());
-        params[16..20].copy_from_slice(&identity.to_le_bytes());
-        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("flowarrow.gpu.range_reduce.params"),
-            contents: &params,
+            contents: params.as_slice(),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })
     }
 
     fn program_params_buffer(
         &self,
-        slices: &[Vec<f32>],
+        slices: &[Vec<f64>],
         matrices: &[GpuMatrixInput],
-        scalars: &[f32],
-        iterations: u32,
         work_items: usize,
     ) -> wgpu::Buffer {
-        if slices.len() > 4 || matrices.len() > 4 || scalars.len() > 4 {
+        if slices.len() > 4 || matrices.len() > 4 {
             fail("FlowArrow GPU generated program exceeded runtime descriptor capacity");
         }
-        let mut words = [0u32; 32];
+        let mut words = [0u32; 14];
         words[0] = checked_usize_u32(work_items, "GPU program work item count");
-        words[1] = iterations;
         for (index, slice) in slices.iter().enumerate() {
             words[2 + index] = checked_usize_u32(slice.len(), "GPU slice length");
         }
         for (index, matrix) in matrices.iter().enumerate() {
             words[6 + index * 2] = checked_usize_u32(matrix.rows, "GPU matrix row count");
             words[7 + index * 2] = checked_usize_u32(matrix.cols, "GPU matrix column count");
-        }
-        for (index, scalar) in scalars.iter().enumerate() {
-            words[14 + index] = scalar.to_bits();
         }
         self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flowarrow.gpu.program.params"),
@@ -2984,20 +2853,29 @@ impl GpuRuntime {
         })
     }
 
-    fn storage_f32_buffer(&self, label: &'static str, values: &[f32]) -> wgpu::Buffer {
+    fn storage_f64_buffer(&self, label: &'static str, values: &[f64]) -> wgpu::Buffer {
         if values.is_empty() {
             self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
-                contents: &[0u8; 4],
+                contents: &[0u8; 8],
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             })
         } else {
             self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
-                contents: f32_as_bytes(values),
+                contents: f64_as_bytes(values),
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             })
         }
+    }
+
+    fn require_f64_support(&self) -> Result<(), JsValue> {
+        if !self.features.contains(wgpu::Features::SHADER_F64) {
+            return Err(JsValue::from_str(
+                "FlowArrow GPU f64 requires a device with wgpu SHADER_F64 support",
+            ));
+        }
+        Ok(())
     }
 
     fn readback_buffer(&self, byte_len: wgpu::BufferAddress) -> wgpu::Buffer {
@@ -3069,31 +2947,39 @@ impl Future for MapReadFuture {
 }
 
 trait GpuParam: Copy {
-    fn to_bytes(self) -> [u8; 4];
+    const BYTE_LEN: usize;
+
+    fn write_bytes(self, output: &mut [u8]);
+
+    fn to_bytes(self) -> Vec<u8> {
+        let mut output = vec![0u8; Self::BYTE_LEN];
+        self.write_bytes(&mut output);
+        output
+    }
 }
 
 impl GpuParam for i32 {
-    fn to_bytes(self) -> [u8; 4] {
-        self.to_le_bytes()
+    const BYTE_LEN: usize = 4;
+
+    fn write_bytes(self, output: &mut [u8]) {
+        output.copy_from_slice(&self.to_le_bytes());
     }
 }
 
 impl GpuParam for f32 {
-    fn to_bytes(self) -> [u8; 4] {
-        self.to_le_bytes()
+    const BYTE_LEN: usize = 4;
+
+    fn write_bytes(self, output: &mut [u8]) {
+        output.copy_from_slice(&self.to_le_bytes());
     }
 }
 
-fn checked_i32(value: i64) -> i32 {
-    i32::try_from(value).unwrap_or_else(|_| {
-        fail("FlowArrow GPU i64 currently requires signed 32-bit values");
-    })
-}
+impl GpuParam for f64 {
+    const BYTE_LEN: usize = 8;
 
-fn checked_u32(value: i64, label: &str) -> u32 {
-    u32::try_from(value).unwrap_or_else(|_| {
-        fail(&format!("FlowArrow GPU {label} exceeds 32-bit runtime limits"));
-    })
+    fn write_bytes(self, output: &mut [u8]) {
+        output.copy_from_slice(&self.to_le_bytes());
+    }
 }
 
 fn checked_usize_u32(value: usize, label: &str) -> u32 {
@@ -3106,53 +2992,6 @@ fn checked_workgroups(items: usize, label: &str) -> u32 {
     checked_usize_u32(items.div_ceil(64), label)
 }
 
-fn f64_to_f32(values: &[f64]) -> Vec<f32> {
-    values.iter().map(|value| *value as f32).collect()
-}
-
-fn flatten_matrix(rows: &[FaGpuSliceF64], label: &str) -> (Vec<f32>, (usize, usize)) {
-    let cols = rows.first().map(|row| row.count).unwrap_or(0);
-    let mut values = Vec::with_capacity(rows.len().saturating_mul(cols));
-    for row in rows {
-        if row.count != cols {
-            fail(&format!("FlowArrow GPU {label} matrix must be rectangular"));
-        }
-        if row.count > 0 && row.items.is_null() {
-            fail(&format!("FlowArrow GPU {label} matrix contains null row storage"));
-        }
-        let row_values = if row.count == 0 {
-            &[]
-        } else {
-            unsafe { slice::from_raw_parts(row.items, row.count) }
-        };
-        values.extend(row_values.iter().map(|value| *value as f32));
-    }
-    (values, (rows.len(), cols))
-}
-
-fn range_count(start: i32, stop: i32, step: i32) -> usize {
-    if step == 0 {
-        fail("range_step: step cannot be zero");
-    }
-    let start = i64::from(start);
-    let stop = i64::from(stop);
-    let step = i64::from(step);
-    let count = if step > 0 {
-        if start >= stop {
-            0
-        } else {
-            ((stop - start - 1) / step) + 1
-        }
-    } else if start <= stop {
-        0
-    } else {
-        ((start - stop - 1) / -step) + 1
-    };
-    usize::try_from(count).unwrap_or_else(|_| {
-        fail("FlowArrow GPU range is too large for this host");
-    })
-}
-
 fn i32_as_bytes(values: &[i32]) -> &[u8] {
     unsafe {
         slice::from_raw_parts(
@@ -3163,6 +3002,15 @@ fn i32_as_bytes(values: &[i32]) -> &[u8] {
 }
 
 fn f32_as_bytes(values: &[f32]) -> &[u8] {
+    unsafe {
+        slice::from_raw_parts(
+            values.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(values),
+        )
+    }
+}
+
+fn f64_as_bytes(values: &[f64]) -> &[u8] {
     unsafe {
         slice::from_raw_parts(
             values.as_ptr().cast::<u8>(),
@@ -3204,12 +3052,40 @@ fn bytes_as_f32(values: &[u8]) -> &[f32] {
     }
 }
 
-fn reduce_wgsl(scalar: &str) -> String {
-    REDUCE_WGSL.replace("__SCALAR__", scalar)
+fn bytes_as_f64(values: &[u8]) -> &[f64] {
+    if values.len() % std::mem::size_of::<f64>() != 0 {
+        fail("FlowArrow GPU target read back misaligned f64 data");
+    }
+    unsafe {
+        slice::from_raw_parts(
+            values.as_ptr().cast::<f64>(),
+            values.len() / std::mem::size_of::<f64>(),
+        )
+    }
 }
 
-fn range_map_reduce_wgsl(map_expr: &str) -> String {
-    RANGE_MAP_REDUCE_WGSL.replace("__MAP_EXPR__", map_expr)
+fn flatten_matrix(rows: &[FaGpuSliceF64], label: &str) -> (Vec<f64>, (usize, usize)) {
+    let cols = rows.first().map(|row| row.count).unwrap_or(0);
+    let mut values = Vec::with_capacity(rows.len().saturating_mul(cols));
+    for row in rows {
+        if row.count != cols {
+            fail(&format!("FlowArrow GPU {label} matrix must be rectangular"));
+        }
+        if row.count > 0 && row.items.is_null() {
+            fail(&format!("FlowArrow GPU {label} matrix contains null row storage"));
+        }
+        let row_values = if row.count == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(row.items, row.count) }
+        };
+        values.extend_from_slice(row_values);
+    }
+    (values, (rows.len(), cols))
+}
+
+fn reduce_wgsl(scalar: &str) -> String {
+    REDUCE_WGSL.replace("__SCALAR__", scalar)
 }
 
 const REDUCE_WGSL: &str = r#"struct FaGpuReduceParams { len: u32, op: u32, identity: __SCALAR__, include_identity: u32 };
@@ -3233,40 +3109,6 @@ fn fa_value_at(index: u32) -> __SCALAR__ {
 fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
   let fa_i = fa_gid.x;
   let virtual_len = fa_params.len + select(0u, 1u, fa_params.include_identity != 0u);
-  let out_len = (virtual_len + 1u) / 2u;
-  if (fa_i >= out_len) { return; }
-  let left_index = fa_i * 2u;
-  let right_index = left_index + 1u;
-  let left = fa_value_at(left_index);
-  let right = select(fa_params.identity, fa_value_at(right_index), right_index < virtual_len);
-  fa_output[fa_i] = fa_apply(left, right);
-}
-"#;
-
-const RANGE_MAP_REDUCE_WGSL: &str = r#"struct FaGpuRangeMapReduceParams { start: i32, step: i32, len: u32, op: u32, identity: i32, _pad0: u32, _pad1: u32, _pad2: u32 };
-@group(0) @binding(0) var<storage, read_write> fa_output: array<i32>;
-@group(0) @binding(1) var<uniform> fa_params: FaGpuRangeMapReduceParams;
-
-fn fa_apply(left: i32, right: i32) -> i32 {
-  if (fa_params.op == 0u) { return left + right; }
-  if (fa_params.op == 1u) { return min(left, right); }
-  return max(left, right);
-}
-
-fn fa_mapped_at(index: u32) -> i32 {
-  let x = fa_params.start + i32(index) * fa_params.step;
-  return __MAP_EXPR__;
-}
-
-fn fa_value_at(index: u32) -> i32 {
-  if (index == 0u) { return fa_params.identity; }
-  return fa_mapped_at(index - 1u);
-}
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
-  let fa_i = fa_gid.x;
-  let virtual_len = fa_params.len + 1u;
   let out_len = (virtual_len + 1u) / 2u;
   if (fa_i >= out_len) { return; }
   let left_index = fa_i * 2u;

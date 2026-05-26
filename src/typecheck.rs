@@ -2553,7 +2553,9 @@ fn stdlib_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, Strin
             "add" | "sub" | "mul" => return Ok(numeric_binary_signatures()),
             "min" | "max" => {
                 return Ok(vec![
+                    numeric_signature(Type::I32, Type::I32),
                     numeric_signature(Type::I64, Type::I64),
+                    numeric_signature(Type::F32, Type::F32),
                     numeric_signature(Type::F64, Type::F64),
                 ]);
             }
@@ -2581,13 +2583,17 @@ fn stdlib_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, Strin
 fn stdlib_reduce_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, String> {
     if symbol.module == "std.math" && symbol.name == "add" {
         return Ok(vec![
+            numeric_faultable_signature(Type::I32, Type::I32),
             numeric_faultable_signature(Type::I64, Type::I64),
+            numeric_signature(Type::F32, Type::F32),
             numeric_signature(Type::F64, Type::F64),
         ]);
     }
     if symbol.module == "std.math" && matches!(symbol.name, "min" | "max") {
         return Ok(vec![
+            numeric_signature(Type::I32, Type::I32),
             numeric_signature(Type::I64, Type::I64),
+            numeric_signature(Type::F32, Type::F32),
             numeric_signature(Type::F64, Type::F64),
         ]);
     }
@@ -2602,14 +2608,18 @@ fn stdlib_reduce_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>
 
 fn numeric_binary_signatures() -> Vec<Signature> {
     vec![
+        numeric_faultable_signature(Type::I32, Type::I32),
         numeric_faultable_signature(Type::I64, Type::I64),
+        numeric_signature(Type::F32, Type::F32),
         numeric_signature(Type::F64, Type::F64),
     ]
 }
 
 fn numeric_faultable_binary_signatures() -> Vec<Signature> {
     vec![
+        numeric_faultable_signature(Type::I32, Type::I32),
         numeric_faultable_signature(Type::I64, Type::I64),
+        numeric_faultable_signature(Type::F32, Type::F32),
         numeric_faultable_signature(Type::F64, Type::F64),
     ]
 }
@@ -2617,8 +2627,16 @@ fn numeric_faultable_binary_signatures() -> Vec<Signature> {
 fn numeric_unary_signatures() -> Vec<Signature> {
     vec![
         Signature {
+            input: Type::I32,
+            output: Type::Faultable(Box::new(Type::I32)),
+        },
+        Signature {
             input: Type::I64,
             output: Type::Faultable(Box::new(Type::I64)),
+        },
+        Signature {
+            input: Type::F32,
+            output: Type::F32,
         },
         Signature {
             input: Type::F64,
@@ -2628,10 +2646,16 @@ fn numeric_unary_signatures() -> Vec<Signature> {
 }
 
 fn numeric_real_unary_signatures() -> Vec<Signature> {
-    vec![Signature {
-        input: Type::F64,
-        output: Type::F64,
-    }]
+    vec![
+        Signature {
+            input: Type::F32,
+            output: Type::F32,
+        },
+        Signature {
+            input: Type::F64,
+            output: Type::F64,
+        },
+    ]
 }
 
 fn numeric_faultable_real_unary_signatures() -> Vec<Signature> {
@@ -2646,7 +2670,9 @@ fn numeric_faultable_real_unary_signatures() -> Vec<Signature> {
 
 fn numeric_comparison_signatures() -> Vec<Signature> {
     vec![
+        comparison_signature(Type::I32, Type::I32),
         comparison_signature(Type::I64, Type::I64),
+        comparison_signature(Type::F32, Type::F32),
         comparison_signature(Type::F64, Type::F64),
     ]
 }

@@ -88,8 +88,11 @@ abs : i64        -> Faultable[i64]
 operations. Division, remainder, and `sqrt` are faultable because they
 have invalid inputs such as zero divisors or negative square roots.
 
-Integer `reduce add(identity: 0)` returns `Faultable[i64]`; integer
-`scan add(identity: 0)` returns `Seq[Faultable[i64]]`. Use
+Integer `add`, `sub`, `mul`, `neg`, and `abs` return `Faultable[...]`
+for fixed-width integer types because overflow is recoverable graph data.
+For example, `reduce add(identity: 0)` over `Seq[i64]` returns
+`Faultable[i64]`, and `scan add(identity: 0)` over `Seq[i64]` returns
+`Seq[Faultable[i64]]`. Use
 `std.fault.expect` only at a boundary where aborting on a fault is the
 intended policy. Use `fault map` or explicit `Faultable[...]` outputs when
 the graph should recover and continue.

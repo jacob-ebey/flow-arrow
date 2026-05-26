@@ -275,7 +275,9 @@ type_arg       ::= type
 Examples (informative):
 
 ```text
+f32
 f64
+i32
 i64
 Bool
 Fault

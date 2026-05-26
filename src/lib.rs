@@ -645,15 +645,15 @@ mod tests {
     #[test]
     fn typescript_gpu_lowering_uses_wasm_wgpu_runtime() {
         let source = r#"
-            import std.math { add, mul }
+            import std.math { mul }
 
-            extern node square_plus_one_all(values: Seq[f64]) -> out: Seq[f64] {
-                $values -> map square_plus_one -> $out
+            extern node square_all(values: Seq[f32]) -> out: Seq[f32] {
+                $values -> map square -> $out
             }
 
-            node square_plus_one(x: f64) -> y: f64 {
+            node square(x: f32) -> y: f32 {
                 ($x, $x) -> mul -> $square
-                ($square, 1.0) -> add -> $y
+                $square -> $y
             }
         "#;
 
@@ -667,9 +667,9 @@ mod tests {
         )
         .expect("typescript gpu");
 
-        assert!(emitted.contains("async function square_plus_one_all"));
+        assert!(emitted.contains("async function square_all"));
         assert!(emitted.contains("faGpuMapF32"));
-        assert!(emitted.contains("fa_gpu_map_square_plus_one"));
+        assert!(emitted.contains("fa_gpu_map_square"));
         assert!(
             emitted.starts_with(
                 "import * as faGpuRuntimeModule from \"./flowarrow_gpu_runtime.mjs\";"
@@ -681,7 +681,7 @@ mod tests {
         assert!(emitted.contains("function faGpuRuntimeWasmModule"));
         assert!(emitted.contains("module_or_path: faGpuRuntimeWasmModule()"));
         assert!(emitted.contains("fileURLToPath(wasmUrl)"));
-        assert!(emitted.contains("fa_gpu_map_f64"));
+        assert!(emitted.contains("fa_gpu_map_f32"));
         assert!(!emitted.contains("createShaderModule"));
         assert!(!emitted.contains("GPUBufferUsage"));
         assert!(emitted.contains("@compute @workgroup_size(64)"));
@@ -714,7 +714,79 @@ mod tests {
         let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
         assert!(!llvm.contains("call i64 @fa_gpu_range_map_reduce_i64"));
         assert!(!llvm.contains("call void @fa_gpu_map_i64"));
-        assert!(llvm.contains("call i64 @fa_gpu_reduce_i64"));
+        assert!(!llvm.contains("call i64 @fa_gpu_reduce_i64"));
+    }
+
+    #[test]
+    fn gpu_lowering_uses_first_class_i32_f32_and_f64_helpers() {
+        let source = r#"
+            import std.math { max, min, mul }
+
+            extern node id_all(values: Seq[i32]) -> out: Seq[i32] {
+                $values -> map id_i32 -> $out
+            }
+
+            extern node min_i32(values: Seq[i32], identity: i32) -> out: i32 {
+                $values -> reduce min(identity: $identity) -> $out
+            }
+
+            extern node square_all(values: Seq[f32]) -> out: Seq[f32] {
+                $values -> map square_f32 -> $out
+            }
+
+            extern node max_f32(values: Seq[f32], identity: f32) -> out: f32 {
+                $values -> reduce max(identity: $identity) -> $out
+            }
+
+            extern node square_all_f64(values: Seq[f64]) -> out: Seq[f64] {
+                $values -> map square_f64 -> $out
+            }
+
+            extern node max_f64(values: Seq[f64], identity: f64) -> out: f64 {
+                $values -> reduce max(identity: $identity) -> $out
+            }
+
+            node id_i32(value: i32) -> out: i32 {
+                $value -> $out
+            }
+
+            node square_f32(value: f32) -> out: f32 {
+                ($value, $value) -> mul -> $out
+            }
+
+            node square_f64(value: f64) -> out: f64 {
+                ($value, $value) -> mul -> $out
+            }
+        "#;
+
+        let emitted = compile_typescript_source_with_options(
+            source,
+            TypeScriptCompileOptions {
+                mode: TypeScriptCompileMode::Library,
+                gpu: true,
+                ..TypeScriptCompileOptions::default()
+            },
+        )
+        .expect("typescript gpu");
+        assert!(emitted.contains("faGpuMapI32"));
+        assert!(emitted.contains("faGpuReduceI32"));
+        assert!(emitted.contains("faGpuMapF32"));
+        assert!(emitted.contains("faGpuReduceF32"));
+        assert!(emitted.contains("faGpuMapF64"));
+        assert!(emitted.contains("faGpuReduceF64"));
+        assert!(!emitted.contains("fa_gpu_map_i64"));
+
+        let module = parser::parse(source).expect("parse gpu source");
+        let lowered =
+            codegen::lower_module_with_base(&module, Path::new(".")).expect("lower gpu source");
+        let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
+        assert!(llvm.contains("call void @fa_gpu_map_i32"));
+        assert!(llvm.contains("call i32 @fa_gpu_reduce_i32"));
+        assert!(llvm.contains("call void @fa_gpu_map_f32"));
+        assert!(llvm.contains("call float @fa_gpu_reduce_f32"));
+        assert!(llvm.contains("call void @fa_gpu_map_f64"));
+        assert!(llvm.contains("call double @fa_gpu_reduce_f64"));
+        assert!(!llvm.contains("@fa_gpu_map_i64"));
     }
 
     #[test]
@@ -743,7 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn gpu_repeat_vector_accumulator_lowers_to_generated_program() {
+    fn gpu_repeat_vector_accumulator_does_not_lower_f64_to_f32() {
         let source = r#"
             import std.cli { Args }
             import std.math { add as scalar_add, eq }
@@ -776,11 +848,11 @@ mod tests {
         let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
         assert!(llvm.contains("fa_gpu_repeat_vector_accum_f64"));
         assert!(llvm.contains("gpu.repeat.vector"));
-        assert!(!llvm.contains("repeat.loop"));
+        assert!(!llvm.contains("call void @fa_gpu_map_f32"));
     }
 
     #[test]
-    fn javascript_gpu_repeat_vector_accumulator_uses_runtime_schedule() {
+    fn javascript_gpu_repeat_vector_accumulator_does_not_lower_f64_to_f32() {
         let source = r#"
             import std.math { add as scalar_add }
             import std.vector { dot, squared_distance, squared_norm }
@@ -817,7 +889,6 @@ mod tests {
 
         assert!(javascript.contains("faGpuRepeatVectorAccumF64"));
         assert!(javascript.contains("fa_gpu_repeat_vector_accum_f64"));
-        assert!(!javascript.contains("await kernel("));
     }
 
     #[test]
@@ -874,10 +945,8 @@ mod tests {
         )
         .expect("javascript gpu");
 
-        assert!(javascript.contains("export async function run_gpu_accumulator"));
         assert!(javascript.contains("faGpuRepeatVectorAccumF64"));
-        assert!(javascript.contains("await Promise.all([faGpuRepeatVectorAccumF64"));
-        assert!(!javascript.contains("await faGpuRepeatVectorAccumF64"));
+        assert!(javascript.contains("fa_gpu_repeat_vector_accum_f64"));
         assert!(javascript.contains("new Float64Array(1024)"));
         assert!(javascript.contains("left["));
         assert!(javascript.contains("right["));
@@ -897,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn typescript_range_map_real_batches_use_packed_numeric_sequences() {
+    fn typescript_range_map_f64_batches_use_packed_numeric_sequences() {
         let source = r#"
             import std.fault { expect }
             import std.math { add, rem }
@@ -936,7 +1005,7 @@ mod tests {
     }
 
     #[test]
-    fn gpu_repeat_matrix_accumulator_lowers_to_generated_program() {
+    fn gpu_repeat_matrix_accumulator_does_not_lower_f64_to_f32() {
         let source = r#"
             import std.cli { Args }
             import std.math { add as scalar_add, eq }
@@ -978,7 +1047,7 @@ mod tests {
         let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
         assert!(llvm.contains("fa_gpu_repeat_matrix_accum_f64"));
         assert!(llvm.contains("gpu.repeat.matrix"));
-        assert!(!llvm.contains("repeat.loop"));
+        assert!(!llvm.contains("call void @fa_gpu_map_f32"));
     }
 
     #[test]
@@ -1511,6 +1580,64 @@ extern node demo(value: i64) -> out: i64 {
         let module = parser::parse(source).expect("parse");
         let error = typecheck::check_module(&module).expect_err("typecheck should fail");
         assert!(error.contains("union type `i64|f64` is not runtime-represented yet"));
+    }
+
+    #[test]
+    fn codegen_preserves_i32_and_f32_numeric_types() {
+        let source = r#"
+            import std.math { abs, add, mul, sqrt }
+
+            extern node add_i32(left: i32, right: i32) -> out: Faultable[i32] {
+                ($left, $right) -> add -> $out
+            }
+
+            extern node abs_i32(value: i32) -> out: Faultable[i32] {
+                $value -> abs -> $out
+            }
+
+            extern node mul_f32(left: f32, right: f32) -> out: f32 {
+                ($left, $right) -> mul -> $out
+            }
+
+            extern node sqrt_f32(value: f32) -> out: Faultable[f32] {
+                $value -> sqrt -> $out
+            }
+        "#;
+        let module = parser::parse(source).expect("parse");
+        typecheck::check_library_module(&module).expect("typecheck");
+
+        let program_source = format!(
+            r#"
+            import std.cli {{ Args }}
+            {source}
+
+            program main(args: Args) -> exit_code: i64 {{
+                0 -> $exit_code
+            }}
+        "#
+        );
+        let program_module = parser::parse(&program_source).expect("parse program");
+        typecheck::check_module(&program_module).expect("typecheck program");
+        let runtime_c = codegen::emit_runtime_c(&program_module).expect("runtime c");
+        assert!(runtime_c.contains("FaFaultable_i32 flow_node_add_i32"));
+        assert!(runtime_c.contains("FaFaultable_i32"));
+        assert!(runtime_c.contains("fa_faultable_i32_add"));
+        assert!(runtime_c.contains("float flow_node_mul_f32"));
+        assert!(runtime_c.contains("fa_faultable_sqrtf"));
+
+        let llvm = compile_llvm_ir_library_source(source).expect("llvm ir");
+        assert!(llvm.contains("define { i1, { i64, ptr }, i32 } @flow_node_add_i32"));
+        assert!(llvm.contains("define float @flow_node_mul_f32"));
+
+        let ts = compile_typescript_library_source(source).expect("typescript");
+        assert!(
+            ts.contains(
+                "export function add_i32(left: number, right: number): FaFaultable<number>"
+            )
+        );
+        assert!(ts.contains("faFaultableI32Add"));
+        assert!(ts.contains("Math.fround(left * right)"));
+        assert!(ts.contains("faFaultableSqrtF32"));
     }
 
     #[test]

@@ -43,23 +43,44 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let value = match name {
             "add" | "sub" | "mul" | "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
                 let function_name = match (&output_ty, name) {
+                    (Ty::Faultable(inner), "add") if inner.as_ref() == &Ty::I32 => {
+                        "fa_faultable_i32_add"
+                    }
                     (Ty::Faultable(inner), "add") if inner.as_ref() == &Ty::I64 => {
                         "fa_faultable_i64_add"
+                    }
+                    (Ty::Faultable(inner), "sub") if inner.as_ref() == &Ty::I32 => {
+                        "fa_faultable_i32_sub"
                     }
                     (Ty::Faultable(inner), "sub") if inner.as_ref() == &Ty::I64 => {
                         "fa_faultable_i64_sub"
                     }
+                    (Ty::Faultable(inner), "mul") if inner.as_ref() == &Ty::I32 => {
+                        "fa_faultable_i32_mul"
+                    }
                     (Ty::Faultable(inner), "mul") if inner.as_ref() == &Ty::I64 => {
                         "fa_faultable_i64_mul"
+                    }
+                    (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::I32 => {
+                        "fa_faultable_i32_div"
                     }
                     (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::I64 => {
                         "fa_faultable_i64_div"
                     }
+                    (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::F32 => {
+                        "fa_faultable_f32_div"
+                    }
                     (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::F64 => {
                         "fa_faultable_f64_div"
                     }
+                    (Ty::Faultable(inner), "rem") if inner.as_ref() == &Ty::I32 => {
+                        "fa_faultable_i32_rem"
+                    }
                     (Ty::Faultable(inner), "rem") if inner.as_ref() == &Ty::I64 => {
                         "fa_faultable_i64_rem"
+                    }
+                    (Ty::Faultable(inner), "rem") if inner.as_ref() == &Ty::F32 => {
+                        "fa_faultable_f32_rem"
                     }
                     (Ty::Faultable(inner), "rem") if inner.as_ref() == &Ty::F64 => {
                         "fa_faultable_f64_rem"
@@ -70,27 +91,26 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                         ));
                     }
                 };
-                if matches!(&output_ty, Ty::Faultable(inner) if inner.as_ref() == &Ty::F64) {
+                if matches!(&output_ty, Ty::Faultable(inner) if matches!(inner.as_ref(), Ty::F32 | Ty::F64))
+                {
                     let Ty::Tuple(items) = input.ty.clone() else {
                         return Err(format!("`{name}` expected tuple input"));
                     };
                     let [left_ty, right_ty] = items.as_slice() else {
                         return Err(format!("`{name}` expected pair input"));
                     };
-                    if left_ty != &Ty::F64 || right_ty != &Ty::F64 {
+                    if left_ty != right_ty || !matches!(left_ty, Ty::F32 | Ty::F64) {
                         return Err(format!(
-                            "`{name}` expected matching f64 operands, found `{left_ty}` and `{right_ty}`"
+                            "`{name}` expected matching real operands, found `{left_ty}` and `{right_ty}`"
                         ));
                     }
                     let left = self.extract_tuple_field(&input, 0)?;
                     let right = self.extract_tuple_field(&input, 1)?;
+                    let float_ty = self.types.basic_type(left_ty)?;
                     self.emit_runtime_sret_call(
                         function_name,
                         &output_ty,
-                        &[
-                            self.context.f64_type().into(),
-                            self.context.f64_type().into(),
-                        ],
+                        &[float_ty, float_ty],
                         &[
                             left.into_float_value().into(),
                             right.into_float_value().into(),
@@ -105,29 +125,50 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             }
             "from_int" => self.emit_from_int(input)?,
             "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
-                if input.ty != Ty::F64 {
-                    return Err(format!("sqrt expected f64 input, found `{}`", input.ty));
+                let Ty::Faultable(inner) = &output_ty else {
+                    unreachable!()
+                };
+                if input.ty != **inner || !matches!(inner.as_ref(), Ty::F32 | Ty::F64) {
+                    return Err(format!(
+                        "sqrt expected `{inner}` input, found `{}`",
+                        input.ty
+                    ));
                 }
+                let function_name = match inner.as_ref() {
+                    Ty::F32 => "fa_faultable_sqrtf",
+                    Ty::F64 => "fa_faultable_sqrt",
+                    _ => unreachable!(),
+                };
+                let float_ty = self.types.basic_type(inner)?;
                 self.emit_runtime_sret_call(
-                    "fa_faultable_sqrt",
+                    function_name,
                     &output_ty,
-                    &[self.context.f64_type().into()],
+                    &[float_ty],
                     &[input.value.into_float_value().into()],
                 )?
             }
             "neg" | "abs" if matches!(output_ty, Ty::Faultable(_)) => {
-                if input.ty != Ty::I64 {
-                    return Err(format!("{name} expected i64 input, found `{}`", input.ty));
+                let Ty::Faultable(inner) = &output_ty else {
+                    unreachable!()
+                };
+                if input.ty != **inner || !matches!(inner.as_ref(), Ty::I32 | Ty::I64) {
+                    return Err(format!(
+                        "{name} expected `{inner}` input, found `{}`",
+                        input.ty
+                    ));
                 }
-                let function_name = match name {
-                    "neg" => "fa_faultable_i64_neg",
-                    "abs" => "fa_faultable_i64_abs",
+                let function_name = match (name, inner.as_ref()) {
+                    ("neg", Ty::I32) => "fa_faultable_i32_neg",
+                    ("neg", Ty::I64) => "fa_faultable_i64_neg",
+                    ("abs", Ty::I32) => "fa_faultable_i32_abs",
+                    ("abs", Ty::I64) => "fa_faultable_i64_abs",
                     _ => unreachable!(),
                 };
+                let int_ty = self.types.basic_type(inner)?;
                 self.emit_runtime_sret_call(
                     function_name,
                     &output_ty,
-                    &[self.context.i64_type().into()],
+                    &[int_ty],
                     &[input.value.into_int_value().into()],
                 )?
             }

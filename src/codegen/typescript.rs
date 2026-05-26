@@ -103,7 +103,9 @@ struct ReduceBatchItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncMapOutputStorage {
     Array,
+    Float32Array,
     Float64Array,
+    Int32Array,
 }
 
 struct RangeSyncMapBatch {
@@ -447,14 +449,6 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         callable: &TypedCallable,
         async_callables: &HashSet<String>,
     ) -> Result<bool, String> {
-        if self
-            .gpu_plan
-            .as_ref()
-            .map(|plan| !plan.range_map_reductions(callable).is_empty())
-            .unwrap_or(false)
-        {
-            return Ok(true);
-        }
         callable.chains.iter().any_result(|chain| {
             Ok(self.endpoint_needs_async(&chain.source, async_callables)?
                 || chain
@@ -506,10 +500,6 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             TypedStageKind::Filter { name, .. } => Ok(async_callables.contains(name)),
             TypedStageKind::Repeat { count, node, .. } => Ok(self
                 .endpoint_needs_async(count, async_callables)?
-                || self
-                    .codegen
-                    .gpu_repeat_accumulator(node, &stage.input)
-                    .is_some()
                 || async_callables.contains(node)),
             TypedStageKind::Reduce { op, identity, .. } => Ok(self
                 .endpoint_needs_async(identity, async_callables)?
@@ -597,7 +587,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         matches!(
             self.codegen.canonical_name(op).as_str(),
             "add" | "min" | "max"
-        ) && matches!(item_ty.as_ref(), Ty::I64 | Ty::F64)
+        ) && matches!(item_ty.as_ref(), Ty::I32 | Ty::F32 | Ty::F64)
     }
 
     fn emit_callable(&mut self, out: &mut String, callable: &TypedCallable) -> Result<(), String> {
@@ -664,52 +654,16 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             );
         }
 
-        let fused_reductions = self
-            .gpu_plan
-            .as_ref()
-            .map(|plan| plan.range_map_reductions(callable))
-            .unwrap_or_default();
-        let fused_by_reduce = fused_reductions
-            .iter()
-            .cloned()
-            .map(|reduction| (reduction.reduce_chain, reduction))
-            .collect::<HashMap<_, _>>();
-        let fused_skip = fused_reductions
-            .iter()
-            .flat_map(|reduction| {
-                [
-                    reduction.range_chain,
-                    reduction.map_chain,
-                    reduction.reduce_chain,
-                ]
-            })
-            .collect::<HashSet<_>>();
-
         let mut chain_index = 0;
         while chain_index < callable.chains.len() {
-            if fused_by_reduce.contains_key(&chain_index) {
-                let mut reductions = Vec::new();
-                while let Some(reduction) = fused_by_reduce.get(&(chain_index + reductions.len())) {
-                    reductions.push(reduction.clone());
-                }
-                self.emit_gpu_range_map_reductions(out, &reductions, &mut env, "  ")?;
-                chain_index += reductions.len();
-                continue;
-            }
-            if fused_skip.contains(&chain_index) {
-                chain_index += 1;
-                continue;
-            }
-            if let Some(batch) = self.range_sync_map_batch(callable, chain_index, &fused_skip)? {
+            if let Some(batch) = self.range_sync_map_batch(callable, chain_index)? {
                 let consumed = 1 + batch.items.len();
                 self.emit_range_sync_map_batch(out, batch, &mut env, "  ")?;
                 chain_index += consumed;
                 continue;
             }
             let batch_len = self.async_chain_batch_len(&callable.chains[chain_index..])?;
-            let batch_crosses_fused_chain =
-                (chain_index..chain_index + batch_len).any(|index| fused_skip.contains(&index));
-            if batch_len > 0 && !batch_crosses_fused_chain {
+            if batch_len > 0 {
                 self.emit_async_chain_batch(
                     out,
                     &callable.chains[chain_index..chain_index + batch_len],
@@ -720,9 +674,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 continue;
             }
             let batch_len = self.reduce_batch_len(&callable.chains[chain_index..])?;
-            let batch_crosses_fused_chain =
-                (chain_index..chain_index + batch_len).any(|index| fused_skip.contains(&index));
-            if batch_len > 1 && !batch_crosses_fused_chain {
+            if batch_len > 1 {
                 self.emit_reduce_batch(
                     out,
                     &callable.chains[chain_index..chain_index + batch_len],
@@ -733,9 +685,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 continue;
             }
             let batch_len = self.worker_map_batch_len(&callable.chains[chain_index..], &env)?;
-            let batch_crosses_fused_chain =
-                (chain_index..chain_index + batch_len).any(|index| fused_skip.contains(&index));
-            if batch_len > 1 && !batch_crosses_fused_chain {
+            if batch_len > 1 {
                 self.emit_worker_map_batch(
                     out,
                     &callable.chains[chain_index..chain_index + batch_len],
@@ -745,9 +695,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 chain_index += batch_len;
             } else {
                 let batch_len = self.sync_map_batch_len(&callable.chains[chain_index..])?;
-                let batch_crosses_fused_chain =
-                    (chain_index..chain_index + batch_len).any(|index| fused_skip.contains(&index));
-                if batch_len > 1 && !batch_crosses_fused_chain {
+                if batch_len > 1 {
                     self.emit_sync_map_batch(
                         out,
                         &callable.chains[chain_index..chain_index + batch_len],
@@ -765,80 +713,6 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         let result = self.emit_outputs(callable, &env)?;
         let result = self.coerce_value(out, result, &signature.output, "  ")?;
         out.push_str(&format!("  return {};\n}}\n", result.code));
-        Ok(())
-    }
-
-    fn emit_gpu_range_map_reductions(
-        &mut self,
-        out: &mut String,
-        reductions: &[gpu::GpuRangeMapReduction],
-        env: &mut HashMap<String, TsValue>,
-        indent: &str,
-    ) -> Result<(), String> {
-        if reductions.is_empty() {
-            return Ok(());
-        }
-        let range_ty = Ty::Tuple(vec![Ty::I64, Ty::I64, Ty::I64]);
-        let mut targets = Vec::with_capacity(reductions.len());
-        let mut calls = Vec::with_capacity(reductions.len());
-        for reduction in reductions {
-            let range = self.emit_endpoint_expected(
-                out,
-                &reduction.range_source,
-                env,
-                Some(&range_ty),
-                indent,
-            )?;
-            let identity = self.emit_endpoint(out, &reduction.identity, env, indent)?;
-            match reduction.map_kernel.scalar {
-                gpu::GpuScalarKind::I32 => {
-                    if reduction.output_ty != Ty::I64 {
-                        return Err(format!(
-                            "GPU range reduction expected i64 output, found `{}`",
-                            reduction.output_ty
-                        ));
-                    }
-                }
-                gpu::GpuScalarKind::F32 => {
-                    return Err(
-                        "GPU range reductions currently require i64 range map kernels".to_string(),
-                    );
-                }
-            }
-            targets.push(self.next_temp_or_preferred(Some(&reduction.output_name)));
-            calls.push(format!(
-                "faGpuRangeMapReduceI32([{}], {}, {}, {}, {})",
-                call_args(&range, 3)?,
-                ts_string(&reduction.map_kernel.id),
-                ts_string(&reduction.map_kernel.map_expr),
-                ts_string(&reduction.op),
-                identity.code
-            ));
-        }
-        out.push_str(&format!(
-            "{indent}const [{}]: [{}] = await Promise.all([{}]);\n",
-            targets.join(", "),
-            reductions
-                .iter()
-                .map(|_| "bigint")
-                .collect::<Vec<_>>()
-                .join(", "),
-            calls.join(", ")
-        ));
-        for (reduction, target) in reductions.iter().zip(targets) {
-            if env
-                .insert(
-                    reduction.output_name.clone(),
-                    ts_value(target, reduction.output_ty.clone()),
-                )
-                .is_some()
-            {
-                return Err(format!(
-                    "value `{}` is bound more than once",
-                    reduction.output_name
-                ));
-            }
-        }
         Ok(())
     }
 
@@ -959,8 +833,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                     return Ok(None);
                 }
                 let function = match item_ty.as_ref() {
-                    Ty::I64 => "faGpuReduceI32",
-                    Ty::F64 => "faGpuReduceF32",
+                    Ty::I32 => "faGpuReduceI32",
+                    Ty::F32 => "faGpuReduceF32",
+                    Ty::F64 => "faGpuReduceF64",
                     _ => return Ok(None),
                 };
                 Ok(Some(AsyncChainBatchItem::Reduce {
@@ -1456,11 +1331,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         &self,
         callable: &TypedCallable,
         range_index: usize,
-        fused_skip: &HashSet<usize>,
     ) -> Result<Option<RangeSyncMapBatch>, String> {
-        if fused_skip.contains(&range_index) {
-            return Ok(None);
-        }
         let Some(range_chain) = callable.chains.get(range_index) else {
             return Ok(None);
         };
@@ -1476,10 +1347,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         }
 
         let mut items = Vec::new();
-        for (offset, chain) in callable.chains.iter().enumerate().skip(range_index + 1) {
-            if fused_skip.contains(&offset) {
-                break;
-            }
+        for chain in callable.chains.iter().skip(range_index + 1) {
             let Some(item) = self.sync_map_batch_item(chain)? else {
                 break;
             };
@@ -1788,15 +1656,28 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 return Err(format!("value `{}` is bound more than once", item.target));
             }
             let initializer = match (item.storage(), length) {
+                (SyncMapOutputStorage::Int32Array, Some(length)) => {
+                    format!(
+                        "new Int32Array({length}) as unknown as {}",
+                        ts_type(&item.output_ty)
+                    )
+                }
+                (SyncMapOutputStorage::Float32Array, Some(length)) => {
+                    format!(
+                        "new Float32Array({length}) as unknown as {}",
+                        ts_type(&item.output_ty)
+                    )
+                }
                 (SyncMapOutputStorage::Float64Array, Some(length)) => {
                     format!(
                         "new Float64Array({length}) as unknown as {}",
                         ts_type(&item.output_ty)
                     )
                 }
-                (SyncMapOutputStorage::Float64Array, None) | (SyncMapOutputStorage::Array, _) => {
-                    "[]".to_string()
-                }
+                (SyncMapOutputStorage::Int32Array, None)
+                | (SyncMapOutputStorage::Float32Array, None)
+                | (SyncMapOutputStorage::Float64Array, None)
+                | (SyncMapOutputStorage::Array, _) => "[]".to_string(),
             };
             out.push_str(&format!(
                 "{indent}const {target}: {} = {initializer};\n",
@@ -1829,7 +1710,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                         mapped.code
                     ));
                 }
-                SyncMapOutputStorage::Float64Array => {
+                SyncMapOutputStorage::Int32Array
+                | SyncMapOutputStorage::Float32Array
+                | SyncMapOutputStorage::Float64Array => {
                     let index = index_name.ok_or_else(|| {
                         "typed synchronous map output requires an index".to_string()
                     })?;
@@ -2419,22 +2302,48 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 ts_numeric_binary_expr(name, input, output_ty)
             }
-            "neg" if matches!(output_ty, Ty::Faultable(_)) => {
-                format!("faFaultableI64Neg({})", input.code)
-            }
+            "neg" if matches!(output_ty, Ty::Faultable(_)) => match output_ty {
+                Ty::Faultable(inner) if inner.as_ref() == &Ty::I32 => {
+                    format!("faFaultableI32Neg({})", input.code)
+                }
+                Ty::Faultable(inner) if inner.as_ref() == &Ty::I64 => {
+                    format!("faFaultableI64Neg({})", input.code)
+                }
+                _ => unreachable!(),
+            },
+            "neg" if output_ty == &Ty::I32 => format!("faCheckedI32Neg({})", input.code),
             "neg" if output_ty == &Ty::I64 => format!("faCheckedI64Neg({})", input.code),
+            "neg" if output_ty == &Ty::F32 => format!("Math.fround(-{})", input.code),
             "neg" => format!("(-{})", input.code),
-            "abs" if matches!(output_ty, Ty::Faultable(_)) => {
-                format!("faFaultableI64Abs({})", input.code)
-            }
+            "abs" if matches!(output_ty, Ty::Faultable(_)) => match output_ty {
+                Ty::Faultable(inner) if inner.as_ref() == &Ty::I32 => {
+                    format!("faFaultableI32Abs({})", input.code)
+                }
+                Ty::Faultable(inner) if inner.as_ref() == &Ty::I64 => {
+                    format!("faFaultableI64Abs({})", input.code)
+                }
+                _ => unreachable!(),
+            },
+            "abs" if output_ty == &Ty::I32 => format!("faCheckedI32Abs({})", input.code),
             "abs" if output_ty == &Ty::I64 => format!("faCheckedI64Abs({})", input.code),
+            "abs" if output_ty == &Ty::F32 => format!("Math.fround(Math.abs({}))", input.code),
             "abs" => format!("Math.abs({})", input.code),
-            "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
-                format!("faFaultableSqrt({})", input.code)
-            }
+            "sqrt" if matches!(output_ty, Ty::Faultable(_)) => match output_ty {
+                Ty::Faultable(inner) if inner.as_ref() == &Ty::F32 => {
+                    format!("faFaultableSqrtF32({})", input.code)
+                }
+                Ty::Faultable(inner) if inner.as_ref() == &Ty::F64 => {
+                    format!("faFaultableSqrt({})", input.code)
+                }
+                _ => unreachable!(),
+            },
+            "sqrt" if output_ty == &Ty::F32 => format!("faCheckedSqrtF32({})", input.code),
             "sqrt" => format!("faCheckedSqrt({})", input.code),
+            "exp" if output_ty == &Ty::F32 => format!("Math.fround(Math.exp({}))", input.code),
             "exp" => format!("Math.exp({})", input.code),
+            "sin" if output_ty == &Ty::F32 => format!("Math.fround(Math.sin({}))", input.code),
             "sin" => format!("Math.sin({})", input.code),
+            "cos" if output_ty == &Ty::F32 => format!("Math.fround(Math.cos({}))", input.code),
             "cos" => format!("Math.cos({})", input.code),
             "eq" => format!("({} === {})", tuple_field(input, 0), tuple_field(input, 1)),
             "lt" => format!("({} < {})", tuple_field(input, 0), tuple_field(input, 1)),
@@ -2789,7 +2698,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             let canonical = self.codegen.canonical_name(op);
             if matches!(canonical.as_str(), "add" | "min" | "max") {
                 match plain_item_ty {
-                    Ty::I64 => {
+                    Ty::I32 => {
                         let batch = self.next_temp();
                         out.push_str(&format!(
                             "{body_indent}const {batch}: [{}] = await Promise.all([faGpuReduceI32({}, {}, {})]);\n",
@@ -2801,10 +2710,22 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                         out.push_str(&format!("{body_indent}{tmp} = {batch}[0];\n"));
                         return Ok(ts_value(tmp, output_ty));
                     }
-                    Ty::F64 => {
+                    Ty::F32 => {
                         let batch = self.next_temp();
                         out.push_str(&format!(
                             "{body_indent}const {batch}: [{}] = await Promise.all([faGpuReduceF32({}, {}, {})]);\n",
+                            ts_type(&output_ty),
+                            source,
+                            ts_string(&canonical),
+                            identity.code
+                        ));
+                        out.push_str(&format!("{body_indent}{tmp} = {batch}[0];\n"));
+                        return Ok(ts_value(tmp, output_ty));
+                    }
+                    Ty::F64 => {
+                        let batch = self.next_temp();
+                        out.push_str(&format!(
+                            "{body_indent}const {batch}: [{}] = await Promise.all([faGpuReduceF64({}, {}, {})]);\n",
                             ts_type(&output_ty),
                             source,
                             ts_string(&canonical),
@@ -3384,7 +3305,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             return Ok(None);
         }
         let worker_fn = match (input_ty, output_ty) {
+            (Ty::I32, Ty::I32) => "faParallelMapI32",
             (Ty::I64, Ty::I64) => "faParallelMapBigInt",
+            (Ty::F32, Ty::F32) => "faParallelMapF32",
             (Ty::F64, Ty::F64) => "faParallelMapNumber",
             (Ty::Bool, Ty::Bool) => "faParallelMapBool",
             _ => return Ok(None),
@@ -3555,13 +3478,21 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 ts_numeric_binary_expr(name, input, output_ty)
             }
+            "neg" if output_ty == &Ty::I32 => format!("faCheckedI32Neg({})", input.code),
             "neg" if output_ty == &Ty::I64 => format!("faCheckedI64Neg({})", input.code),
+            "neg" if output_ty == &Ty::F32 => format!("Math.fround(-{})", input.code),
             "neg" => format!("(-{})", input.code),
+            "abs" if output_ty == &Ty::I32 => format!("faCheckedI32Abs({})", input.code),
             "abs" if output_ty == &Ty::I64 => format!("faCheckedI64Abs({})", input.code),
+            "abs" if output_ty == &Ty::F32 => format!("Math.fround(Math.abs({}))", input.code),
             "abs" => format!("Math.abs({})", input.code),
+            "sqrt" if output_ty == &Ty::F32 => format!("faCheckedSqrtF32({})", input.code),
             "sqrt" => format!("faCheckedSqrt({})", input.code),
+            "exp" if output_ty == &Ty::F32 => format!("Math.fround(Math.exp({}))", input.code),
             "exp" => format!("Math.exp({})", input.code),
+            "sin" if output_ty == &Ty::F32 => format!("Math.fround(Math.sin({}))", input.code),
             "sin" => format!("Math.sin({})", input.code),
+            "cos" if output_ty == &Ty::F32 => format!("Math.fround(Math.cos({}))", input.code),
             "cos" => format!("Math.cos({})", input.code),
             "eq" => format!("({} === {})", tuple_field(input, 0), tuple_field(input, 1)),
             "lt" => format!("({} < {})", tuple_field(input, 0), tuple_field(input, 1)),
@@ -3784,6 +3715,8 @@ fn const_range_len(start: i64, stop: i64, step: i64) -> String {
 
 fn sync_map_output_storage(ty: &Ty) -> SyncMapOutputStorage {
     match ty {
+        Ty::Seq(item) if matches!(item.as_ref(), Ty::I32) => SyncMapOutputStorage::Int32Array,
+        Ty::Seq(item) if matches!(item.as_ref(), Ty::F32) => SyncMapOutputStorage::Float32Array,
         Ty::Seq(item) if matches!(item.as_ref(), Ty::F64) => SyncMapOutputStorage::Float64Array,
         _ => SyncMapOutputStorage::Array,
     }
@@ -3859,7 +3792,9 @@ fn ts_index(code: &str, index: usize) -> String {
 fn ts_type(ty: &Ty) -> String {
     match ty {
         Ty::Unit => "undefined".to_string(),
+        Ty::I32 => "number".to_string(),
         Ty::I64 => "bigint".to_string(),
+        Ty::F32 => "number".to_string(),
         Ty::F64 => "number".to_string(),
         Ty::OneOf(_) => "never".to_string(),
         Ty::Bool => "boolean".to_string(),
@@ -3928,7 +3863,9 @@ fn foreign_module_alias(specifier: &str) -> String {
 fn foreign_result_expr(raw: &str, ty: &Ty) -> String {
     match ty {
         Ty::Unit => "undefined".to_string(),
+        Ty::I32 => format!("faAssertI32(Number({raw}), \"foreign i32 result\")"),
         Ty::I64 => format!("BigInt({raw})"),
+        Ty::F32 => format!("Math.fround(Number({raw}))"),
         Ty::F64 => format!("Number({raw})"),
         Ty::Bool => format!("Boolean({raw})"),
         Ty::Bytes => format!("String({raw})"),
@@ -3975,15 +3912,25 @@ fn ts_numeric_binary_expr(name: &str, input: &TsValue, output_ty: &Ty) -> String
     let left = tuple_field(input, 0);
     let right = tuple_field(input, 1);
     match name {
+        "add" if output_ty == &Ty::I32 => format!("faCheckedI32Add({left}, {right})"),
         "add" if output_ty == &Ty::I64 => format!("faCheckedI64Add({left}, {right})"),
+        "add" if output_ty == &Ty::F32 => format!("Math.fround({left} + {right})"),
         "add" => format!("({left} + {right})"),
+        "sub" if output_ty == &Ty::I32 => format!("faCheckedI32Sub({left}, {right})"),
         "sub" if output_ty == &Ty::I64 => format!("faCheckedI64Sub({left}, {right})"),
+        "sub" if output_ty == &Ty::F32 => format!("Math.fround({left} - {right})"),
         "sub" => format!("({left} - {right})"),
+        "mul" if output_ty == &Ty::I32 => format!("faCheckedI32Mul({left}, {right})"),
         "mul" if output_ty == &Ty::I64 => format!("faCheckedI64Mul({left}, {right})"),
+        "mul" if output_ty == &Ty::F32 => format!("Math.fround({left} * {right})"),
         "mul" => format!("({left} * {right})"),
+        "div" if output_ty == &Ty::I32 => format!("faCheckedI32Div({left}, {right})"),
         "div" if output_ty == &Ty::I64 => format!("faCheckedI64Div({left}, {right})"),
+        "div" if output_ty == &Ty::F32 => format!("faCheckedF32Div({left}, {right})"),
         "div" => format!("faCheckedRealDiv({left}, {right})"),
+        "rem" if output_ty == &Ty::I32 => format!("faCheckedI32Rem({left}, {right})"),
         "rem" if output_ty == &Ty::I64 => format!("faCheckedI64Rem({left}, {right})"),
+        "rem" if output_ty == &Ty::F32 => format!("faCheckedF32Rem({left}, {right})"),
         "rem" => format!("faCheckedRealRem({left}, {right})"),
         "min" => format!("({left} <= {right} ? {left} : {right})"),
         "max" => format!("({left} >= {right} ? {left} : {right})"),
@@ -3999,12 +3946,19 @@ fn ts_faultable_numeric_binary_expr(name: &str, input: &TsValue, output_ty: &Ty)
     let left = tuple_field(input, 0);
     let right = tuple_field(input, 1);
     match (name, inner.as_ref()) {
+        ("div", Ty::I32) => format!("faFaultableI32Div({left}, {right})"),
         ("div", Ty::I64) => format!("faFaultableI64Div({left}, {right})"),
+        ("div", Ty::F32) => format!("faFaultableF32Div({left}, {right})"),
         ("div", Ty::F64) => format!("faFaultableRealDiv({left}, {right})"),
+        ("rem", Ty::I32) => format!("faFaultableI32Rem({left}, {right})"),
         ("rem", Ty::I64) => format!("faFaultableI64Rem({left}, {right})"),
+        ("rem", Ty::F32) => format!("faFaultableF32Rem({left}, {right})"),
         ("rem", Ty::F64) => format!("faFaultableRealRem({left}, {right})"),
+        ("add", Ty::I32) => format!("faFaultableI32Add({left}, {right})"),
         ("add", Ty::I64) => format!("faFaultableI64Add({left}, {right})"),
+        ("sub", Ty::I32) => format!("faFaultableI32Sub({left}, {right})"),
         ("sub", Ty::I64) => format!("faFaultableI64Sub({left}, {right})"),
+        ("mul", Ty::I32) => format!("faFaultableI32Mul({left}, {right})"),
         ("mul", Ty::I64) => format!("faFaultableI64Mul({left}, {right})"),
         _ => unreachable!(),
     }
@@ -4204,10 +4158,51 @@ function faParseInt(bytes: string): FaFaultable<bigint> {
 
 const FA_I64_MIN = -(1n << 63n);
 const FA_I64_MAX = (1n << 63n) - 1n;
+const FA_I32_MIN = -(2 ** 31);
+const FA_I32_MAX = (2 ** 31) - 1;
+
+function faAssertI32(value: number, label: string): number {
+  if (!Number.isInteger(value) || value < FA_I32_MIN || value > FA_I32_MAX) throw new Error(`${label}: integer overflow`);
+  return value | 0;
+}
 
 function faAssertI64(value: bigint, label: string): bigint {
   if (value < FA_I64_MIN || value > FA_I64_MAX) throw new Error(`${label}: integer overflow`);
   return value;
+}
+
+function faCheckedI32Add(left: number, right: number): number {
+  return faAssertI32(left + right, "add");
+}
+
+function faCheckedI32Sub(left: number, right: number): number {
+  return faAssertI32(left - right, "sub");
+}
+
+function faCheckedI32Mul(left: number, right: number): number {
+  return faAssertI32(left * right, "mul");
+}
+
+function faCheckedI32Div(left: number, right: number): number {
+  if (right === 0) throw new Error("div: division by zero");
+  if (left === FA_I32_MIN && right === -1) throw new Error("div: integer overflow");
+  return Math.trunc(left / right);
+}
+
+function faCheckedI32Rem(left: number, right: number): number {
+  if (right === 0) throw new Error("rem: remainder by zero");
+  if (left === FA_I32_MIN && right === -1) throw new Error("rem: integer overflow");
+  return left % right;
+}
+
+function faCheckedI32Neg(value: number): number {
+  if (value === FA_I32_MIN) throw new Error("neg: integer overflow");
+  return -value;
+}
+
+function faCheckedI32Abs(value: number): number {
+  if (value === FA_I32_MIN) throw new Error("abs: integer overflow");
+  return value < 0 ? -value : value;
 }
 
 function faCheckedI64Add(left: bigint, right: bigint): bigint {
@@ -4244,6 +4239,34 @@ function faCheckedI64Abs(value: bigint): bigint {
   return value < 0n ? -value : value;
 }
 
+function faFaultableI32Add(left: number, right: number): FaFaultable<number> {
+  const value = left + right;
+  if (!Number.isInteger(value) || value < FA_I32_MIN || value > FA_I32_MAX) return faFaultMessage("add: integer overflow");
+  return faOk(value | 0);
+}
+
+function faFaultableI32Sub(left: number, right: number): FaFaultable<number> {
+  const value = left - right;
+  if (!Number.isInteger(value) || value < FA_I32_MIN || value > FA_I32_MAX) return faFaultMessage("sub: integer overflow");
+  return faOk(value | 0);
+}
+
+function faFaultableI32Mul(left: number, right: number): FaFaultable<number> {
+  const value = left * right;
+  if (!Number.isInteger(value) || value < FA_I32_MIN || value > FA_I32_MAX) return faFaultMessage("mul: integer overflow");
+  return faOk(value | 0);
+}
+
+function faFaultableI32Neg(value: number): FaFaultable<number> {
+  if (value === FA_I32_MIN) return faFaultMessage("neg: integer overflow");
+  return faOk(-value);
+}
+
+function faFaultableI32Abs(value: number): FaFaultable<number> {
+  if (value === FA_I32_MIN) return faFaultMessage("abs: integer overflow");
+  return faOk(value < 0 ? -value : value);
+}
+
 function faFaultableI64Add(left: bigint, right: bigint): FaFaultable<bigint> {
   const value = left + right;
   if (value < FA_I64_MIN || value > FA_I64_MAX) return faFaultMessage("add: integer overflow");
@@ -4272,6 +4295,16 @@ function faFaultableI64Abs(value: bigint): FaFaultable<bigint> {
   return faOk(value < 0n ? -value : value);
 }
 
+function faCheckedF32Div(left: number, right: number): number {
+  if (right === 0) throw new Error("div: division by zero");
+  return Math.fround(left / right);
+}
+
+function faCheckedF32Rem(left: number, right: number): number {
+  if (right === 0) throw new Error("rem: remainder by zero");
+  return Math.fround(left % right);
+}
+
 function faCheckedRealDiv(left: number, right: number): number {
   if (right === 0) throw new Error("div: division by zero");
   return left / right;
@@ -4287,6 +4320,23 @@ function faCheckedSqrt(value: number): number {
   return Math.sqrt(value);
 }
 
+function faCheckedSqrtF32(value: number): number {
+  if (value < 0) throw new Error("sqrt: negative input");
+  return Math.fround(Math.sqrt(value));
+}
+
+function faFaultableI32Div(left: number, right: number): FaFaultable<number> {
+  if (right === 0) return faFaultMessage("div: division by zero");
+  if (left === FA_I32_MIN && right === -1) return faFaultMessage("div: integer overflow");
+  return faOk(Math.trunc(left / right));
+}
+
+function faFaultableI32Rem(left: number, right: number): FaFaultable<number> {
+  if (right === 0) return faFaultMessage("rem: remainder by zero");
+  if (left === FA_I32_MIN && right === -1) return faFaultMessage("rem: integer overflow");
+  return faOk(left % right);
+}
+
 function faFaultableI64Div(left: bigint, right: bigint): FaFaultable<bigint> {
   if (right === 0n) return faFaultMessage("div: division by zero");
   if (left === FA_I64_MIN && right === -1n) return faFaultMessage("div: integer overflow");
@@ -4297,6 +4347,16 @@ function faFaultableI64Rem(left: bigint, right: bigint): FaFaultable<bigint> {
   if (right === 0n) return faFaultMessage("rem: remainder by zero");
   if (left === FA_I64_MIN && right === -1n) return faFaultMessage("rem: integer overflow");
   return faOk(left % right);
+}
+
+function faFaultableF32Div(left: number, right: number): FaFaultable<number> {
+  if (right === 0) return faFaultMessage("div: division by zero");
+  return faOk(Math.fround(left / right));
+}
+
+function faFaultableF32Rem(left: number, right: number): FaFaultable<number> {
+  if (right === 0) return faFaultMessage("rem: remainder by zero");
+  return faOk(Math.fround(left % right));
 }
 
 function faFaultableRealDiv(left: number, right: number): FaFaultable<number> {
@@ -4312,6 +4372,11 @@ function faFaultableRealRem(left: number, right: number): FaFaultable<number> {
 function faFaultableSqrt(value: number): FaFaultable<number> {
   if (value < 0) return faFaultMessage("sqrt: negative input");
   return faOk(Math.sqrt(value));
+}
+
+function faFaultableSqrtF32(value: number): FaFaultable<number> {
+  if (value < 0) return faFaultMessage("sqrt: negative input");
+  return faOk(Math.fround(Math.sqrt(value)));
 }
 
 function faParseReal(bytes: string): FaFaultable<number> {
@@ -4348,7 +4413,7 @@ function faCollect<T>(items: Array<FaFaultable<T>>): FaFaultable<T[]> {
   return faOk(out);
 }
 
-type FaScalarMapKind = "bigint" | "number" | "bool";
+type FaScalarMapKind = "bigint" | "i32" | "f32" | "number" | "bool";
 type FaScalarWorker = {
   postMessage(message: unknown): void;
   terminate(): void | Promise<unknown>;
@@ -4385,8 +4450,16 @@ let faUseSharedNumericSequences = false;
 let faScalarWorkerModuleUrl: string | null = null;
 const faScalarWorkerPools = new Map<string, Promise<FaScalarWorkerPool | null>>();
 
+function faParallelMapI32(input: Array<number>, mapperId: string, workerCount?: number): Promise<Array<number>> {
+  return faParallelMapScalar(input, mapperId, "i32", "i32", workerCount) as Promise<Array<number>>;
+}
+
 function faParallelMapBigInt(input: Array<bigint>, mapperId: string, workerCount?: number): Promise<Array<bigint>> {
   return faParallelMapScalar(input, mapperId, "bigint", "bigint", workerCount) as Promise<Array<bigint>>;
+}
+
+function faParallelMapF32(input: Array<number>, mapperId: string, workerCount?: number): Promise<Array<number>> {
+  return faParallelMapScalar(input, mapperId, "f32", "f32", workerCount) as Promise<Array<number>>;
 }
 
 function faParallelMapNumber(input: Array<number>, mapperId: string, workerCount?: number): Promise<Array<number>> {
@@ -4663,12 +4736,20 @@ async function faRetireScalarWorkerPool(mapperId: string, pool: FaScalarWorkerPo
 }
 
 function faScalarBytes(kind: FaScalarMapKind): number {
-  return kind === "bigint" ? BigInt64Array.BYTES_PER_ELEMENT : kind === "number" ? Float64Array.BYTES_PER_ELEMENT : Uint8Array.BYTES_PER_ELEMENT;
+  if (kind === "bigint") return BigInt64Array.BYTES_PER_ELEMENT;
+  if (kind === "i32") return Int32Array.BYTES_PER_ELEMENT;
+  if (kind === "f32") return Float32Array.BYTES_PER_ELEMENT;
+  if (kind === "number") return Float64Array.BYTES_PER_ELEMENT;
+  return Uint8Array.BYTES_PER_ELEMENT;
 }
 
 function faWriteScalarBuffer<T>(buffer: SharedArrayBuffer, input: Array<T>, kind: FaScalarMapKind): void {
   if (kind === "bigint") {
     new BigInt64Array(buffer).set(input as Array<bigint>);
+  } else if (kind === "i32") {
+    new Int32Array(buffer).set((input as Array<number>).map((value) => faAssertI32(value, "worker i32")));
+  } else if (kind === "f32") {
+    new Float32Array(buffer).set((input as Array<number>).map(Math.fround));
   } else if (kind === "number") {
     new Float64Array(buffer).set(input as Array<number>);
   } else {
@@ -4691,6 +4772,24 @@ function faScalarInputBuffer<T>(input: Array<T>, kind: FaScalarMapKind): SharedA
     return input.buffer;
   }
   if (
+    kind === "i32" &&
+    input instanceof Int32Array &&
+    input.buffer instanceof SharedArrayBuffer &&
+    input.byteOffset === 0 &&
+    input.byteLength === byteLength
+  ) {
+    return input.buffer;
+  }
+  if (
+    kind === "f32" &&
+    input instanceof Float32Array &&
+    input.buffer instanceof SharedArrayBuffer &&
+    input.byteOffset === 0 &&
+    input.byteLength === byteLength
+  ) {
+    return input.buffer;
+  }
+  if (
     kind === "number" &&
     input instanceof Float64Array &&
     input.buffer instanceof SharedArrayBuffer &&
@@ -4706,6 +4805,8 @@ function faScalarInputBuffer<T>(input: Array<T>, kind: FaScalarMapKind): SharedA
 
 function faReadScalarBuffer<T>(buffer: SharedArrayBuffer, length: number, kind: FaScalarMapKind): Array<T> {
   if (kind === "bigint") return new BigInt64Array(buffer, 0, length) as unknown as Array<T>;
+  if (kind === "i32") return new Int32Array(buffer, 0, length) as unknown as Array<T>;
+  if (kind === "f32") return new Float32Array(buffer, 0, length) as unknown as Array<T>;
   if (kind === "number") return new Float64Array(buffer, 0, length) as unknown as Array<T>;
   return Array.from(new Uint8Array(buffer, 0, length), (value) => value !== 0) as Array<T>;
 }
@@ -4842,13 +4943,6 @@ function faGpuRuntime(): Promise<FaGpuRuntimeModule> {
   return faGpuRuntimePromise;
 }
 
-function faGpuAssertI32(value: bigint): number {
-  if (value < -2147483648n || value > 2147483647n) {
-    throw new Error("FlowArrow GPU i64 currently requires signed 32-bit values");
-  }
-  return Number(value);
-}
-
 function faGpuReduceOp(op: string): number {
   if (op === "add") return 0;
   if (op === "min") return 1;
@@ -4856,58 +4950,52 @@ function faGpuReduceOp(op: string): number {
   throw new Error(`unsupported GPU reduce op: ${op}`);
 }
 
-function faGpuMapI32(input: bigint[], _kernelId: string, wgsl: string): Promise<bigint[]> {
-  const packed = new Int32Array(input.map(faGpuAssertI32));
+function faGpuMapI32(input: number[], _kernelId: string, wgsl: string): Promise<number[]> {
+  const packed = new Int32Array(input.map((value) => faAssertI32(value, "FlowArrow GPU i32")));
   return faGpuRuntime()
     .then((runtime) => runtime.fa_gpu_map_i32(wgsl, packed))
-    .then((mapped) => Array.from(mapped, (value) => BigInt(value)));
+    .then((mapped) => Array.from(mapped));
 }
 
 function faGpuMapF32(input: number[], _kernelId: string, wgsl: string): Promise<number[]> {
+  const packed = faGpuFloat32Input(input);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_map_f32(wgsl, packed))
+    .then((mapped) => mapped as unknown as number[]);
+}
+
+function faGpuMapF64(input: number[], _kernelId: string, wgsl: string): Promise<number[]> {
   const packed = faGpuFloat64Input(input);
   return faGpuRuntime()
     .then((runtime) => runtime.fa_gpu_map_f64(wgsl, packed))
     .then((mapped) => mapped as unknown as number[]);
 }
 
-function faGpuReduceI32(input: bigint[], op: string, identity: bigint): Promise<bigint> {
+function faGpuReduceI32(input: number[], op: string, identity: number): Promise<number> {
   const reduceOp = faGpuReduceOp(op);
-  const packed = new Int32Array(input.map(faGpuAssertI32));
-  const packedIdentity = faGpuAssertI32(identity);
+  const packed = new Int32Array(input.map((value) => faAssertI32(value, "FlowArrow GPU i32")));
+  const packedIdentity = faAssertI32(identity, "FlowArrow GPU i32 identity");
   return faGpuRuntime()
     .then((runtime) => runtime.fa_gpu_reduce_i32(reduceOp, packed, packedIdentity))
-    .then((reduced) => BigInt(reduced));
+    .then((reduced) => Number(reduced));
 }
 
 function faGpuReduceF32(input: number[], op: string, identity: number): Promise<number> {
+  const reduceOp = faGpuReduceOp(op);
+  const packed = faGpuFloat32Input(input);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_reduce_f32(reduceOp, packed, Math.fround(identity)));
+}
+
+function faGpuReduceF64(input: number[], op: string, identity: number): Promise<number> {
   const reduceOp = faGpuReduceOp(op);
   const packed = faGpuFloat64Input(input);
   return faGpuRuntime()
     .then((runtime) => runtime.fa_gpu_reduce_f64(reduceOp, packed, identity));
 }
 
-function faGpuRangeMapReduceI32(
-  range: [f0: bigint, f1: bigint, f2: bigint],
-  _kernelId: string,
-  mapExpr: string,
-  op: string,
-  identity: bigint,
-): Promise<bigint> {
-  const start = faGpuAssertI32(range[0]);
-  const stop = faGpuAssertI32(range[1]);
-  const step = faGpuAssertI32(range[2]);
-  const reduceOp = faGpuReduceOp(op);
-  const packedIdentity = faGpuAssertI32(identity);
-  return faGpuRuntime()
-    .then((runtime) => runtime.fa_gpu_range_map_reduce_i32(
-      mapExpr,
-      start,
-      stop,
-      step,
-      reduceOp,
-      packedIdentity,
-    ))
-    .then((reduced) => BigInt(reduced));
+function faGpuFloat32Input(input: number[] | Float32Array): Float32Array {
+  return input instanceof Float32Array ? input : new Float32Array(input.map(Math.fround));
 }
 
 function faGpuRepeatVectorAccumF64(
@@ -4919,14 +5007,13 @@ function faGpuRepeatVectorAccumF64(
 ): Promise<number> {
   const leftPacked = faGpuFloat64Input(left);
   const rightPacked = faGpuFloat64Input(right);
-  const packedIterations = faGpuAssertI32(iterations);
   return faGpuRuntime()
     .then((runtime) => runtime.fa_gpu_repeat_vector_accum_f64(
       wgsl,
       leftPacked,
       rightPacked,
       score,
-      packedIterations,
+      iterations,
     ));
 }
 
@@ -4941,7 +5028,6 @@ function faGpuRepeatMatrixAccumF64(
   const leftFlat = faGpuFlattenMatrix(left, "left");
   const rightFlat = faGpuFlattenMatrix(right, "right");
   const vectorPacked = faGpuFloat64Input(vector);
-  const packedIterations = faGpuAssertI32(iterations);
   return faGpuRuntime()
     .then((runtime) => runtime.fa_gpu_repeat_matrix_accum_f64(
       wgsl,
@@ -4953,7 +5039,7 @@ function faGpuRepeatMatrixAccumF64(
       rightFlat.cols,
       vectorPacked,
       score,
-      packedIterations,
+      iterations,
     ));
 }
 
@@ -4996,6 +5082,12 @@ const faScalarWorkerMappers = new Map([
 ]);
 const FA_I64_MIN = -(1n << 63n);
 const FA_I64_MAX = (1n << 63n) - 1n;
+const FA_I32_MIN = -(2 ** 31);
+const FA_I32_MAX = (2 ** 31) - 1;
+function faAssertI32(value, label) {{
+  if (!Number.isInteger(value) || value < FA_I32_MIN || value > FA_I32_MAX) throw new Error(`${{label}}: integer overflow`);
+  return value | 0;
+}}
 function faAssertI64(value, label) {{
   if (value < FA_I64_MIN || value > FA_I64_MAX) throw new Error(`${{label}}: integer overflow`);
   return value;
@@ -5005,6 +5097,39 @@ function faFaultMessage(message) {{ return {{ is_fault: true, fault: {{ message 
 function faExpect(value) {{
   if (value && value.is_fault === true) throw new Error(value.fault.message);
   return value && value.is_fault === false ? value.value : value;
+}}
+function faCheckedI32Add(left, right) {{ return faAssertI32(left + right, "add"); }}
+function faCheckedI32Sub(left, right) {{ return faAssertI32(left - right, "sub"); }}
+function faCheckedI32Mul(left, right) {{ return faAssertI32(left * right, "mul"); }}
+function faFaultableI32Add(left, right) {{
+  const value = left + right;
+  return !Number.isInteger(value) || value < FA_I32_MIN || value > FA_I32_MAX ? faFaultMessage("add: integer overflow") : faOk(value | 0);
+}}
+function faFaultableI32Sub(left, right) {{
+  const value = left - right;
+  return !Number.isInteger(value) || value < FA_I32_MIN || value > FA_I32_MAX ? faFaultMessage("sub: integer overflow") : faOk(value | 0);
+}}
+function faFaultableI32Mul(left, right) {{
+  const value = left * right;
+  return !Number.isInteger(value) || value < FA_I32_MIN || value > FA_I32_MAX ? faFaultMessage("mul: integer overflow") : faOk(value | 0);
+}}
+function faFaultableI32Div(left, right) {{
+  if (right === 0) return faFaultMessage("div: division by zero");
+  if (left === FA_I32_MIN && right === -1) return faFaultMessage("div: integer overflow");
+  return faOk(Math.trunc(left / right));
+}}
+function faFaultableI32Rem(left, right) {{
+  if (right === 0) return faFaultMessage("rem: remainder by zero");
+  if (left === FA_I32_MIN && right === -1) return faFaultMessage("rem: integer overflow");
+  return faOk(left % right);
+}}
+function faFaultableI32Neg(value) {{
+  if (value === FA_I32_MIN) return faFaultMessage("neg: integer overflow");
+  return faOk(-value);
+}}
+function faFaultableI32Abs(value) {{
+  if (value === FA_I32_MIN) return faFaultMessage("abs: integer overflow");
+  return faOk(value < 0 ? -value : value);
 }}
 function faCheckedI64Add(left, right) {{ return faAssertI64(left + right, "add"); }}
 function faCheckedI64Sub(left, right) {{ return faAssertI64(left - right, "sub"); }}
@@ -5020,6 +5145,24 @@ function faFaultableI64Sub(left, right) {{
 function faFaultableI64Mul(left, right) {{
   const value = left * right;
   return value < FA_I64_MIN || value > FA_I64_MAX ? faFaultMessage("mul: integer overflow") : faOk(value);
+}}
+function faFaultableI64Div(left, right) {{
+  if (right === 0n) return faFaultMessage("div: division by zero");
+  if (left === FA_I64_MIN && right === -1n) return faFaultMessage("div: integer overflow");
+  return faOk(left / right);
+}}
+function faFaultableI64Rem(left, right) {{
+  if (right === 0n) return faFaultMessage("rem: remainder by zero");
+  if (left === FA_I64_MIN && right === -1n) return faFaultMessage("rem: integer overflow");
+  return faOk(left % right);
+}}
+function faFaultableI64Neg(value) {{
+  if (value === FA_I64_MIN) return faFaultMessage("neg: integer overflow");
+  return faOk(-value);
+}}
+function faFaultableI64Abs(value) {{
+  if (value === FA_I64_MIN) return faFaultMessage("abs: integer overflow");
+  return faOk(value < 0n ? -value : value);
 }}
 function faCheckedI64Div(left, right) {{
   if (right === 0n) throw new Error("div: division by zero");
@@ -5039,17 +5182,71 @@ function faCheckedI64Abs(value) {{
   if (value === FA_I64_MIN) throw new Error("abs: integer overflow");
   return value < 0n ? -value : value;
 }}
+function faCheckedI32Div(left, right) {{
+  if (right === 0) throw new Error("div: division by zero");
+  if (left === FA_I32_MIN && right === -1) throw new Error("div: integer overflow");
+  return Math.trunc(left / right);
+}}
+function faCheckedI32Rem(left, right) {{
+  if (right === 0) throw new Error("rem: remainder by zero");
+  if (left === FA_I32_MIN && right === -1) throw new Error("rem: integer overflow");
+  return left % right;
+}}
+function faCheckedI32Neg(value) {{
+  if (value === FA_I32_MIN) throw new Error("neg: integer overflow");
+  return -value;
+}}
+function faCheckedI32Abs(value) {{
+  if (value === FA_I32_MIN) throw new Error("abs: integer overflow");
+  return value < 0 ? -value : value;
+}}
 function faCheckedRealDiv(left, right) {{
   if (right === 0) throw new Error("div: division by zero");
   return left / right;
+}}
+function faCheckedF32Div(left, right) {{
+  if (right === 0) throw new Error("div: division by zero");
+  return Math.fround(left / right);
 }}
 function faCheckedRealRem(left, right) {{
   if (right === 0) throw new Error("rem: remainder by zero");
   return left % right;
 }}
+function faCheckedF32Rem(left, right) {{
+  if (right === 0) throw new Error("rem: remainder by zero");
+  return Math.fround(left % right);
+}}
+function faFaultableF32Div(left, right) {{
+  if (right === 0) return faFaultMessage("div: division by zero");
+  return faOk(Math.fround(left / right));
+}}
+function faFaultableF32Rem(left, right) {{
+  if (right === 0) return faFaultMessage("rem: remainder by zero");
+  return faOk(Math.fround(left % right));
+}}
+function faFaultableRealDiv(left, right) {{
+  if (right === 0) return faFaultMessage("div: division by zero");
+  return faOk(left / right);
+}}
+function faFaultableRealRem(left, right) {{
+  if (right === 0) return faFaultMessage("rem: remainder by zero");
+  return faOk(left % right);
+}}
 function faCheckedSqrt(value) {{
   if (value < 0) throw new Error("sqrt: negative input");
   return Math.sqrt(value);
+}}
+function faCheckedSqrtF32(value) {{
+  if (value < 0) throw new Error("sqrt: negative input");
+  return Math.fround(Math.sqrt(value));
+}}
+function faFaultableSqrt(value) {{
+  if (value < 0) return faFaultMessage("sqrt: negative input");
+  return faOk(Math.sqrt(value));
+}}
+function faFaultableSqrtF32(value) {{
+  if (value < 0) return faFaultMessage("sqrt: negative input");
+  return faOk(Math.fround(Math.sqrt(value)));
 }}
 let mapper = null;
 const postDone = () => {{
@@ -5077,14 +5274,22 @@ const handleMessage = (message) => {{
   const {{ inputBuffer, outputBuffer, start, end, inputKind, outputKind }} = message;
   const input = inputKind === "bigint"
     ? new BigInt64Array(inputBuffer)
-    : inputKind === "number"
-      ? new Float64Array(inputBuffer)
-      : new Uint8Array(inputBuffer);
+    : inputKind === "i32"
+      ? new Int32Array(inputBuffer)
+      : inputKind === "f32"
+        ? new Float32Array(inputBuffer)
+        : inputKind === "number"
+          ? new Float64Array(inputBuffer)
+          : new Uint8Array(inputBuffer);
   const output = outputKind === "bigint"
     ? new BigInt64Array(outputBuffer)
-    : outputKind === "number"
-      ? new Float64Array(outputBuffer)
-      : new Uint8Array(outputBuffer);
+    : outputKind === "i32"
+      ? new Int32Array(outputBuffer)
+      : outputKind === "f32"
+        ? new Float32Array(outputBuffer)
+        : outputKind === "number"
+          ? new Float64Array(outputBuffer)
+          : new Uint8Array(outputBuffer);
   for (let index = start; index < end; index++) {{
     const value = inputKind === "bool" ? input[index] !== 0 : input[index];
     const mapped = mapper(value);

@@ -1,17 +1,14 @@
 use super::Ty;
-use crate::ast::BindingTarget;
 use crate::module_resolver::{ResolvedSymbolOrigin, SymbolId};
 use crate::stdlib::Effect;
 use crate::typecheck::{
-    TypedCallable, TypedChain, TypedEndpoint, TypedEndpointKind, TypedModule, TypedStageKind,
-    TypedSymbolKind,
+    TypedCallable, TypedEndpoint, TypedEndpointKind, TypedModule, TypedStageKind, TypedSymbolKind,
 };
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct GpuPlan {
     map_kernels: HashMap<MapKernelKey, GpuMapKernel>,
-    builtins_by_id: HashMap<SymbolId, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -32,23 +29,11 @@ pub(super) struct GpuMapKernel {
     pub wgsl: String,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct GpuRangeMapReduction {
-    pub range_chain: usize,
-    pub map_chain: usize,
-    pub reduce_chain: usize,
-    pub range_source: TypedEndpoint,
-    pub map_kernel: GpuMapKernel,
-    pub op: String,
-    pub identity: TypedEndpoint,
-    pub output_name: String,
-    pub output_ty: Ty,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GpuScalarKind {
     I32,
     F32,
+    F64,
 }
 
 impl GpuScalarKind {
@@ -56,6 +41,7 @@ impl GpuScalarKind {
         match self {
             Self::I32 => "faGpuMapI32",
             Self::F32 => "faGpuMapF32",
+            Self::F64 => "faGpuMapF64",
         }
     }
 }
@@ -121,7 +107,6 @@ impl GpuPlan {
     pub(super) fn empty() -> Self {
         Self {
             map_kernels: HashMap::new(),
-            builtins_by_id: HashMap::new(),
         }
     }
 
@@ -139,8 +124,9 @@ impl GpuPlan {
                 continue;
             };
             let scalar = match (&input.ty, &output.ty) {
-                (Ty::I64, Ty::I64) => GpuScalarKind::I32,
-                (Ty::F64, Ty::F64) => GpuScalarKind::F32,
+                (Ty::I32, Ty::I32) => GpuScalarKind::I32,
+                (Ty::F32, Ty::F32) => GpuScalarKind::F32,
+                (Ty::F64, Ty::F64) => GpuScalarKind::F64,
                 _ => continue,
             };
             if input.ty != output.ty {
@@ -169,10 +155,7 @@ impl GpuPlan {
                 );
             }
         }
-        Self {
-            map_kernels,
-            builtins_by_id: names.builtins_by_id,
-        }
+        Self { map_kernels }
     }
 
     pub(super) fn kernel_for_map(
@@ -190,189 +173,6 @@ impl GpuPlan {
 
     pub(super) fn is_empty(&self) -> bool {
         self.map_kernels.is_empty()
-    }
-
-    pub(super) fn range_map_reductions(
-        &self,
-        callable: &TypedCallable,
-    ) -> Vec<GpuRangeMapReduction> {
-        let mut source_uses: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, chain) in callable.chains.iter().enumerate() {
-            if let Some(name) = chain_source_variable(chain) {
-                source_uses.entry(name.to_string()).or_default().push(index);
-            }
-        }
-
-        let mut reductions = Vec::new();
-        for (range_index, range_chain) in callable.chains.iter().enumerate() {
-            let Some((range_source, range_name)) = self.range_step_binding(range_chain) else {
-                continue;
-            };
-            if callable
-                .outputs
-                .iter()
-                .any(|output| output.name == range_name)
-            {
-                continue;
-            }
-            let Some(range_consumers) = source_uses.get(range_name) else {
-                continue;
-            };
-            if range_consumers.is_empty() {
-                continue;
-            }
-
-            let mut group = Vec::new();
-            let mut valid_group = true;
-            for map_index in range_consumers {
-                let Some((map_name, map_output, item_ty, output_item_ty)) =
-                    self.map_binding(&callable.chains[*map_index], range_name)
-                else {
-                    valid_group = false;
-                    break;
-                };
-                if callable
-                    .outputs
-                    .iter()
-                    .any(|output| output.name == map_output)
-                {
-                    valid_group = false;
-                    break;
-                }
-                let Some(kernel) = self
-                    .kernel_for_map(map_name, item_ty, output_item_ty)
-                    .cloned()
-                else {
-                    valid_group = false;
-                    break;
-                };
-                let Some(map_consumers) = source_uses.get(map_output) else {
-                    valid_group = false;
-                    break;
-                };
-                if map_consumers.is_empty() {
-                    valid_group = false;
-                    break;
-                }
-                for reduce_index in map_consumers {
-                    let Some((op, identity, output_name, output_ty)) =
-                        self.reduce_binding(&callable.chains[*reduce_index], map_output)
-                    else {
-                        valid_group = false;
-                        break;
-                    };
-                    group.push(GpuRangeMapReduction {
-                        range_chain: range_index,
-                        map_chain: *map_index,
-                        reduce_chain: *reduce_index,
-                        range_source: range_source.clone(),
-                        map_kernel: kernel.clone(),
-                        op,
-                        identity,
-                        output_name,
-                        output_ty,
-                    });
-                }
-                if !valid_group {
-                    break;
-                }
-            }
-            if valid_group {
-                reductions.extend(group);
-            }
-        }
-        reductions
-    }
-
-    fn range_step_binding<'a>(
-        &self,
-        chain: &'a TypedChain,
-    ) -> Option<(&'a TypedEndpoint, &'a str)> {
-        let [call, bind] = chain.stages.as_slice() else {
-            return None;
-        };
-        let TypedStageKind::Call { name, symbol } = &call.kind else {
-            return None;
-        };
-        if self.canonical_name(name, *symbol) != "range_step" {
-            return None;
-        }
-        if call.output != Ty::Seq(Box::new(Ty::I64)) {
-            return None;
-        }
-        let TypedStageKind::Bind { target } = &bind.kind else {
-            return None;
-        };
-        binding_target_name(target).map(|name| (&chain.source, name))
-    }
-
-    fn map_binding<'a>(
-        &self,
-        chain: &'a TypedChain,
-        expected_source: &str,
-    ) -> Option<(&'a str, &'a str, &'a Ty, &'a Ty)> {
-        if chain_source_variable(chain) != Some(expected_source) {
-            return None;
-        }
-        let [map, bind] = chain.stages.as_slice() else {
-            return None;
-        };
-        let TypedStageKind::Map { name, .. } = &map.kind else {
-            return None;
-        };
-        let Ty::Seq(item_ty) = &map.input else {
-            return None;
-        };
-        let Ty::Seq(output_item_ty) = &map.output else {
-            return None;
-        };
-        let TypedStageKind::Bind { target } = &bind.kind else {
-            return None;
-        };
-        binding_target_name(target).map(|target| {
-            (
-                name.as_str(),
-                target,
-                item_ty.as_ref(),
-                output_item_ty.as_ref(),
-            )
-        })
-    }
-
-    fn reduce_binding(
-        &self,
-        chain: &TypedChain,
-        expected_source: &str,
-    ) -> Option<(String, TypedEndpoint, String, Ty)> {
-        if chain_source_variable(chain) != Some(expected_source) {
-            return None;
-        }
-        let [reduce, bind] = chain.stages.as_slice() else {
-            return None;
-        };
-        let TypedStageKind::Reduce {
-            op,
-            symbol,
-            identity,
-        } = &reduce.kind
-        else {
-            return None;
-        };
-        let op = self.canonical_name(op, *symbol);
-        if !matches!(op.as_str(), "add" | "min" | "max") {
-            return None;
-        }
-        let TypedStageKind::Bind { target } = &bind.kind else {
-            return None;
-        };
-        let output_name = binding_target_name(target)?.to_string();
-        Some((op, identity.clone(), output_name, reduce.output.clone()))
-    }
-
-    fn canonical_name(&self, name: &str, symbol: Option<SymbolId>) -> String {
-        symbol
-            .and_then(|id| self.builtins_by_id.get(&id).cloned())
-            .unwrap_or_else(|| name.to_string())
     }
 
     pub(super) fn emit_c_manifest(&self) -> String {
@@ -404,20 +204,6 @@ impl GpuPlan {
             kernels.len()
         ));
         out
-    }
-}
-
-fn chain_source_variable(chain: &TypedChain) -> Option<&str> {
-    match &chain.source.kind {
-        TypedEndpointKind::Variable(name) => Some(name),
-        _ => None,
-    }
-}
-
-fn binding_target_name(target: &BindingTarget) -> Option<&str> {
-    match target {
-        BindingTarget::Variable(name) => Some(name),
-        _ => None,
     }
 }
 
@@ -483,10 +269,10 @@ impl<'a> ScalarKernelBuilder<'a> {
             return Err("GPU scalar kernels require one output".to_string());
         };
         match (&input.ty, &output.ty) {
-            (Ty::I64, Ty::I64) | (Ty::F64, Ty::F64) => {}
+            (Ty::I32, Ty::I32) | (Ty::F32, Ty::F32) | (Ty::F64, Ty::F64) => {}
             _ => {
                 return Err(
-                    "GPU scalar kernels currently require i64 -> i64 or f64 -> f64".to_string(),
+                    "GPU scalar kernels require i32 -> i32, f32 -> f32, or f64 -> f64".to_string(),
                 );
             }
         }
@@ -699,6 +485,7 @@ fn map_wgsl(kernel_id: &str, scalar: GpuScalarKind, expr: &GpuExpr) -> String {
     let element = match scalar {
         GpuScalarKind::I32 => "i32",
         GpuScalarKind::F32 => "f32",
+        GpuScalarKind::F64 => "f64",
     };
     format!(
         "struct FaGpuMapParams {{ len: u32, _pad0: u32, _pad1: u32, _pad2: u32 }};\n\
@@ -721,10 +508,11 @@ impl GpuExpr {
     fn wgsl(&self, scalar: GpuScalarKind) -> String {
         match self {
             GpuExpr::Var(name) => sanitize_gpu_ident(name),
-            GpuExpr::Real(value) => wgsl_f32_literal(*value),
+            GpuExpr::Real(value) => wgsl_float_literal(*value, scalar),
             GpuExpr::Int(value) => match scalar {
                 GpuScalarKind::I32 => format!("i32({value})"),
                 GpuScalarKind::F32 => format!("f32({value})"),
+                GpuScalarKind::F64 => format!("f64({value})"),
             },
             GpuExpr::Bool(value) => value.to_string(),
             GpuExpr::Tuple(_) => "/* unsupported tuple value */".to_string(),
@@ -772,19 +560,24 @@ impl GpuExpr {
     }
 }
 
-fn wgsl_f32_literal(value: f64) -> String {
+fn wgsl_float_literal(value: f64, scalar: GpuScalarKind) -> String {
+    let constructor = match scalar {
+        GpuScalarKind::I32 => "f32",
+        GpuScalarKind::F32 => "f32",
+        GpuScalarKind::F64 => "f64",
+    };
     if value.is_finite() {
         let mut text = value.to_string();
         if !text.contains('.') && !text.contains('e') && !text.contains('E') {
             text.push_str(".0");
         }
-        text
+        format!("{constructor}({text})")
     } else if value.is_nan() {
-        "0.0 / 0.0".to_string()
+        format!("{constructor}(0.0) / {constructor}(0.0)")
     } else if value.is_sign_positive() {
-        "1.0 / 0.0".to_string()
+        format!("{constructor}(1.0) / {constructor}(0.0)")
     } else {
-        "-1.0 / 0.0".to_string()
+        format!("-{constructor}(1.0) / {constructor}(0.0)")
     }
 }
 

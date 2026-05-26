@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::module_resolver;
 use crate::monomorphize;
-use crate::stdlib::{self, Effect, RuntimeSupport};
+use crate::stdlib::{self, RuntimeSupport};
 use crate::typecheck::{
     self, CheckMode, TypedCallable, TypedChain, TypedEndpoint, TypedEndpointKind, TypedMatchArm,
     TypedMatchGuard, TypedMatchTarget, TypedModule, TypedStage, TypedStageKind,
@@ -549,7 +549,9 @@ impl TypeRegistry {
     fn c_type(&mut self, ty: &Ty) -> String {
         match ty {
             Ty::Unit => "FaUnit".to_string(),
+            Ty::I32 => "int32_t".to_string(),
             Ty::I64 => "int64_t".to_string(),
+            Ty::F32 => "float".to_string(),
             Ty::F64 => "double".to_string(),
             Ty::Bool => "bool".to_string(),
             Ty::Bytes => "FaBytes".to_string(),
@@ -767,7 +769,9 @@ impl TypeRegistry {
                     out.push_str("typedef struct { size_t count; FaBytes *names; FaSqliteValue *values; } FaSqliteRow;\n");
                 }
                 Ty::Unit
+                | Ty::I32
                 | Ty::I64
+                | Ty::F32
                 | Ty::F64
                 | Ty::Bool
                 | Ty::Bytes
@@ -957,19 +961,25 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "add" | "sub" | "mul" => {
             let output = numeric_binary_output(input)?;
             Ok(match output {
-                Ty::I64 => Ty::Faultable(Box::new(Ty::I64)),
+                Ty::I32 | Ty::I64 => Ty::Faultable(Box::new(output)),
                 other => other,
             })
         }
         "min" | "max" => numeric_binary_output(input),
         "div" | "rem" => Ok(Ty::Faultable(Box::new(numeric_binary_output(input)?))),
         "neg" | "abs" => match input {
-            Ty::I64 => Ok(Ty::Faultable(Box::new(Ty::I64))),
-            Ty::F64 => Ok(Ty::F64),
-            other => Err(format!("{name} expected i64 or f64, found `{other}`")),
+            Ty::I32 | Ty::I64 => Ok(Ty::Faultable(Box::new(input.clone()))),
+            Ty::F32 | Ty::F64 => Ok(input.clone()),
+            other => Err(format!("{name} expected numeric input, found `{other}`")),
         },
-        "sqrt" => Ok(Ty::Faultable(Box::new(Ty::F64))),
-        "exp" | "sin" | "cos" => Ok(Ty::F64),
+        "sqrt" => match input {
+            Ty::F32 | Ty::F64 => Ok(Ty::Faultable(Box::new(input.clone()))),
+            other => Err(format!("sqrt expected f32 or f64, found `{other}`")),
+        },
+        "exp" | "sin" | "cos" => match input {
+            Ty::F32 | Ty::F64 => Ok(input.clone()),
+            other => Err(format!("{name} expected f32 or f64, found `{other}`")),
+        },
         "eq" | "lt" | "gt" | "le" | "ge" | "not_empty" | "is_empty" | "and" | "or" | "xor"
         | "not" | "all" | "any" | "has_faults" => Ok(Ty::Bool),
         "collect" => {
@@ -1447,15 +1457,19 @@ fn is_predefined_type_name(name: &str) -> bool {
         "FaSeq_Bytes"
             | "FaTuple_Bytes_Bytes"
             | "FaSeq_Tuple_Bytes_Bytes"
+            | "FaSeq_i32"
             | "FaSeq_i64"
+            | "FaSeq_f32"
+            | "FaSeq_f64"
             | "FaSeq_Fault"
+            | "FaFaultable_i32"
             | "FaFaultable_i64"
+            | "FaFaultable_f32"
             | "FaFaultable_f64"
             | "FaFaultable_Bytes"
             | "FaFaultable_Seq_Bytes"
             | "FaFaultable_Seq_Tuple_Bytes_Bytes"
             | "FaFaultable_Stream_Bytes"
-            | "FaSeq_f64"
             | "FaFaultable_Seq_f64"
     )
 }
@@ -1494,18 +1508,19 @@ fn numeric_binary_output(input: &Ty) -> Result<Ty, String> {
         ));
     }
     match left {
-        Ty::I64 | Ty::F64 => Ok(left.clone()),
+        Ty::I32 | Ty::I64 | Ty::F32 | Ty::F64 => Ok(left.clone()),
         other => Err(format!(
-            "numeric binary op expected i64 or f64, found `{other}`"
+            "numeric binary op expected i32, i64, f32, or f64, found `{other}`"
         )),
     }
 }
 
 fn add_expr(left: &str, right: &str, ty: &Ty) -> String {
-    if ty == &Ty::I64 {
-        format!("fa_checked_i64_add({left}, {right})")
-    } else {
-        format!("({left} + {right})")
+    match ty {
+        Ty::I32 => format!("fa_checked_i32_add({left}, {right})"),
+        Ty::I64 => format!("fa_checked_i64_add({left}, {right})"),
+        Ty::F32 => format!("((float)({left} + {right}))"),
+        _ => format!("({left} + {right})"),
     }
 }
 
@@ -1513,17 +1528,29 @@ fn numeric_binary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
     let left = format!("{input}.f0");
     let right = format!("{input}.f1");
     match name {
+        "add" if output_ty == &Ty::I32 => format!("fa_checked_i32_add({left}, {right})"),
         "add" if output_ty == &Ty::I64 => format!("fa_checked_i64_add({left}, {right})"),
+        "add" if output_ty == &Ty::F32 => format!("((float)({left} + {right}))"),
         "add" => format!("({left} + {right})"),
+        "sub" if output_ty == &Ty::I32 => format!("fa_checked_i32_sub({left}, {right})"),
         "sub" if output_ty == &Ty::I64 => format!("fa_checked_i64_sub({left}, {right})"),
+        "sub" if output_ty == &Ty::F32 => format!("((float)({left} - {right}))"),
         "sub" => format!("({left} - {right})"),
+        "mul" if output_ty == &Ty::I32 => format!("fa_checked_i32_mul({left}, {right})"),
         "mul" if output_ty == &Ty::I64 => format!("fa_checked_i64_mul({left}, {right})"),
+        "mul" if output_ty == &Ty::F32 => format!("((float)({left} * {right}))"),
         "mul" => format!("({left} * {right})"),
+        "div" if output_ty == &Ty::I32 => format!("fa_checked_i32_div({left}, {right})"),
         "div" if output_ty == &Ty::I64 => format!("fa_checked_i64_div({left}, {right})"),
+        "div" if output_ty == &Ty::F32 => format!("fa_checked_f32_div({left}, {right})"),
         "div" => format!("fa_checked_f64_div({left}, {right})"),
         "rem" => {
-            if output_ty == &Ty::I64 {
+            if output_ty == &Ty::I32 {
+                format!("fa_checked_i32_rem({left}, {right})")
+            } else if output_ty == &Ty::I64 {
                 format!("fa_checked_i64_rem({left}, {right})")
+            } else if output_ty == &Ty::F32 {
+                format!("fa_checked_f32_rem({left}, {right})")
             } else {
                 format!("fa_checked_f64_rem({left}, {right})")
             }
@@ -1541,12 +1568,19 @@ fn numeric_faultable_binary_expr(name: &str, input: &str, output_ty: &Ty) -> Str
     let left = format!("{input}.f0");
     let right = format!("{input}.f1");
     match (name, inner.as_ref()) {
+        ("div", Ty::I32) => format!("fa_faultable_i32_div({left}, {right})"),
         ("div", Ty::I64) => format!("fa_faultable_i64_div({left}, {right})"),
+        ("div", Ty::F32) => format!("fa_faultable_f32_div({left}, {right})"),
         ("div", Ty::F64) => format!("fa_faultable_f64_div({left}, {right})"),
+        ("rem", Ty::I32) => format!("fa_faultable_i32_rem({left}, {right})"),
         ("rem", Ty::I64) => format!("fa_faultable_i64_rem({left}, {right})"),
+        ("rem", Ty::F32) => format!("fa_faultable_f32_rem({left}, {right})"),
         ("rem", Ty::F64) => format!("fa_faultable_f64_rem({left}, {right})"),
+        ("add", Ty::I32) => format!("fa_faultable_i32_add({left}, {right})"),
         ("add", Ty::I64) => format!("fa_faultable_i64_add({left}, {right})"),
+        ("sub", Ty::I32) => format!("fa_faultable_i32_sub({left}, {right})"),
         ("sub", Ty::I64) => format!("fa_faultable_i64_sub({left}, {right})"),
+        ("mul", Ty::I32) => format!("fa_faultable_i32_mul({left}, {right})"),
         ("mul", Ty::I64) => format!("fa_faultable_i64_mul({left}, {right})"),
         _ => unreachable!(),
     }
@@ -1554,13 +1588,21 @@ fn numeric_faultable_binary_expr(name: &str, input: &str, output_ty: &Ty) -> Str
 
 fn numeric_unary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
     match name {
+        "neg" if output_ty == &Ty::I32 => format!("fa_checked_i32_neg({input})"),
         "neg" if output_ty == &Ty::I64 => format!("fa_checked_i64_neg({input})"),
+        "neg" if output_ty == &Ty::F32 => format!("((float)(-({input})))"),
         "neg" => format!("(-({input}))"),
+        "abs" if output_ty == &Ty::I32 => format!("fa_checked_i32_abs({input})"),
         "abs" if output_ty == &Ty::I64 => format!("fa_checked_i64_abs({input})"),
+        "abs" if output_ty == &Ty::F32 => format!("fabsf({input})"),
         "abs" => format!("fabs({input})"),
+        "sqrt" if output_ty == &Ty::F32 => format!("fa_checked_sqrtf({input})"),
         "sqrt" => format!("fa_checked_sqrt({input})"),
+        "exp" if output_ty == &Ty::F32 => format!("expf({input})"),
         "exp" => format!("exp({input})"),
+        "sin" if output_ty == &Ty::F32 => format!("sinf({input})"),
         "sin" => format!("sin({input})"),
+        "cos" if output_ty == &Ty::F32 => format!("cosf({input})"),
         "cos" => format!("cos({input})"),
         _ => unreachable!(),
     }
@@ -1571,8 +1613,11 @@ fn numeric_faultable_unary_expr(name: &str, input: &str, output_ty: &Ty) -> Stri
         unreachable!("faultable numeric unary op expected faultable output")
     };
     match (name, inner.as_ref()) {
+        ("sqrt", Ty::F32) => format!("fa_faultable_sqrtf({input})"),
         ("sqrt", Ty::F64) => format!("fa_faultable_sqrt({input})"),
+        ("neg", Ty::I32) => format!("fa_faultable_i32_neg({input})"),
         ("neg", Ty::I64) => format!("fa_faultable_i64_neg({input})"),
+        ("abs", Ty::I32) => format!("fa_faultable_i32_abs({input})"),
         ("abs", Ty::I64) => format!("fa_faultable_i64_abs({input})"),
         _ => unreachable!(),
     }
@@ -1974,7 +2019,7 @@ fn binding_target_is_discard(target: &BindingTarget) -> bool {
 
 fn wasm_exportable_input(ty: &Ty) -> bool {
     match ty {
-        Ty::Unit | Ty::I64 | Ty::F64 => true,
+        Ty::Unit | Ty::I32 | Ty::I64 | Ty::F32 | Ty::F64 => true,
         Ty::Tuple(items) => items.iter().all(wasm_exportable_scalar),
         _ => false,
     }
@@ -1985,7 +2030,7 @@ fn wasm_exportable_output(ty: &Ty) -> bool {
 }
 
 fn wasm_exportable_scalar(ty: &Ty) -> bool {
-    matches!(ty, Ty::I64 | Ty::F64)
+    matches!(ty, Ty::I32 | Ty::I64 | Ty::F32 | Ty::F64)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2044,7 +2089,9 @@ fn collect_abi_type(registry: &mut TypeRegistry, ty: &Ty) {
         }
         Ty::SqliteRow => collect_abi_type(registry, &Ty::SqliteValue),
         Ty::Unit
+        | Ty::I32
         | Ty::I64
+        | Ty::F32
         | Ty::F64
         | Ty::Bool
         | Ty::Bytes
@@ -2082,11 +2129,19 @@ fn native_c_header_source(registry: &mut TypeRegistry, prototypes: &[String]) ->
     out.push_str(
         "typedef struct { size_t count; FaTuple_Bytes_Bytes *items; } FaSeq_Tuple_Bytes_Bytes;\n",
     );
+    out.push_str("typedef struct { size_t count; int32_t *items; } FaSeq_i32;\n");
     out.push_str("typedef struct { size_t count; int64_t *items; } FaSeq_i64;\n");
+    out.push_str("typedef struct { size_t count; float *items; } FaSeq_f32;\n");
     out.push_str("typedef struct { size_t count; double *items; } FaSeq_f64;\n");
     out.push_str("typedef struct { size_t count; FaFault *items; } FaSeq_Fault;\n");
     out.push_str(
+        "typedef struct { bool is_fault; FaFault fault; int32_t value; } FaFaultable_i32;\n",
+    );
+    out.push_str(
         "typedef struct { bool is_fault; FaFault fault; int64_t value; } FaFaultable_i64;\n",
+    );
+    out.push_str(
+        "typedef struct { bool is_fault; FaFault fault; float value; } FaFaultable_f32;\n",
     );
     out.push_str(
         "typedef struct { bool is_fault; FaFault fault; double value; } FaFaultable_f64;\n",
@@ -2116,7 +2171,9 @@ fn native_c_header_source(registry: &mut TypeRegistry, prototypes: &[String]) ->
 fn type_suffix(ty: &Ty) -> String {
     match ty {
         Ty::Unit => "Unit".to_string(),
+        Ty::I32 => "i32".to_string(),
         Ty::I64 => "i64".to_string(),
+        Ty::F32 => "f32".to_string(),
         Ty::F64 => "f64".to_string(),
         Ty::Bool => "Bool".to_string(),
         Ty::Bytes => "Bytes".to_string(),

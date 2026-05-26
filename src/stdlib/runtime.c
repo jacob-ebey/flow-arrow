@@ -26,6 +26,46 @@ static int64_t fa_checked_size_to_i64(size_t value, const char *message) {
   return (int64_t)value;
 }
 
+static int32_t fa_checked_i32_add(int32_t left, int32_t right) {
+  int32_t out;
+  if (__builtin_add_overflow(left, right, &out)) fa_die_usage("add: integer overflow");
+  return out;
+}
+
+static int32_t fa_checked_i32_sub(int32_t left, int32_t right) {
+  int32_t out;
+  if (__builtin_sub_overflow(left, right, &out)) fa_die_usage("sub: integer overflow");
+  return out;
+}
+
+static int32_t fa_checked_i32_mul(int32_t left, int32_t right) {
+  int32_t out;
+  if (__builtin_mul_overflow(left, right, &out)) fa_die_usage("mul: integer overflow");
+  return out;
+}
+
+static int32_t fa_checked_i32_div(int32_t left, int32_t right) {
+  if (right == 0) fa_die_usage("div: division by zero");
+  if (left == INT32_MIN && right == -1) fa_die_usage("div: integer overflow");
+  return left / right;
+}
+
+static int32_t fa_checked_i32_rem(int32_t left, int32_t right) {
+  if (right == 0) fa_die_usage("rem: remainder by zero");
+  if (left == INT32_MIN && right == -1) fa_die_usage("rem: integer overflow");
+  return left % right;
+}
+
+static int32_t fa_checked_i32_neg(int32_t value) {
+  if (value == INT32_MIN) fa_die_usage("neg: integer overflow");
+  return -value;
+}
+
+static int32_t fa_checked_i32_abs(int32_t value) {
+  if (value == INT32_MIN) fa_die_usage("abs: integer overflow");
+  return value < 0 ? -value : value;
+}
+
 static int64_t fa_checked_i64_add(int64_t left, int64_t right) {
   int64_t out;
   if (__builtin_add_overflow(left, right, &out)) fa_die_usage("add: integer overflow");
@@ -94,6 +134,49 @@ static FaFaultable_i64 fa_faultable_i64_abs(int64_t value) {
   return FaFaultable_i64_ok(value < 0 ? -value : value);
 }
 
+static FaFaultable_i32 fa_faultable_i32_add(int32_t left, int32_t right) {
+  int32_t out;
+  if (__builtin_add_overflow(left, right, &out)) return FaFaultable_i32_fault(fa_fault_cstr("add: integer overflow"));
+  return FaFaultable_i32_ok(out);
+}
+
+static FaFaultable_i32 fa_faultable_i32_sub(int32_t left, int32_t right) {
+  int32_t out;
+  if (__builtin_sub_overflow(left, right, &out)) return FaFaultable_i32_fault(fa_fault_cstr("sub: integer overflow"));
+  return FaFaultable_i32_ok(out);
+}
+
+static FaFaultable_i32 fa_faultable_i32_mul(int32_t left, int32_t right) {
+  int32_t out;
+  if (__builtin_mul_overflow(left, right, &out)) return FaFaultable_i32_fault(fa_fault_cstr("mul: integer overflow"));
+  return FaFaultable_i32_ok(out);
+}
+
+static FaFaultable_i32 fa_faultable_i32_neg(int32_t value) {
+  if (value == INT32_MIN) return FaFaultable_i32_fault(fa_fault_cstr("neg: integer overflow"));
+  return FaFaultable_i32_ok(-value);
+}
+
+static FaFaultable_i32 fa_faultable_i32_abs(int32_t value) {
+  if (value == INT32_MIN) return FaFaultable_i32_fault(fa_fault_cstr("abs: integer overflow"));
+  return FaFaultable_i32_ok(value < 0 ? -value : value);
+}
+
+static float fa_checked_f32_div(float left, float right) {
+  if (right == 0.0f) fa_die_usage("div: division by zero");
+  return left / right;
+}
+
+static float fa_checked_f32_rem(float left, float right) {
+  if (right == 0.0f) fa_die_usage("rem: remainder by zero");
+  return fmodf(left, right);
+}
+
+static float fa_checked_sqrtf(float value) {
+  if (value < 0.0f) fa_die_usage("sqrt: negative input");
+  return sqrtf(value);
+}
+
 static double fa_checked_f64_div(double left, double right) {
   if (right == 0.0) fa_die_usage("div: division by zero");
   return left / right;
@@ -119,6 +202,33 @@ static FaFaultable_i64 fa_faultable_i64_rem(int64_t left, int64_t right) {
   if (right == 0) return FaFaultable_i64_fault(fa_fault_cstr("rem: remainder by zero"));
   if (left == INT64_MIN && right == -1) return FaFaultable_i64_fault(fa_fault_cstr("rem: integer overflow"));
   return FaFaultable_i64_ok(left % right);
+}
+
+static FaFaultable_i32 fa_faultable_i32_div(int32_t left, int32_t right) {
+  if (right == 0) return FaFaultable_i32_fault(fa_fault_cstr("div: division by zero"));
+  if (left == INT32_MIN && right == -1) return FaFaultable_i32_fault(fa_fault_cstr("div: integer overflow"));
+  return FaFaultable_i32_ok(left / right);
+}
+
+static FaFaultable_i32 fa_faultable_i32_rem(int32_t left, int32_t right) {
+  if (right == 0) return FaFaultable_i32_fault(fa_fault_cstr("rem: remainder by zero"));
+  if (left == INT32_MIN && right == -1) return FaFaultable_i32_fault(fa_fault_cstr("rem: integer overflow"));
+  return FaFaultable_i32_ok(left % right);
+}
+
+static FaFaultable_f32 fa_faultable_f32_div(float left, float right) {
+  if (right == 0.0f) return FaFaultable_f32_fault(fa_fault_cstr("div: division by zero"));
+  return FaFaultable_f32_ok(left / right);
+}
+
+static FaFaultable_f32 fa_faultable_f32_rem(float left, float right) {
+  if (right == 0.0f) return FaFaultable_f32_fault(fa_fault_cstr("rem: remainder by zero"));
+  return FaFaultable_f32_ok(fmodf(left, right));
+}
+
+static FaFaultable_f32 fa_faultable_sqrtf(float value) {
+  if (value < 0.0f) return FaFaultable_f32_fault(fa_fault_cstr("sqrt: negative input"));
+  return FaFaultable_f32_ok(sqrtf(value));
 }
 
 static FaFaultable_f64 fa_faultable_f64_div(double left, double right) {
@@ -431,6 +541,20 @@ static FaSeq_i64 FaSeq_i64_new(size_t count) {
   return seq;
 }
 
+static FaSeq_i32 FaSeq_i32_new(size_t count) {
+  FaSeq_i32 seq;
+  seq.count = count;
+  seq.items = (int32_t *)fa_calloc(count ? count : 1, sizeof(int32_t));
+  return seq;
+}
+
+static FaSeq_f32 FaSeq_f32_new(size_t count) {
+  FaSeq_f32 seq;
+  seq.count = count;
+  seq.items = (float *)fa_calloc(count ? count : 1, sizeof(float));
+  return seq;
+}
+
 static FaSeq_f64 FaSeq_f64_new(size_t count) {
   FaSeq_f64 seq;
   seq.count = count;
@@ -445,6 +569,20 @@ static FaSeq_Fault FaSeq_Fault_new(size_t count) {
   return seq;
 }
 
+static FaFaultable_i32 FaFaultable_i32_ok(int32_t value) {
+  FaFaultable_i32 out;
+  out.is_fault = false;
+  out.value = value;
+  return out;
+}
+
+static FaFaultable_i32 FaFaultable_i32_fault(FaFault fault) {
+  FaFaultable_i32 out;
+  out.is_fault = true;
+  out.fault = fault;
+  return out;
+}
+
 static FaFaultable_i64 FaFaultable_i64_ok(int64_t value) {
   FaFaultable_i64 out;
   out.is_fault = false;
@@ -454,6 +592,20 @@ static FaFaultable_i64 FaFaultable_i64_ok(int64_t value) {
 
 static FaFaultable_i64 FaFaultable_i64_fault(FaFault fault) {
   FaFaultable_i64 out;
+  out.is_fault = true;
+  out.fault = fault;
+  return out;
+}
+
+static FaFaultable_f32 FaFaultable_f32_ok(float value) {
+  FaFaultable_f32 out;
+  out.is_fault = false;
+  out.value = value;
+  return out;
+}
+
+static FaFaultable_f32 FaFaultable_f32_fault(FaFault fault) {
+  FaFaultable_f32 out;
   out.is_fault = true;
   out.fault = fault;
   return out;

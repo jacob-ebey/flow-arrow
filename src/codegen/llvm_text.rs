@@ -470,13 +470,13 @@ impl<'a> LlvmText<'a> {
             "min" | "max" => {
                 let cmp = self.next_temp();
                 let predicate = match (name, left_ty) {
-                    ("min", Ty::F64) => "olt",
-                    ("max", Ty::F64) => "ogt",
+                    ("min", Ty::F32 | Ty::F64) => "olt",
+                    ("max", Ty::F32 | Ty::F64) => "ogt",
                     ("min", _) => "slt",
                     ("max", _) => "sgt",
                     _ => unreachable!(),
                 };
-                let cmp_inst = if matches!(left_ty, Ty::F64) {
+                let cmp_inst = if matches!(left_ty, Ty::F32 | Ty::F64) {
                     "fcmp"
                 } else {
                     "icmp"
@@ -815,16 +815,25 @@ fn tuple_items(ty: &Ty) -> Result<&[Ty], String> {
 
 fn numeric_instruction(name: &str, ty: &Ty) -> Option<&'static str> {
     match (name, ty) {
+        ("add", Ty::I32) => Some("add"),
         ("add", Ty::I64) => Some("add"),
+        ("add", Ty::F32) => Some("fadd"),
         ("add", Ty::F64) => Some("fadd"),
+        ("sub", Ty::I32) => Some("sub"),
         ("sub", Ty::I64) => Some("sub"),
+        ("sub", Ty::F32) => Some("fsub"),
         ("sub", Ty::F64) => Some("fsub"),
+        ("mul", Ty::I32) => Some("mul"),
         ("mul", Ty::I64) => Some("mul"),
+        ("mul", Ty::F32) => Some("fmul"),
         ("mul", Ty::F64) => Some("fmul"),
+        ("div", Ty::I32) => Some("sdiv"),
         ("div", Ty::I64) => Some("sdiv"),
+        ("div", Ty::F32) => Some("fdiv"),
         ("div", Ty::F64) => Some("fdiv"),
+        ("rem", Ty::I32) => Some("srem"),
         ("rem", Ty::I64) => Some("srem"),
-        ("min" | "max", Ty::I64 | Ty::F64) => Some("select"),
+        ("min" | "max", Ty::I32 | Ty::I64 | Ty::F32 | Ty::F64) => Some("select"),
         _ => None,
     }
 }
@@ -832,7 +841,9 @@ fn numeric_instruction(name: &str, ty: &Ty) -> Option<&'static str> {
 fn llvm_ty(ty: &Ty) -> String {
     match ty {
         Ty::Unit => "{ i8 }".to_string(),
+        Ty::I32 => "i32".to_string(),
         Ty::I64 => "i64".to_string(),
+        Ty::F32 => "float".to_string(),
         Ty::F64 => "double".to_string(),
         Ty::Bool => "i1".to_string(),
         Ty::Bytes | Ty::Args | Ty::Fault => "{ i64, ptr }".to_string(),
@@ -871,7 +882,9 @@ fn llvm_ty(ty: &Ty) -> String {
 
 fn default_value(ty: &Ty) -> String {
     match ty {
+        Ty::I32 => "0".to_string(),
         Ty::I64 => "0".to_string(),
+        Ty::F32 => "0.000000e+00".to_string(),
         Ty::F64 => "0.000000e+00".to_string(),
         Ty::Bool => "0".to_string(),
         Ty::HttpServerConfig

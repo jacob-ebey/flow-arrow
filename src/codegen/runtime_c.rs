@@ -1,4 +1,5 @@
 use super::*;
+use crate::stdlib::Effect;
 
 fn gpu_reduce_op(op: &str) -> u32 {
     match op {
@@ -127,14 +128,15 @@ impl<'a> TypedCodegen<'a> {
             out.push_str("extern double fa_gpu_repeat_matrix_accum_f64(const char *wgsl, const FaGpuSliceF64 *left_rows, size_t left_count, const FaGpuSliceF64 *right_rows, size_t right_count, const double *vector, size_t vector_count, double score, int64_t iterations);\n");
         }
         if !self.gpu_plan.is_empty() {
-            out.push_str("extern void fa_gpu_map_i64(const char *wgsl, const int64_t *input, int64_t *output, size_t count);\n");
+            out.push_str("extern void fa_gpu_map_i32(const char *wgsl, const int32_t *input, int32_t *output, size_t count);\n");
+            out.push_str("extern void fa_gpu_map_f32(const char *wgsl, const float *input, float *output, size_t count);\n");
             out.push_str("extern void fa_gpu_map_f64(const char *wgsl, const double *input, double *output, size_t count);\n");
             out.push_str(&self.gpu_plan.emit_c_manifest());
         }
         if self.gpu_enabled {
-            out.push_str("extern int64_t fa_gpu_reduce_i64(uint32_t op, const int64_t *input, size_t count, int64_t identity);\n");
+            out.push_str("extern int32_t fa_gpu_reduce_i32(uint32_t op, const int32_t *input, size_t count, int32_t identity);\n");
+            out.push_str("extern float fa_gpu_reduce_f32(uint32_t op, const float *input, size_t count, float identity);\n");
             out.push_str("extern double fa_gpu_reduce_f64(uint32_t op, const double *input, size_t count, double identity);\n");
-            out.push_str("extern int64_t fa_gpu_range_map_reduce_i64(const char *map_expr, int64_t start, int64_t stop, int64_t step, uint32_t op, int64_t identity);\n");
         }
         for name in &names {
             let sig = self.signatures.get(name).expect("signature");
@@ -254,14 +256,15 @@ impl<'a> TypedCodegen<'a> {
             out.push_str("extern double fa_gpu_repeat_matrix_accum_f64(const char *wgsl, const FaGpuSliceF64 *left_rows, size_t left_count, const FaGpuSliceF64 *right_rows, size_t right_count, const double *vector, size_t vector_count, double score, int64_t iterations);\n");
         }
         if !self.gpu_plan.is_empty() {
-            out.push_str("extern void fa_gpu_map_i64(const char *wgsl, const int64_t *input, int64_t *output, size_t count);\n");
+            out.push_str("extern void fa_gpu_map_i32(const char *wgsl, const int32_t *input, int32_t *output, size_t count);\n");
+            out.push_str("extern void fa_gpu_map_f32(const char *wgsl, const float *input, float *output, size_t count);\n");
             out.push_str("extern void fa_gpu_map_f64(const char *wgsl, const double *input, double *output, size_t count);\n");
             out.push_str(&self.gpu_plan.emit_c_manifest());
         }
         if self.gpu_enabled {
-            out.push_str("extern int64_t fa_gpu_reduce_i64(uint32_t op, const int64_t *input, size_t count, int64_t identity);\n");
+            out.push_str("extern int32_t fa_gpu_reduce_i32(uint32_t op, const int32_t *input, size_t count, int32_t identity);\n");
+            out.push_str("extern float fa_gpu_reduce_f32(uint32_t op, const float *input, size_t count, float identity);\n");
             out.push_str("extern double fa_gpu_reduce_f64(uint32_t op, const double *input, size_t count, double identity);\n");
-            out.push_str("extern int64_t fa_gpu_range_map_reduce_i64(const char *map_expr, int64_t start, int64_t stop, int64_t step, uint32_t op, int64_t identity);\n");
         }
         for name in &names {
             let sig = self.signatures.get(name).expect("signature");
@@ -1039,39 +1042,10 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         }
 
         let chains = fuse_single_use_chains(callable);
-        let mut fused_callable = callable.clone();
-        fused_callable.chains = chains.clone();
-        let fused_reductions = self.gpu_plan.range_map_reductions(&fused_callable);
-        let fused_by_reduce = fused_reductions
-            .iter()
-            .cloned()
-            .map(|reduction| (reduction.reduce_chain, reduction))
-            .collect::<HashMap<_, _>>();
-        let fused_skip = fused_reductions
-            .iter()
-            .flat_map(|reduction| {
-                [
-                    reduction.range_chain,
-                    reduction.map_chain,
-                    reduction.reduce_chain,
-                ]
-            })
-            .collect::<HashSet<_>>();
         let mut chain_index = 0;
         while chain_index < chains.len() {
-            if let Some(reduction) = fused_by_reduce.get(&chain_index) {
-                self.emit_gpu_range_map_reduction(out, reduction, &mut env)?;
-                chain_index += 1;
-                continue;
-            }
-            if fused_skip.contains(&chain_index) {
-                chain_index += 1;
-                continue;
-            }
             let batch_len = self.parallel_chain_batch_len(&chains[chain_index..], &env)?;
-            let batch_crosses_fused_chain =
-                (chain_index..chain_index + batch_len).any(|index| fused_skip.contains(&index));
-            if batch_len > 1 && !batch_crosses_fused_chain {
+            if batch_len > 1 {
                 self.emit_parallel_chain_batch(
                     out,
                     &chains[chain_index..chain_index + batch_len],
@@ -1685,53 +1659,6 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 }
             }
             index += 1;
-        }
-        Ok(())
-    }
-
-    fn emit_gpu_range_map_reduction(
-        &mut self,
-        out: &mut String,
-        reduction: &gpu::GpuRangeMapReduction,
-        env: &mut HashMap<String, Value>,
-    ) -> Result<(), String> {
-        let gpu::GpuScalarKind::I32 = reduction.map_kernel.scalar else {
-            return Err("GPU range reductions currently require i64 range map kernels".to_string());
-        };
-        if reduction.output_ty != Ty::I64 {
-            return Err(format!(
-                "GPU range reduction expected i64 output, found `{}`",
-                reduction.output_ty
-            ));
-        }
-        let range_ty = Ty::Tuple(vec![Ty::I64, Ty::I64, Ty::I64]);
-        let range =
-            self.emit_endpoint_expected(out, &reduction.range_source, env, Some(&range_ty))?;
-        let identity = self.emit_endpoint(out, &reduction.identity, env)?;
-        let tmp = self.next_temp();
-        out.push_str(&format!(
-            "  int64_t {tmp} = fa_gpu_range_map_reduce_i64(\"{}\", {}.f0, {}.f1, {}.f2, {}, {});\n",
-            c_string(&reduction.map_kernel.map_expr),
-            range.code,
-            range.code,
-            range.code,
-            gpu_reduce_op(&reduction.op),
-            identity.code
-        ));
-        if env
-            .insert(
-                reduction.output_name.clone(),
-                Value {
-                    code: tmp,
-                    ty: reduction.output_ty.clone(),
-                },
-            )
-            .is_some()
-        {
-            return Err(format!(
-                "value `{}` is bound more than once",
-                reduction.output_name
-            ));
         }
         Ok(())
     }
@@ -2500,8 +2427,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             .kernel_for_map(name, item_ty.as_ref(), &output_item_ty)
         {
             let map_fn = match kernel.scalar {
-                gpu::GpuScalarKind::I32 => "fa_gpu_map_i64",
-                gpu::GpuScalarKind::F32 => "fa_gpu_map_f64",
+                gpu::GpuScalarKind::I32 => "fa_gpu_map_i32",
+                gpu::GpuScalarKind::F32 => "fa_gpu_map_f32",
+                gpu::GpuScalarKind::F64 => "fa_gpu_map_f64",
             };
             out.push_str(&format!(
                 "  {c_ty} {tmp} = {new_fn}({}.count);\n",
@@ -3014,10 +2942,10 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let canonical = self.canonical_name(op);
         if self.gpu_enabled && matches!(canonical.as_str(), "add" | "min" | "max") {
             match item_ty.as_ref() {
-                Ty::I64 if canonical != "add" => {
+                Ty::I32 if canonical != "add" => {
                     let tmp = self.next_temp();
                     out.push_str(&format!(
-                        "  int64_t {tmp} = fa_gpu_reduce_i64({}, {}.items, {}.count, {});\n",
+                        "  int32_t {tmp} = fa_gpu_reduce_i32({}, {}.items, {}.count, {});\n",
                         gpu_reduce_op(&canonical),
                         input.code,
                         input.code,
@@ -3025,7 +2953,21 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     ));
                     return Ok(Value {
                         code: tmp,
-                        ty: Ty::I64,
+                        ty: Ty::I32,
+                    });
+                }
+                Ty::F32 => {
+                    let tmp = self.next_temp();
+                    out.push_str(&format!(
+                        "  float {tmp} = fa_gpu_reduce_f32({}, {}.items, {}.count, {});\n",
+                        gpu_reduce_op(&canonical),
+                        input.code,
+                        input.code,
+                        identity.code
+                    ));
+                    return Ok(Value {
+                        code: tmp,
+                        ty: Ty::F32,
                     });
                 }
                 Ty::F64 => {
@@ -3133,7 +3075,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             Ty::Faultable(inner) => (*inner, true),
             other => (other, false),
         };
-        let overflow_faultable = plain_ty == Ty::I64;
+        let overflow_faultable = matches!(plain_ty, Ty::I32 | Ty::I64);
         let output_ty = if item_faultable || overflow_faultable {
             Ty::Faultable(Box::new(plain_ty.clone()))
         } else {
@@ -3160,8 +3102,13 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 out.push_str(&format!("    if ({}.items[{i}].is_fault) {{ {tmp}.is_fault = true; {tmp}.fault = {}.items[{i}].fault; break; }}\n", input.code, input.code));
             }
             if overflow_faultable {
+                let add_fn = match plain_ty {
+                    Ty::I32 => "fa_faultable_i32_add",
+                    Ty::I64 => "fa_faultable_i64_add",
+                    _ => unreachable!(),
+                };
                 out.push_str(&format!(
-                    "    {tmp} = fa_faultable_i64_add({tmp}.value, {item_value});\n"
+                    "    {tmp} = {add_fn}({tmp}.value, {item_value});\n"
                 ));
             } else {
                 out.push_str(&format!(
@@ -4939,15 +4886,11 @@ fn vector_score_accumulator_wgsl() -> String {
   matrix2_cols: u32,
   matrix3_rows: u32,
   matrix3_cols: u32,
-  scalar0: f32,
-  scalar1: f32,
-  scalar2: f32,
-  scalar3: f32,
 };
-@group(0) @binding(0) var<storage, read_write> fa_output: array<f32>;
+@group(0) @binding(0) var<storage, read_write> fa_output: array<f64>;
 @group(0) @binding(1) var<uniform> fa_params: FaGpuProgramParams;
-@group(0) @binding(2) var<storage, read> fa_left: array<f32>;
-@group(0) @binding(3) var<storage, read> fa_right: array<f32>;
+@group(0) @binding(2) var<storage, read> fa_left: array<f64>;
+@group(0) @binding(3) var<storage, read> fa_right: array<f64>;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
@@ -4978,16 +4921,12 @@ fn matrix_score_accumulator_wgsl() -> String {
   matrix2_cols: u32,
   matrix3_rows: u32,
   matrix3_cols: u32,
-  scalar0: f32,
-  scalar1: f32,
-  scalar2: f32,
-  scalar3: f32,
 };
-@group(0) @binding(0) var<storage, read_write> fa_output: array<f32>;
+@group(0) @binding(0) var<storage, read_write> fa_output: array<f64>;
 @group(0) @binding(1) var<uniform> fa_params: FaGpuProgramParams;
-@group(0) @binding(2) var<storage, read> fa_vector: array<f32>;
-@group(0) @binding(3) var<storage, read> fa_left: array<f32>;
-@group(0) @binding(4) var<storage, read> fa_right: array<f32>;
+@group(0) @binding(2) var<storage, read> fa_vector: array<f64>;
+@group(0) @binding(3) var<storage, read> fa_left: array<f64>;
+@group(0) @binding(4) var<storage, read> fa_right: array<f64>;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
@@ -4996,7 +4935,7 @@ fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
   let inner = fa_params.matrix0_cols;
   let k = i % inner;
   let left = fa_left[i];
-  var right_sum = 0.0;
+  var right_sum = f64(0.0);
   for (var col = 0u; col < fa_params.matrix1_cols; col = col + 1u) {
     right_sum = right_sum + fa_right[k * fa_params.matrix1_cols + col];
   }

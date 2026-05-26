@@ -238,10 +238,11 @@ foreign c header "./native_math.h" source "./native_math.c" {
 ```
 
 The C function must use FlowArrow's C ABI lowering for the declared input and
-output types. For example, `i64` lowers to `int64_t`, `f64` to `double`, and
-`Bytes` to `FaBytes` (`char *bytes; size_t len`). If a `foreign c` declaration
-omits `source`, the symbol must be supplied through normal linker inputs.
-WASM builds reject foreign declarations for now.
+output types. For example, `i32` lowers to `int32_t`, `i64` to `int64_t`,
+`f32` to `float`, `f64` to `double`, and `Bytes` to `FaBytes`
+(`char *bytes; size_t len`). If a `foreign c` declaration omits `source`, the
+symbol must be supplied through normal linker inputs. WASM builds reject
+foreign declarations for now.
 
 Worker-backed concurrency is opt-in for JavaScript and TypeScript builds:
 
@@ -274,21 +275,25 @@ flowarrow run --gpu path/to/main.flow
 The compiler keeps GPU support in the backend lowering pipeline, not in a
 separate evaluator. A backend-neutral GPU planner walks the typed module and
 recognizes GPU-legal typed regions. The implemented scalar path covers pure
-`Seq[i64] -> Seq[i64]` and `Seq[f64] -> Seq[f64]` `map` kernels plus numeric
-`reduce min` and `reduce max` over `Seq[i64]`, and `reduce add`,
-`reduce min`, and `reduce max` over `Seq[f64]`. Integer `reduce add`
-returns `Faultable[i64]` because overflow is recoverable, so it is not lowered
-to the current plain `i64` GPU reduction helper.
-It also recognizes `range_step -> map i64 -> reduce` groups and lowers them as
-GPU-resident virtual-range reductions, so the host does not materialize the
-range or mapped sequence when every downstream consumer is reducible on the GPU.
+`Seq[i32] -> Seq[i32]`, `Seq[f32] -> Seq[f32]`, and `Seq[f64] -> Seq[f64]`
+`map` kernels plus numeric `reduce min` and `reduce max` over `Seq[i32]`, and
+`reduce add`, `reduce min`, and `reduce max` over `Seq[f32]` and `Seq[f64]`.
+Integer `reduce add`
+returns `Faultable[i32]` because overflow is recoverable, so it is not lowered
+to a plain GPU reduction helper. The GPU backend does not silently lower
+source-level `i64` or `f64` values to narrower GPU representations.
+`f64` GPU execution uses WGSL `f64` storage and arithmetic and requires a
+device exposing wgpu `SHADER_F64`; runtimes fail with an explicit f64 GPU
+support error when that feature is unavailable. Current wgpu support for
+`SHADER_F64` is not portable across backends, so WebGPU/browser and
+macOS/Metal adapters can reject FlowArrow `f64` GPU kernels even on recent
+hardware.
 The planner lowers map regions to WGSL with explicit storage buffers and a
 workgroup dispatch shape. GPU-targeted artifacts require a GPU at runtime and
 fail if a device cannot be acquired. Native/LLVM builds lower eligible maps,
-reductions, virtual range reductions, and generated repeat accumulator programs
-to direct calls into a generated Rust `wgpu` runtime library. TypeScript and
-JavaScript GPU builds compile that same runtime source to a wasm-bindgen
-WebGPU module (`flowarrow_gpu_runtime.mjs` plus
+and reductions to direct calls into a generated Rust `wgpu` runtime library.
+TypeScript and JavaScript GPU builds compile that same runtime source to a
+wasm-bindgen WebGPU module (`flowarrow_gpu_runtime.mjs` plus
 `flowarrow_gpu_runtime_bg.wasm`) and emit only thin async calls into that
 runtime. Both packaging paths compile and dispatch WGSL through `wgpu`, and
 neither path falls back to CPU execution when GPU execution is requested.
@@ -352,9 +357,8 @@ are rejected because the browser compiler has no source file path.
   suitable for browsers or JavaScript runtimes. The implemented first
   slice is `--crate-type cdylib` with ABI-compatible top-level
   `extern node` declarations exported as core WASM functions. Exported
-  node inputs and outputs are
-  currently limited to scalar `i64` and `f64` values, with `i64`
-  represented as WASM `i64`.
+  node inputs and outputs currently support scalar `i32`, `i64`, `f32`,
+  and `f64` values with matching core WASM value types.
 - The `wasm32-wasi` target produces a module runnable under wasmtime
   / wasmer / wasi-compatible hosts. This target is planned but not yet
   implemented.

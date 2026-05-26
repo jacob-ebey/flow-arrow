@@ -4,7 +4,9 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Type {
     Unit,
+    I32,
     I64,
+    F32,
     F64,
     Bool,
     Bytes,
@@ -77,7 +79,9 @@ impl Type {
 pub(crate) fn primitive_types() -> HashMap<String, Type> {
     HashMap::from([
         ("Unit".to_string(), Type::Unit),
+        ("i32".to_string(), Type::I32),
         ("i64".to_string(), Type::I64),
+        ("f32".to_string(), Type::F32),
         ("f64".to_string(), Type::F64),
         ("Bool".to_string(), Type::Bool),
         ("Bytes".to_string(), Type::Bytes),
@@ -421,7 +425,9 @@ impl TypeParser {
 
         Ok(match name.as_str() {
             "Unit" => Type::Unit,
+            "i32" => Type::I32,
             "i64" => Type::I64,
+            "f32" => Type::F32,
             "f64" => Type::F64,
             "Bool" => Type::Bool,
             "Bytes" => Type::Bytes,
@@ -509,7 +515,9 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::Unit => write!(f, "()"),
+            Type::I32 => write!(f, "i32"),
             Type::I64 => write!(f, "i64"),
+            Type::F32 => write!(f, "f32"),
             Type::F64 => write!(f, "f64"),
             Type::Bool => write!(f, "Bool"),
             Type::Bytes => write!(f, "Bytes"),
