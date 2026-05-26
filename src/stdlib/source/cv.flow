@@ -1,4 +1,5 @@
 import std.bytes { bytes_to_codes, byte_length }
+import std.fault { expect }
 import std.fs { read_file, write_file }
 import std.math {
     abs as math_abs,
@@ -69,7 +70,7 @@ node gray_value_to_srgb_pixel(value: Real) -> pixel: Pixel {
 
 node gray_code_to_srgb_pixel(code: Int) -> pixel: Pixel {
     $code               -> from_int -> $real_code
-    ($real_code, 255.0) -> math_div -> gray_value_to_srgb_pixel -> $pixel
+    ($real_code, 255.0) -> math_div -> expect -> gray_value_to_srgb_pixel -> $pixel
 }
 
 node srgb_pixel_to_luma(pixel: Pixel) -> luma: Real {

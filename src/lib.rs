@@ -827,6 +827,7 @@ mod tests {
     #[test]
     fn javascript_gpu_accumulator_keeps_pure_initializers_synchronous() {
         let source = r#"
+            import std.fault { expect }
             import std.math { add, rem }
             import std.real { from_int }
             import std.vector { dot, squared_distance, squared_norm }
@@ -839,14 +840,14 @@ mod tests {
             }
 
             node left_value(index: Int) -> value: Real {
-                ($index, 11)  -> rem      -> $wrapped
+                ($index, 11)  -> rem      -> expect -> $wrapped
                 ($wrapped, 1) -> add      -> $offset
                 $offset       -> from_int -> $value
             }
 
             node right_value(index: Int) -> value: Real {
                 ($index, 3)    -> add      -> $shifted
-                ($shifted, 11) -> rem      -> $wrapped
+                ($shifted, 11) -> rem      -> expect -> $wrapped
                 ($wrapped, 1)  -> add      -> $offset
                 $offset        -> from_int -> $value
             }
@@ -902,6 +903,7 @@ mod tests {
     #[test]
     fn typescript_range_map_real_batches_use_packed_numeric_sequences() {
         let source = r#"
+            import std.fault { expect }
             import std.math { add, rem }
             import std.real { from_int }
 
@@ -912,14 +914,14 @@ mod tests {
             }
 
             node left_value(index: Int) -> value: Real {
-                ($index, 11)  -> rem      -> $wrapped
+                ($index, 11)  -> rem      -> expect -> $wrapped
                 ($wrapped, 1) -> add      -> $offset
                 $offset       -> from_int -> $value
             }
 
             node right_value(index: Int) -> value: Real {
                 ($index, 3)    -> add      -> $shifted
-                ($shifted, 11) -> rem      -> $wrapped
+                ($shifted, 11) -> rem      -> expect -> $wrapped
                 ($wrapped, 1)  -> add      -> $offset
                 $offset        -> from_int -> $value
             }
@@ -1935,6 +1937,7 @@ extern node demo(value: Int) -> out: Int {
             &path,
             r#"
                 import std.cli { Args }
+                import std.fault { expect }
                 import std.math { mul, div, rem, lt, gt, le, ge, eq }
 
                 program main(args: Args) -> exit_code: Int {
@@ -1943,11 +1946,11 @@ extern node demo(value: Int) -> out: Int {
                     ($product, 12) -> eq -> $mul_ok
 
                     # div: 10 / 3 = 3 (truncating)
-                    (10, 3) -> div -> $quotient
+                    (10, 3) -> div -> expect -> $quotient
                     ($quotient, 3) -> eq -> $div_ok
 
                     # rem: 10 % 3 = 1
-                    (10, 3) -> rem -> $remainder
+                    (10, 3) -> rem -> expect -> $remainder
                     ($remainder, 1) -> eq -> $rem_ok
 
                     # lt: 2 < 5 = true

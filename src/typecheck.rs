@@ -2530,11 +2530,10 @@ fn format_endpoint_list_for_error(items: &[Endpoint], open: &str, close: &str) -
 fn stdlib_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, String> {
     if symbol.module == "std.math" {
         match symbol.name {
-            "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
-                return Ok(numeric_binary_signatures());
-            }
+            "add" | "sub" | "mul" | "min" | "max" => return Ok(numeric_binary_signatures()),
+            "div" | "rem" => return Ok(numeric_faultable_binary_signatures()),
             "neg" | "abs" => return Ok(numeric_unary_signatures()),
-            "sqrt" => return Ok(numeric_real_unary_signatures()),
+            "sqrt" => return Ok(numeric_faultable_real_unary_signatures()),
             "eq" | "lt" | "gt" | "le" | "ge" => return Ok(numeric_comparison_signatures()),
             _ => {}
         }
@@ -2578,6 +2577,16 @@ fn numeric_binary_signatures() -> Vec<Signature> {
     ]
 }
 
+fn numeric_faultable_binary_signatures() -> Vec<Signature> {
+    numeric_binary_signatures()
+        .into_iter()
+        .map(|signature| Signature {
+            input: signature.input,
+            output: Type::Faultable(Box::new(signature.output)),
+        })
+        .collect()
+}
+
 fn numeric_unary_signatures() -> Vec<Signature> {
     vec![
         Signature {
@@ -2602,6 +2611,16 @@ fn numeric_real_unary_signatures() -> Vec<Signature> {
             output: Type::Real,
         },
     ]
+}
+
+fn numeric_faultable_real_unary_signatures() -> Vec<Signature> {
+    numeric_real_unary_signatures()
+        .into_iter()
+        .map(|signature| Signature {
+            input: signature.input,
+            output: Type::Faultable(Box::new(signature.output)),
+        })
+        .collect()
 }
 
 fn numeric_comparison_signatures() -> Vec<Signature> {

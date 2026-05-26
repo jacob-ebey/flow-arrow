@@ -3518,10 +3518,22 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             "format_real" => {
                 self.emit_format_faultable_or_plain(out, target, input, input_ty, "fa_format_real")?
             }
+            "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
+                out.push_str(&format!(
+                    "  {target} = {};\n",
+                    numeric_faultable_binary_expr(name, input, output_ty)
+                ));
+            }
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 out.push_str(&format!(
                     "  {target} = {};\n",
                     numeric_binary_expr(name, input, output_ty)
+                ));
+            }
+            "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
+                out.push_str(&format!(
+                    "  {target} = {};\n",
+                    numeric_faultable_unary_expr(name, input, output_ty)
                 ));
             }
             "neg" | "abs" | "sqrt" | "exp" | "sin" | "cos" => {

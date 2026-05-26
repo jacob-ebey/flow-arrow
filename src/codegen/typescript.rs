@@ -2413,6 +2413,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             "parse_real" => format!("faParseReal({})", input.code),
             "from_int" => format!("Number({})", input.code),
             "format_int" | "format_real" => format!("{}.toString()", input.code),
+            "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
+                ts_faultable_numeric_binary_expr(name, input, output_ty)
+            }
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 ts_numeric_binary_expr(name, input, output_ty)
             }
@@ -2420,6 +2423,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             "neg" => format!("(-{})", input.code),
             "abs" if output_ty == &Ty::Int => format!("faCheckedI64Abs({})", input.code),
             "abs" => format!("Math.abs({})", input.code),
+            "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
+                format!("faFaultableSqrt({})", input.code)
+            }
             "sqrt" => format!("faCheckedSqrt({})", input.code),
             "exp" => format!("Math.exp({})", input.code),
             "sin" => format!("Math.sin({})", input.code),
@@ -3437,6 +3443,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         input: &TsValue,
         output_ty: &Ty,
     ) -> Result<Option<String>, String> {
+        if matches!(output_ty, Ty::Faultable(_)) {
+            return Ok(None);
+        }
         let expr = match name {
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 ts_numeric_binary_expr(name, input, output_ty)
@@ -3877,6 +3886,21 @@ fn ts_numeric_binary_expr(name: &str, input: &TsValue, output_ty: &Ty) -> String
     }
 }
 
+fn ts_faultable_numeric_binary_expr(name: &str, input: &TsValue, output_ty: &Ty) -> String {
+    let Ty::Faultable(inner) = output_ty else {
+        unreachable!("faultable numeric binary op expected faultable output")
+    };
+    let left = tuple_field(input, 0);
+    let right = tuple_field(input, 1);
+    match (name, inner.as_ref()) {
+        ("div", Ty::Int) => format!("faFaultableI64Div({left}, {right})"),
+        ("div", Ty::Real) => format!("faFaultableRealDiv(Number({left}), Number({right}))"),
+        ("rem", Ty::Int) => format!("faFaultableI64Rem({left}, {right})"),
+        ("rem", Ty::Real) => format!("faFaultableRealRem(Number({left}), Number({right}))"),
+        _ => unreachable!(),
+    }
+}
+
 const TS_RESERVED: &[&str] = &[
     "break",
     "case",
@@ -4124,6 +4148,33 @@ function faCheckedRealRem(left: number, right: number): number {
 function faCheckedSqrt(value: number): number {
   if (value < 0) throw new Error("sqrt: negative input");
   return Math.sqrt(value);
+}
+
+function faFaultableI64Div(left: bigint, right: bigint): FaFaultable<bigint> {
+  if (right === 0n) return faFaultMessage("div: division by zero");
+  if (left === FA_I64_MIN && right === -1n) return faFaultMessage("div: integer overflow");
+  return faOk(left / right);
+}
+
+function faFaultableI64Rem(left: bigint, right: bigint): FaFaultable<bigint> {
+  if (right === 0n) return faFaultMessage("rem: remainder by zero");
+  if (left === FA_I64_MIN && right === -1n) return faFaultMessage("rem: integer overflow");
+  return faOk(left % right);
+}
+
+function faFaultableRealDiv(left: number, right: number): FaFaultable<number> {
+  if (right === 0) return faFaultMessage("div: division by zero");
+  return faOk(left / right);
+}
+
+function faFaultableRealRem(left: number, right: number): FaFaultable<number> {
+  if (right === 0) return faFaultMessage("rem: remainder by zero");
+  return faOk(left % right);
+}
+
+function faFaultableSqrt(value: number): FaFaultable<number> {
+  if (value < 0) return faFaultMessage("sqrt: negative input");
+  return faOk(Math.sqrt(value));
 }
 
 function faParseReal(bytes: string): FaFaultable<number> {

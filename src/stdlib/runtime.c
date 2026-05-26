@@ -81,6 +81,33 @@ static double fa_checked_sqrt(double value) {
   return sqrt(value);
 }
 
+static FaFaultable_Int fa_faultable_i64_div(int64_t left, int64_t right) {
+  if (right == 0) return FaFaultable_Int_fault(fa_fault_cstr("div: division by zero"));
+  if (left == INT64_MIN && right == -1) return FaFaultable_Int_fault(fa_fault_cstr("div: integer overflow"));
+  return FaFaultable_Int_ok(left / right);
+}
+
+static FaFaultable_Int fa_faultable_i64_rem(int64_t left, int64_t right) {
+  if (right == 0) return FaFaultable_Int_fault(fa_fault_cstr("rem: remainder by zero"));
+  if (left == INT64_MIN && right == -1) return FaFaultable_Int_fault(fa_fault_cstr("rem: integer overflow"));
+  return FaFaultable_Int_ok(left % right);
+}
+
+static FaFaultable_Real fa_faultable_f64_div(double left, double right) {
+  if (right == 0.0) return FaFaultable_Real_fault(fa_fault_cstr("div: division by zero"));
+  return FaFaultable_Real_ok(left / right);
+}
+
+static FaFaultable_Real fa_faultable_f64_rem(double left, double right) {
+  if (right == 0.0) return FaFaultable_Real_fault(fa_fault_cstr("rem: remainder by zero"));
+  return FaFaultable_Real_ok(fmod(left, right));
+}
+
+static FaFaultable_Real fa_faultable_sqrt(double value) {
+  if (value < 0.0) return FaFaultable_Real_fault(fa_fault_cstr("sqrt: negative input"));
+  return FaFaultable_Real_ok(sqrt(value));
+}
+
 static int fa_preview_len(size_t len) {
   return len > 240 ? 240 : (int)len;
 }

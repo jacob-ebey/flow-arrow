@@ -12,11 +12,11 @@ pub const ADD: StdSymbol = reducible_node(
 );
 pub const SUB: StdSymbol = node(MODULE, "sub", "(Number,Number)", "Number");
 pub const MUL: StdSymbol = node(MODULE, "mul", "(Number,Number)", "Number");
-pub const DIV: StdSymbol = node(MODULE, "div", "(Number,Number)", "Number");
-pub const REM: StdSymbol = node(MODULE, "rem", "(Number,Number)", "Number");
+pub const DIV: StdSymbol = node(MODULE, "div", "(Number,Number)", "Faultable[Number]");
+pub const REM: StdSymbol = node(MODULE, "rem", "(Number,Number)", "Faultable[Number]");
 pub const NEG: StdSymbol = node(MODULE, "neg", "Number", "Number");
 pub const ABS: StdSymbol = node(MODULE, "abs", "Number", "Number");
-pub const SQRT: StdSymbol = node(MODULE, "sqrt", "Number", "Real");
+pub const SQRT: StdSymbol = node(MODULE, "sqrt", "Number", "Faultable[Real]");
 pub const EXP: StdSymbol = node(MODULE, "exp", "Number", "Real");
 pub const SIN: StdSymbol = node(MODULE, "sin", "Number", "Real");
 pub const COS: StdSymbol = node(MODULE, "cos", "Number", "Real");

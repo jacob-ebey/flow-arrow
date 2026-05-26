@@ -19,20 +19,20 @@ mul          : (Int, Int)   -> Int
              | (Int, Real)  -> Real
              | (Real, Int)  -> Real
              | (Real, Real) -> Real
-div          : (Int, Int)   -> Int
-             | (Int, Real)  -> Real
-             | (Real, Int)  -> Real
-             | (Real, Real) -> Real
-rem          : (Int, Int)   -> Int
-             | (Int, Real)  -> Real
-             | (Real, Int)  -> Real
-             | (Real, Real) -> Real
+div          : (Int, Int)   -> Faultable[Int]
+             | (Int, Real)  -> Faultable[Real]
+             | (Real, Int)  -> Faultable[Real]
+             | (Real, Real) -> Faultable[Real]
+rem          : (Int, Int)   -> Faultable[Int]
+             | (Int, Real)  -> Faultable[Real]
+             | (Real, Int)  -> Faultable[Real]
+             | (Real, Real) -> Faultable[Real]
 neg          : Int          -> Int
              | Real         -> Real
 abs          : Int          -> Int
              | Real         -> Real
-sqrt         : Int          -> Real
-             | Real         -> Real
+sqrt         : Int          -> Faultable[Real]
+             | Real         -> Faultable[Real]
 eq           : (Int, Int)   -> Bool
              | (Int, Real)  -> Bool
              | (Real, Int)  -> Bool
@@ -102,7 +102,7 @@ Divides the first numeric value by the second. Integer divided by integer
 returns `Int` (truncating toward zero); any combination involving `Real`
 returns `Real`.
 
-- Division by zero is a boundary/data validation fault.
+- Division by zero is reported as `Faultable`.
 - Not associative.
 
 ### `rem`
@@ -112,7 +112,7 @@ Integer remainder by integer returns `Int` (same sign as the dividend,
 matching C `%`); any combination involving `Real` returns `Real` (matching
 C `fmod`).
 
-- Remainder by zero is a boundary/data validation fault.
+- Remainder by zero is reported as `Faultable`.
 - Not associative.
 
 ### `neg`
@@ -127,8 +127,8 @@ as a runtime usage fault.
 
 ### `sqrt`
 
-Returns the square root as `Real`. Negative inputs are reported as a
-runtime usage fault.
+Returns the square root as `Faultable[Real]`. Negative inputs are reported as
+fault values.
 
 ### `eq`
 
@@ -163,6 +163,7 @@ Returns the larger of two numeric values. Integer with integer returns
 ## Examples
 
 ```flow
+import std.fault { expect }
 import std.math { add, eq, mul, rem, lt, sqrt }
 
 node is_sum_one(x: Real, y: Real, n: Int) -> out: Bool {
@@ -171,7 +172,7 @@ node is_sum_one(x: Real, y: Real, n: Int) -> out: Bool {
 }
 
 node is_divisible(n: Int, d: Int) -> out: Bool {
-    ($n, $d) -> rem -> $r
+    ($n, $d) -> rem -> expect -> $r
     ($r, 0) -> eq -> $out
 }
 
@@ -182,6 +183,6 @@ node is_positive(n: Int) -> out: Bool {
 node hypotenuse(x: Real, y: Real) -> out: Real {
     ($x, $x) -> mul -> $xx
     ($y, $y) -> mul -> $yy
-    ($xx, $yy) -> add -> sqrt -> $out
+    ($xx, $yy) -> add -> sqrt -> expect -> $out
 }
 ```

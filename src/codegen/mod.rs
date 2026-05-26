@@ -953,9 +953,11 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             Ty::Faultable(_) => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
             _ => Ok(Ty::Bytes),
         },
-        "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => numeric_binary_output(input),
+        "add" | "sub" | "mul" | "min" | "max" => numeric_binary_output(input),
+        "div" | "rem" => Ok(Ty::Faultable(Box::new(numeric_binary_output(input)?))),
         "neg" | "abs" => Ok(input.clone()),
-        "sqrt" | "exp" | "sin" | "cos" => Ok(Ty::Real),
+        "sqrt" => Ok(Ty::Faultable(Box::new(Ty::Real))),
+        "exp" | "sin" | "cos" => Ok(Ty::Real),
         "eq" | "lt" | "gt" | "le" | "ge" | "not_empty" | "is_empty" | "and" | "or" | "xor"
         | "not" | "all" | "any" | "has_faults" => Ok(Ty::Bool),
         "collect" => {
@@ -1524,6 +1526,21 @@ fn numeric_binary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
     }
 }
 
+fn numeric_faultable_binary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
+    let Ty::Faultable(inner) = output_ty else {
+        unreachable!("faultable numeric binary op expected faultable output")
+    };
+    let left = format!("{input}.f0");
+    let right = format!("{input}.f1");
+    match (name, inner.as_ref()) {
+        ("div", Ty::Int) => format!("fa_faultable_i64_div({left}, {right})"),
+        ("div", Ty::Real) => format!("fa_faultable_f64_div((double){left}, (double){right})"),
+        ("rem", Ty::Int) => format!("fa_faultable_i64_rem({left}, {right})"),
+        ("rem", Ty::Real) => format!("fa_faultable_f64_rem((double){left}, (double){right})"),
+        _ => unreachable!(),
+    }
+}
+
 fn numeric_unary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
     match name {
         "neg" if output_ty == &Ty::Int => format!("fa_checked_i64_neg({input})"),
@@ -1534,6 +1551,16 @@ fn numeric_unary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
         "exp" => format!("exp((double){input})"),
         "sin" => format!("sin((double){input})"),
         "cos" => format!("cos((double){input})"),
+        _ => unreachable!(),
+    }
+}
+
+fn numeric_faultable_unary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
+    let Ty::Faultable(inner) = output_ty else {
+        unreachable!("faultable numeric unary op expected faultable output")
+    };
+    match (name, inner.as_ref()) {
+        ("sqrt", Ty::Real) => format!("fa_faultable_sqrt((double){input})"),
         _ => unreachable!(),
     }
 }

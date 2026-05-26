@@ -8,6 +8,7 @@ import std.math {
     sqrt as math_sqrt,
     eq as math_eq,
 }
+import std.fault { expect }
 import std.predicates { all }
 import std.seq { length, zip, broadcast_left, broadcast_right }
 import std.tuple { first, second }
@@ -19,7 +20,7 @@ extern node sum(values: Seq[Real]) -> total: Real {
 extern node mean(values: Seq[Real]) -> average: Real {
     $values          -> sum      -> $total
     $values          -> length   -> $count
-    ($total, $count) -> math_div -> $average
+    ($total, $count) -> math_div -> expect -> $average
 }
 
 node add_pair(pair: (Real, Real)) -> out: Real {
@@ -35,7 +36,7 @@ node mul_pair(pair: (Real, Real)) -> out: Real {
 }
 
 node div_pair(pair: (Real, Real)) -> out: Real {
-    $pair -> math_div -> $out
+    $pair -> math_div -> expect -> $out
 }
 
 node eq_pair(pair: (Real, Real)) -> out: Bool {
@@ -127,7 +128,7 @@ extern node l1_norm(values: Seq[Real]) -> total: Real {
 }
 
 extern node norm(values: Seq[Real]) -> total: Real {
-    $values -> squared_norm -> math_sqrt -> $total
+    $values -> squared_norm -> math_sqrt -> expect -> $total
 }
 
 extern node normalize(values: Seq[Real]) -> out: Seq[Real] {
@@ -137,10 +138,10 @@ extern node normalize(values: Seq[Real]) -> out: Seq[Real] {
 
 extern node cosine_similarity(inputs: (Seq[Real], Seq[Real])) -> out: Real {
     $inputs                    -> dot      -> $numerator
-    $inputs                    -> first    -> norm -> $left_norm
-    $inputs                    -> second   -> norm -> $right_norm
+    $inputs                    -> first    -> norm   -> $left_norm
+    $inputs                    -> second   -> norm   -> $right_norm
     ($left_norm, $right_norm)  -> math_mul -> $denominator
-    ($numerator, $denominator) -> math_div -> $out
+    ($numerator, $denominator) -> math_div -> expect -> $out
 }
 
 extern node squared_distance(inputs: (Seq[Real], Seq[Real])) -> total: Real {
@@ -148,5 +149,5 @@ extern node squared_distance(inputs: (Seq[Real], Seq[Real])) -> total: Real {
 }
 
 extern node distance(inputs: (Seq[Real], Seq[Real])) -> total: Real {
-    $inputs -> squared_distance -> math_sqrt -> $total
+    $inputs -> squared_distance -> math_sqrt -> expect -> $total
 }

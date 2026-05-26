@@ -41,10 +41,63 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             });
         }
         let value = match name {
+            "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
+                let function_name = match (&output_ty, name) {
+                    (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::Int => {
+                        "fa_faultable_i64_div"
+                    }
+                    (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::Real => {
+                        "fa_faultable_f64_div"
+                    }
+                    (Ty::Faultable(inner), "rem") if inner.as_ref() == &Ty::Int => {
+                        "fa_faultable_i64_rem"
+                    }
+                    (Ty::Faultable(inner), "rem") if inner.as_ref() == &Ty::Real => {
+                        "fa_faultable_f64_rem"
+                    }
+                    _ => {
+                        return Err(format!(
+                            "unsupported faultable numeric output `{output_ty}`"
+                        ));
+                    }
+                };
+                if matches!(&output_ty, Ty::Faultable(inner) if inner.as_ref() == &Ty::Real) {
+                    let Ty::Tuple(items) = input.ty.clone() else {
+                        return Err(format!("`{name}` expected tuple input"));
+                    };
+                    let [left_ty, right_ty] = items.as_slice() else {
+                        return Err(format!("`{name}` expected pair input"));
+                    };
+                    let left = self.extract_tuple_field(&input, 0)?;
+                    let right = self.extract_tuple_field(&input, 1)?;
+                    let left = self.cast_to_real(left, left_ty)?;
+                    let right = self.cast_to_real(right, right_ty)?;
+                    self.emit_runtime_sret_call(
+                        function_name,
+                        &output_ty,
+                        &[
+                            self.context.f64_type().into(),
+                            self.context.f64_type().into(),
+                        ],
+                        &[left.into(), right.into()],
+                    )?
+                } else {
+                    self.emit_runtime_binary(function_name, input, &output_ty)?
+                }
+            }
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 self.emit_numeric_binary(name, input)?
             }
             "from_int" => self.emit_from_int(input)?,
+            "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
+                let value = self.cast_to_real(input.value, &input.ty)?;
+                self.emit_runtime_sret_call(
+                    "fa_faultable_sqrt",
+                    &output_ty,
+                    &[self.context.f64_type().into()],
+                    &[value.into()],
+                )?
+            }
             "neg" | "abs" | "sqrt" | "exp" | "sin" | "cos" => {
                 self.emit_numeric_unary(name, input, &output_ty)?
             }
