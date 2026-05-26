@@ -2,9 +2,9 @@
 #
 # Pure export-oriented version used by JavaScript/WebGPU browser validation.
 import std.fault { expect }
-import std.math { add, mul, rem, sub }
+import std.math { add, rem }
 import std.real { from_int_f32 }
-import std.seq { zip }
+import std.vector { dot_f32, squared_distance_f32, squared_norm_f32 }
 
 extern node run_gpu_accumulator(iterations: i64) -> score: f32 {
     (1, 1025, 1)           -> range_step                       -> $indices
@@ -25,36 +25,6 @@ node right_value(index: i64) -> value: f32 {
     ($shifted, 11) -> rem          -> expect -> $wrapped
     ($wrapped, 1)  -> add          -> expect -> $offset
     $offset        -> from_int_f32 -> $value
-}
-
-node dot_pair(pair: (f32, f32)) -> product: f32 {
-    $pair -> mul -> $product
-}
-
-extern node dot_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
-    0       -> from_int_f32 -> $zero
-    $inputs -> zip          -> map dot_pair -> reduce add(identity: $zero) -> $total
-}
-
-node square(value: f32) -> out: f32 {
-    ($value, $value) -> mul -> $out
-}
-
-node sub_pair(pair: (f32, f32)) -> out: f32 {
-    $pair -> sub -> $out
-}
-
-extern node sub_f32(inputs: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
-    $inputs -> zip -> map sub_pair -> $out
-}
-
-extern node squared_norm_f32(values: Seq[f32]) -> total: f32 {
-    0       -> from_int_f32 -> $zero
-    $values -> map square   -> reduce add(identity: $zero) -> $total
-}
-
-extern node squared_distance_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
-    $inputs -> sub_f32 -> squared_norm_f32 -> $total
 }
 
 node score_kernel(left: Seq[f32], right: Seq[f32], score: f32) -> (out_left: Seq[f32], out_right: Seq[f32], out_score: f32) {

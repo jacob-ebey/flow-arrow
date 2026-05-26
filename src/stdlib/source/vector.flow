@@ -10,7 +10,7 @@ import std.math {
 }
 import std.fault { expect }
 import std.predicates { all }
-import std.real { from_int }
+import std.real { from_int, from_int_f32 }
 import std.seq { length, zip, broadcast_left, broadcast_right }
 import std.tuple { first, second }
 
@@ -151,4 +151,145 @@ extern node squared_distance(inputs: (Seq[f64], Seq[f64])) -> total: f64 {
 
 extern node distance(inputs: (Seq[f64], Seq[f64])) -> total: f64 {
     $inputs -> squared_distance -> math_sqrt -> expect -> $total
+}
+
+extern node sum_f32(values: Seq[f32]) -> total: f32 {
+    0       -> from_int_f32                     -> $zero
+    $values -> reduce math_add(identity: $zero) -> $total
+}
+
+extern node mean_f32(values: Seq[f32]) -> average: f32 {
+    $values          -> sum_f32  -> $total
+    $values          -> length   -> from_int_f32 -> $count
+    ($total, $count) -> math_div -> expect       -> $average
+}
+
+node add_pair_f32(pair: (f32, f32)) -> out: f32 {
+    $pair -> math_add -> $out
+}
+
+node sub_pair_f32(pair: (f32, f32)) -> out: f32 {
+    $pair -> math_sub -> $out
+}
+
+node mul_pair_f32(pair: (f32, f32)) -> out: f32 {
+    $pair -> math_mul -> $out
+}
+
+node div_pair_f32(pair: (f32, f32)) -> out: f32 {
+    $pair -> math_div -> expect -> $out
+}
+
+node eq_pair_f32(pair: (f32, f32)) -> out: Bool {
+    $pair -> math_eq -> $out
+}
+
+node neg_value_f32(value: f32) -> out: f32 {
+    $value -> math_neg -> $out
+}
+
+node abs_value_f32(value: f32) -> out: f32 {
+    $value -> math_abs -> $out
+}
+
+extern node neg_f32(values: Seq[f32]) -> out: Seq[f32] {
+    $values -> map neg_value_f32 -> $out
+}
+
+extern node abs_f32(values: Seq[f32]) -> out: Seq[f32] {
+    $values -> map abs_value_f32 -> $out
+}
+
+extern node add_f32(inputs: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
+    $inputs -> zip -> map add_pair_f32 -> $out
+}
+
+extern node sub_f32(inputs: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
+    $inputs -> zip -> map sub_pair_f32 -> $out
+}
+
+extern node mul_f32(inputs: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
+    $inputs -> zip -> map mul_pair_f32 -> $out
+}
+
+extern node div_f32(inputs: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
+    $inputs -> zip -> map div_pair_f32 -> $out
+}
+
+extern node add_scalar_f32(inputs: (Seq[f32], f32)) -> out: Seq[f32] {
+    $inputs -> broadcast_right -> map add_pair_f32 -> $out
+}
+
+extern node sub_scalar_f32(inputs: (Seq[f32], f32)) -> out: Seq[f32] {
+    $inputs -> broadcast_right -> map sub_pair_f32 -> $out
+}
+
+extern node scalar_sub_f32(inputs: (f32, Seq[f32])) -> out: Seq[f32] {
+    $inputs -> broadcast_left -> map sub_pair_f32 -> $out
+}
+
+extern node mul_scalar_f32(inputs: (Seq[f32], f32)) -> out: Seq[f32] {
+    $inputs -> broadcast_right -> map mul_pair_f32 -> $out
+}
+
+extern node scalar_mul_f32(inputs: (f32, Seq[f32])) -> out: Seq[f32] {
+    $inputs -> broadcast_left -> map mul_pair_f32 -> $out
+}
+
+extern node div_scalar_f32(inputs: (Seq[f32], f32)) -> out: Seq[f32] {
+    $inputs -> broadcast_right -> map div_pair_f32 -> $out
+}
+
+extern node scalar_div_f32(inputs: (f32, Seq[f32])) -> out: Seq[f32] {
+    $inputs -> broadcast_left -> map div_pair_f32 -> $out
+}
+
+extern node equals_f32(inputs: (Seq[f32], Seq[f32])) -> out: Bool {
+    $inputs -> zip -> map eq_pair_f32 -> all -> $out
+}
+
+node dot_pair_f32(pair: (f32, f32)) -> product: f32 {
+    $pair -> math_mul -> $product
+}
+
+extern node dot_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
+    0       -> from_int_f32 -> $zero
+    $inputs -> zip          -> map dot_pair_f32 -> reduce math_add(identity: $zero) -> $total
+}
+
+node square_f32(value: f32) -> out: f32 {
+    ($value, $value) -> math_mul -> $out
+}
+
+extern node squared_norm_f32(values: Seq[f32]) -> total: f32 {
+    $values -> map square_f32 -> sum_f32 -> $total
+}
+
+extern node l1_norm_f32(values: Seq[f32]) -> total: f32 {
+    $values -> abs_f32 -> sum_f32 -> $total
+}
+
+extern node norm_f32(values: Seq[f32]) -> total: f32 {
+    $values -> squared_norm_f32 -> math_sqrt -> expect -> $total
+}
+
+extern node normalize_f32(values: Seq[f32]) -> out: Seq[f32] {
+    $values               -> norm_f32       -> $magnitude
+    ($values, $magnitude) -> div_scalar_f32 -> $out
+}
+
+extern node cosine_similarity_f32(inputs: (Seq[f32], Seq[f32])) -> out: f32 {
+    $inputs                    -> dot_f32  -> $numerator
+    $inputs                    -> first    -> norm_f32 -> $left_norm
+    $inputs                    -> second   -> norm_f32 -> $right_norm
+    ($left_norm, $right_norm)  -> math_mul -> $denominator
+    ($numerator, $denominator) -> math_div -> expect   -> $out
+}
+
+extern node squared_distance_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
+    $inputs -> sub_f32 -> squared_norm_f32 -> $total
+}
+
+extern node distance_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
+    $inputs -> squared_distance_f32 -> math_sqrt -> expect -> $total
 }

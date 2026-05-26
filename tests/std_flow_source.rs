@@ -104,6 +104,60 @@ fn std_vector_source_nodes_run() {
 }
 
 #[test]
+fn std_vector_f32_source_nodes_run() {
+    let source = r#"
+        import std.cli { Args }
+        import std.math { eq }
+        import std.real { from_int_f32 }
+        import std.vector {
+            add_f32 as vector_add_f32,
+            equals_f32 as vector_equals_f32,
+            dot_f32,
+            squared_norm_f32,
+            squared_distance_f32,
+        }
+
+        program main(args: Args) -> exit_code: i64 {
+            1  -> from_int_f32 -> $one
+            2  -> from_int_f32 -> $two
+            3  -> from_int_f32 -> $three
+            4  -> from_int_f32 -> $four
+            5  -> from_int_f32 -> $five
+            6  -> from_int_f32 -> $six
+            7  -> from_int_f32 -> $seven
+            9  -> from_int_f32 -> $nine
+            25 -> from_int_f32 -> $twenty_five
+            32 -> from_int_f32 -> $thirty_two
+            49 -> from_int_f32 -> $forty_nine
+
+            ([$one, $two, $three], [$four, $five, $six]) -> vector_add_f32 -> $added
+            ($added, [$five, $seven, $nine]) -> vector_equals_f32 -> $add_ok
+
+            ([$one, $two, $three], [$four, $five, $six]) -> dot_f32 -> $dot_total
+            ($dot_total, $thirty_two) -> eq -> $dot_ok
+
+            [$two, $three, $six] -> squared_norm_f32 -> $norm_squared
+            ($norm_squared, $forty_nine) -> eq -> $norm_ok
+
+            ([$one, $two, $three], [$four, $six, $three]) -> squared_distance_f32 -> $distance_squared
+            ($distance_squared, $twenty_five) -> eq -> $distance_ok
+
+            ($add_ok, $dot_ok, false) -> select -> $s1
+            ($s1, $norm_ok, false) -> select -> $s2
+            ($s2, $distance_ok, false) -> select -> $all_ok
+            ($all_ok, 0, 1) -> select -> $exit_code
+        }
+    "#;
+
+    let output = support::run_source("vector-f32-source", source, b"");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn source_backed_stdlib_alias_imports_are_rewritten() {
     let source = r#"
         import std.cli { Args }

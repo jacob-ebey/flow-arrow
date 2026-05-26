@@ -894,42 +894,11 @@ mod tests {
     #[test]
     fn gpu_repeat_vector_accumulator_uses_first_class_f32() {
         let source = r#"
-            import std.math { add, mul, sub }
-            import std.real { from_int_f32 }
-            import std.seq { zip }
+            import std.math { add }
+            import std.vector { dot_f32, squared_distance_f32, squared_norm_f32 }
 
             extern node run(left: Seq[f32], right: Seq[f32], score: f32, iterations: i64) -> out: f32 {
                 ($left, $right, $score) -> repeat<$iterations> kernel -> final_score -> $out
-            }
-
-            node dot_pair(pair: (f32, f32)) -> product: f32 {
-                $pair -> mul -> $product
-            }
-
-            extern node dot_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
-                0       -> from_int_f32 -> $zero
-                $inputs -> zip -> map dot_pair -> reduce add(identity: $zero) -> $total
-            }
-
-            node square(value: f32) -> out: f32 {
-                ($value, $value) -> mul -> $out
-            }
-
-            node sub_pair(pair: (f32, f32)) -> out: f32 {
-                $pair -> sub -> $out
-            }
-
-            extern node sub_f32(inputs: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
-                $inputs -> zip -> map sub_pair -> $out
-            }
-
-            extern node squared_norm_f32(values: Seq[f32]) -> total: f32 {
-                0       -> from_int_f32 -> $zero
-                $values -> map square -> reduce add(identity: $zero) -> $total
-            }
-
-            extern node squared_distance_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
-                $inputs -> sub_f32 -> squared_norm_f32 -> $total
             }
 
             node kernel(left: Seq[f32], right: Seq[f32], score: f32) -> (out_left: Seq[f32], out_right: Seq[f32], out_score: f32) {

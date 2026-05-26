@@ -31,15 +31,41 @@ graph structure it would compile for user-defined nodes.
 | `cosine_similarity` | `(Seq[f64],Seq[f64])` | `f64` | Dot product divided by both norms |
 | `squared_distance` | `(Seq[f64],Seq[f64])` | `f64` | Sum of squared pairwise differences |
 | `distance` | `(Seq[f64],Seq[f64])` | `f64` | Square root of `squared_distance` |
+| `sum_f32` | `Seq[f32]` | `f32` | Reduces vector items with `std.math.add` |
+| `mean_f32` | `Seq[f32]` | `f32` | Divides `sum_f32(values)` by `std.seq.length(values)` |
+| `neg_f32` | `Seq[f32]` | `Seq[f32]` | Elementwise numeric negation |
+| `abs_f32` | `Seq[f32]` | `Seq[f32]` | Elementwise absolute value |
+| `add_f32` | `(Seq[f32],Seq[f32])` | `Seq[f32]` | Pairwise addition |
+| `sub_f32` | `(Seq[f32],Seq[f32])` | `Seq[f32]` | Pairwise subtraction |
+| `mul_f32` | `(Seq[f32],Seq[f32])` | `Seq[f32]` | Pairwise multiplication |
+| `div_f32` | `(Seq[f32],Seq[f32])` | `Seq[f32]` | Pairwise division |
+| `add_scalar_f32` | `(Seq[f32],f32)` | `Seq[f32]` | Adds a scalar to each item |
+| `sub_scalar_f32` | `(Seq[f32],f32)` | `Seq[f32]` | Subtracts a scalar from each item |
+| `scalar_sub_f32` | `(f32,Seq[f32])` | `Seq[f32]` | Subtracts each item from a scalar |
+| `mul_scalar_f32` | `(Seq[f32],f32)` | `Seq[f32]` | Multiplies each item by a scalar |
+| `scalar_mul_f32` | `(f32,Seq[f32])` | `Seq[f32]` | Multiplies each item by a scalar |
+| `div_scalar_f32` | `(Seq[f32],f32)` | `Seq[f32]` | Divides each item by a scalar |
+| `scalar_div_f32` | `(f32,Seq[f32])` | `Seq[f32]` | Divides a scalar by each item |
+| `equals_f32` | `(Seq[f32],Seq[f32])` | `Bool` | Pairwise equality followed by `std.predicates.all` |
+| `dot_f32` | `(Seq[f32],Seq[f32])` | `f32` | Pairwise multiplication followed by `sum_f32` |
+| `squared_norm_f32` | `Seq[f32]` | `f32` | Sum of squared values |
+| `l1_norm_f32` | `Seq[f32]` | `f32` | Sum of absolute values |
+| `norm_f32` | `Seq[f32]` | `f32` | Square root of `squared_norm_f32` |
+| `normalize_f32` | `Seq[f32]` | `Seq[f32]` | Divides values by their Euclidean norm |
+| `cosine_similarity_f32` | `(Seq[f32],Seq[f32])` | `f32` | Dot product divided by both norms |
+| `squared_distance_f32` | `(Seq[f32],Seq[f32])` | `f32` | Sum of squared pairwise differences |
+| `distance_f32` | `(Seq[f32],Seq[f32])` | `f32` | Square root of `squared_distance_f32` |
 
-The current module is intentionally `f64`-specific. Shape-specific
-types such as `Vec[N, f64]` are syntax-level design targets, but they
-are not represented by the current checker yet. Binary vector
-operations use `std.seq.zip`, so mismatched lengths propagate the same
-runtime fault as `zip`. Scalar operations use `std.seq.broadcast_left`
-or `std.seq.broadcast_right`. `mean`, `normalize`, `cosine_similarity`,
-and division nodes inherit `std.math.div` division-by-zero behavior.
-`norm` and `distance` use `std.math.sqrt`.
+The unsuffixed exports are `f64`. The `_f32` exports keep data in the
+`f32` numeric domain; they do not widen to `f64` or lower from `f64`.
+Shape-specific types such as `Vec[N, f64]` are syntax-level design
+targets, but they are not represented by the current checker yet.
+Binary vector operations use `std.seq.zip`, so mismatched lengths
+propagate the same runtime fault as `zip`. Scalar operations use
+`std.seq.broadcast_left` or `std.seq.broadcast_right`. `mean`,
+`normalize`, `cosine_similarity`, and division nodes inherit
+`std.math.div` division-by-zero behavior. `norm` and `distance` use
+`std.math.sqrt`.
 
 Example:
 
