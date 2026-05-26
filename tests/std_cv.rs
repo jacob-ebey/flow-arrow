@@ -18,7 +18,7 @@ fn std_cv_jpeg_pipeline_decodes_grayscales_and_encodes() {
         import std.cli {{ Args }}
         import std.cv {{ save_jpeg }}
 
-        program main(args: Args) -> exit_code: Faultable[Int] {{
+        program main(args: Args) -> exit_code: Faultable[i64] {{
             ((2, 1), [[(1.0, (0.0, 0.0)), (0.0, (1.0, 0.0))]]) -> $image
             ("{input_path_text}", $image) -> save_jpeg -> $exit_code
         }}
@@ -57,7 +57,7 @@ fn std_cv_jpeg_pipeline_decodes_grayscales_and_encodes() {
         import std.predicates {{ all, and }}
         import std.tuple {{ first, second }}
 
-        program main(args: Args) -> exit_code: Faultable[Int] {{
+        program main(args: Args) -> exit_code: Faultable[i64] {{
             "{output_path_text}" -> load_jpeg -> pixels -> map near_gray -> all -> $ok
             ($ok, 0, 1) -> select -> $exit_code
         }}
@@ -101,7 +101,7 @@ fn std_cv_rejects_invalid_jpeg() {
         import std.cv { decode_jpeg }
         import std.tuple { second }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             [110, 111, 116, 45, 106, 112, 101, 103] -> codes_to_bytes -> $not_jpeg
             $not_jpeg -> decode_jpeg -> $image
             ($image, 0) -> second -> $exit_code
@@ -131,7 +131,7 @@ fn std_cv_generic_load_detects_png_bmp_ppm_and_pgm() {
         import std.cli {{ Args }}
         import std.cv {{ save_bmp, save_pgm, save_png, save_ppm }}
 
-        program main(args: Args) -> exit_code: Faultable[Int] {{
+        program main(args: Args) -> exit_code: Faultable[i64] {{
             ((2, 1), [[(1.0, (0.0, 0.0)), (0.0, (1.0, 0.0))]]) -> $image
             ("{png_path_text}", $image) -> save_png -> $png_status
             ("{bmp_path_text}", $image) -> save_bmp -> $bmp_status
@@ -190,7 +190,7 @@ fn std_cv_generic_load_detects_png_bmp_ppm_and_pgm() {
             import std.seq {{ head }}
             import std.tuple {{ first, second }}
 
-            program main(args: Args) -> exit_code: Faultable[Int] {{
+            program main(args: Args) -> exit_code: Faultable[i64] {{
                 "{image_path_text}" -> load -> $image
                 $image -> width -> $width
                 $image -> height -> $height
@@ -236,7 +236,7 @@ fn std_cv_generic_decode_rejects_unknown_format() {
         import std.cv { decode }
         import std.tuple { second }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             [110, 111, 116, 45, 105, 109, 97, 103, 101] -> codes_to_bytes -> $not_image
             $not_image -> decode -> $image
             ($image, 0) -> second -> $exit_code
@@ -261,7 +261,7 @@ fn std_cv_exposes_channel_matrices_for_matrix_pipelines() {
         import std.matrix { add_scalar, equals as matrix_equals }
         import std.predicates { and }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             ((2, 1), [[(1.0, (0.0, 0.0)), (0.0, (1.0, 0.0))]]) -> $image
             $image -> red_matrix -> $red
             ($red, [[1.0, 0.0]]) -> matrix_equals -> $red_ok

@@ -37,9 +37,9 @@ static FaCvImage fa_cv_image_new(size_t width, size_t height) {
   FaCvImage image;
   image.f0.f0 = (int64_t)width;
   image.f0.f1 = (int64_t)height;
-  image.f1 = FaSeq_Seq_Tuple_Real_Tuple_Real_Real_new(height);
+  image.f1 = FaSeq_Seq_Tuple_f64_Tuple_f64_Real_new(height);
   for (size_t y = 0; y < height; y++) {
-    image.f1.items[y] = FaSeq_Tuple_Real_Tuple_Real_Real_new(width);
+    image.f1.items[y] = FaSeq_Tuple_f64_Tuple_f64_Real_new(width);
   }
   return image;
 }
@@ -86,7 +86,7 @@ static bool fa_cv_prepare_size(
     return false;
   }
   if (width > (size_t)INT64_MAX || height > (size_t)INT64_MAX) {
-    *fault = fa_cv_image_fault2(op, "image dimensions exceed Int limits");
+    *fault = fa_cv_image_fault2(op, "image dimensions exceed i64 limits");
     return false;
   }
   if (fa_cv_mul_overflows(width, height, count)) {

@@ -13,12 +13,12 @@ Stream[T]
 
 ```text
 to_seq : Stream[V] -> Faultable[Seq[V]]
-drain  : Stream[V] -> Faultable[Int]
+drain  : Stream[V] -> Faultable[i64]
 ```
 
 `Stream[T]` is an opaque runtime stream of values whose item type is
-`T`. The stream type is generic: `Stream[Bytes]`, `Stream[Int]`, and
-`Stream[(Int,Bytes)]` are distinct FlowArrow types.
+`T`. The stream type is generic: `Stream[Bytes]`, `Stream[i64]`, and
+`Stream[(i64,Bytes)]` are distinct FlowArrow types.
 
 File-backed byte stream nodes are boundary filesystem operations and are
 exported from [`std.fs`](./fs.md). `std.fs.open_file` produces a pull-readable

@@ -61,7 +61,7 @@ typedef struct {
 typedef struct {
   FaHttpResponse f0;
   int64_t f1;
-} FaTuple_HttpResponse_Int;
+} FaTuple_HttpResponse_i64;
 
 typedef struct {
   FaHttpResponse f0;

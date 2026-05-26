@@ -14,7 +14,7 @@ import std.io { write_stdout }
 import std.real { parse_real, format_real }
 import std.math { add }
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     $args                -> argv                      -> $raw_args
     $raw_args            -> map parse_real            -> $numbers
     $numbers             -> reduce add(identity: 0.0) -> $total

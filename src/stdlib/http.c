@@ -299,15 +299,15 @@ static int fa_http_setup_tls(FaHttpServeState *state, FaHttpServerConfig config,
   return 0;
 }
 
-static FaFaultable_Int fa_http_serve(FaTuple_HttpListener_Stream_HttpResponse input) {
+static FaFaultable_i64 fa_http_serve(FaTuple_HttpListener_Stream_HttpResponse input) {
   FaHttpListener listener = input.f0;
   FaStream responses = input.f1;
   FaHttpHandlerFn handler = (FaHttpHandlerFn)responses.map_fn;
   if (!handler) {
-    return FaFaultable_Int_fault(fa_fault_cstr("std.http: serve expects a response stream produced by `requests -> map handler`"));
+    return FaFaultable_i64_fault(fa_fault_cstr("std.http: serve expects a response stream produced by `requests -> map handler`"));
   }
   if (listener.config.http3) {
-    return FaFaultable_Int_fault(fa_fault_cstr("std.http: HTTP/3 serving is not available in this H2O runtime"));
+    return FaFaultable_i64_fault(fa_fault_cstr("std.http: HTTP/3 serving is not available in this H2O runtime"));
   }
 
   signal(SIGPIPE, SIG_IGN);
@@ -324,7 +324,7 @@ static FaFaultable_Int fa_http_serve(FaTuple_HttpListener_Stream_HttpResponse in
   state.loop = h2o_evloop_create();
   if (state.loop == NULL) {
     h2o_config_dispose(&state.config);
-    return FaFaultable_Int_fault(fa_fault_cstr("std.http: failed to create H2O event loop"));
+    return FaFaultable_i64_fault(fa_fault_cstr("std.http: failed to create H2O event loop"));
   }
   h2o_context_init(&state.ctx, state.loop, &state.config);
   state.accept_ctx.ctx = &state.ctx;
@@ -335,14 +335,14 @@ static FaFaultable_Int fa_http_serve(FaTuple_HttpListener_Stream_HttpResponse in
     h2o_context_dispose(&state.ctx);
     h2o_evloop_destroy(state.loop);
     h2o_config_dispose(&state.config);
-    return FaFaultable_Int_fault(fault);
+    return FaFaultable_i64_fault(fault);
   }
   if (fa_http_create_listener(&state, listener.config, &fault) != 0) {
     if (state.ssl_ctx) SSL_CTX_free(state.ssl_ctx);
     h2o_context_dispose(&state.ctx);
     h2o_evloop_destroy(state.loop);
     h2o_config_dispose(&state.config);
-    return FaFaultable_Int_fault(fault);
+    return FaFaultable_i64_fault(fault);
   }
 
   fprintf(stderr, "std.http listening on %s://", listener.config.tls ? "https" : "http");
@@ -357,7 +357,7 @@ static FaFaultable_Int fa_http_serve(FaTuple_HttpListener_Stream_HttpResponse in
   h2o_context_dispose(&state.ctx);
   h2o_evloop_destroy(state.loop);
   h2o_config_dispose(&state.config);
-  return FaFaultable_Int_ok(0);
+  return FaFaultable_i64_ok(0);
 }
 
 static bool fa_http_route(FaTuple_HttpRequest_Bytes_Bytes input) {
@@ -393,7 +393,7 @@ static FaHttpResponse fa_http_response(FaHttpRequest request) {
   return response;
 }
 
-static FaHttpResponse fa_http_with_status(FaTuple_HttpResponse_Int input) {
+static FaHttpResponse fa_http_with_status(FaTuple_HttpResponse_i64 input) {
   FaHttpResponse response = input.f0;
   response.status = input.f1;
   return response;

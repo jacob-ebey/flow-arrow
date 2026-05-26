@@ -13,7 +13,7 @@ fn std_fs_metadata_helpers_run() {
         import std.io { write_stdout }
         import std.seq { head, tail }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             $args -> argv -> $paths
             $paths -> head -> $file_path
             $paths -> tail -> head -> $dir_path
@@ -79,7 +79,7 @@ fn std_fs_directory_and_batch_read_helpers_support_grep_shape() {
             [$name, ":", $line, "\n"] -> concat_bytes -> $out
         }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             $args -> argv -> head -> $root
             $root -> dirname -> $dir
             $dir -> list_dir -> expect -> $entries
@@ -124,7 +124,7 @@ fn std_fs_walk_files_supports_effectful_map_and_globs() {
         import std.io { write_stdout }
         import std.seq { flatten }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             $args -> argv -> map walk_files -> collect -> expect -> flatten -> $paths
             ($paths, "\n") -> join_bytes -> $listing
             [$listing, "\n"] -> concat_bytes -> $output
@@ -212,7 +212,7 @@ fn std_fs_path_helpers_and_sorted_directory_listing_run() {
         import std.io { write_stdout }
         import std.seq { head }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             $args -> argv -> head -> expect -> $dir
             ($dir, "z.txt") -> join_path -> $path
             $path -> basename -> $base
@@ -257,7 +257,7 @@ fn std_fs_fault_paths_are_reported() {
                 import std.fs { file_size }
                 import std.seq { head }
 
-                program main(args: Args) -> exit_code: Faultable[Int] {
+                program main(args: Args) -> exit_code: Faultable[i64] {
                     $args -> argv -> head -> $path
                     $path -> file_size -> $exit_code
                 }
@@ -272,7 +272,7 @@ fn std_fs_fault_paths_are_reported() {
                 import std.fs { list_dir }
                 import std.seq { head }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     $args -> argv -> head -> expect -> $path
                     $path -> list_dir -> expect -> $entries
                     0 -> $exit_code
@@ -287,7 +287,7 @@ fn std_fs_fault_paths_are_reported() {
                 import std.fault { expect }
                 import std.fs { read_files }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     $args -> argv -> read_files -> expect -> $files
                     0 -> $exit_code
                 }

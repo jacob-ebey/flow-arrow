@@ -172,11 +172,11 @@ impl<'a> TypedCodegen<'a> {
         let main_out = self.types.c_type(&main_sig.output);
         out.push_str(&format!("{main_out} result = flow_program_main(args);\n"));
         match &main_sig.output {
-            Ty::Faultable(inner) if inner.as_ref() == &Ty::Int => {
+            Ty::Faultable(inner) if inner.as_ref() == &Ty::I64 => {
                 out.push_str("  if (result.is_fault) fa_exit_fault(result.fault);\n  return (int)result.value;\n}\n");
             }
-            Ty::Int => out.push_str("  return (int)result;\n}\n"),
-            other => return Err(format!("program main output must be Int, found `{other}`")),
+            Ty::I64 => out.push_str("  return (int)result;\n}\n"),
+            other => return Err(format!("program main output must be i64, found `{other}`")),
         }
         Ok(out)
     }
@@ -1165,12 +1165,12 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let [out_left, out_right, out_score] = callable.outputs.as_slice() else {
             return Ok(false);
         };
-        if left_port.ty != Ty::Seq(Box::new(Ty::Real))
-            || right_port.ty != Ty::Seq(Box::new(Ty::Real))
-            || score_port.ty != Ty::Real
-            || out_left.ty != Ty::Seq(Box::new(Ty::Real))
-            || out_right.ty != Ty::Seq(Box::new(Ty::Real))
-            || out_score.ty != Ty::Real
+        if left_port.ty != Ty::Seq(Box::new(Ty::F64))
+            || right_port.ty != Ty::Seq(Box::new(Ty::F64))
+            || score_port.ty != Ty::F64
+            || out_left.ty != Ty::Seq(Box::new(Ty::F64))
+            || out_right.ty != Ty::Seq(Box::new(Ty::F64))
+            || out_score.ty != Ty::F64
         {
             return Ok(false);
         }
@@ -1266,8 +1266,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         out.push_str(&format!(
             "static inline {output_ty} {symbol}({input_ty} input) {{\n"
         ));
-        out.push_str("  FaSeq_Real v_left = input.f0;\n");
-        out.push_str("  FaSeq_Real v_right = input.f1;\n");
+        out.push_str("  FaSeq_f64 v_left = input.f0;\n");
+        out.push_str("  FaSeq_f64 v_right = input.f1;\n");
         out.push_str("  double v_score = input.f2;\n");
         out.push_str("  if (v_left.count != v_right.count) fa_die_usage(\"zip: sequences must have the same length\");\n");
         let mut names = reductions.iter().collect::<Vec<_>>();
@@ -1580,7 +1580,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                             self.emit_fused_matmul_sum(out, &tmp, &value.code, &value.ty)?;
                             value = Value {
                                 code: tmp,
-                                ty: Ty::Real,
+                                ty: Ty::F64,
                             };
                             index += 2;
                             continue;
@@ -1593,7 +1593,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                             self.emit_fused_matvec_sum(out, &tmp, &value.code, &value.ty)?;
                             value = Value {
                                 code: tmp,
-                                ty: Ty::Real,
+                                ty: Ty::F64,
                             };
                             index += 2;
                             continue;
@@ -1606,7 +1606,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                             self.emit_fused_nested_sum(out, &tmp, &value.code, &value.ty)?;
                             value = Value {
                                 code: tmp,
-                                ty: Ty::Real,
+                                ty: Ty::F64,
                             };
                             index += 2;
                             continue;
@@ -1696,15 +1696,15 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         env: &mut HashMap<String, Value>,
     ) -> Result<(), String> {
         let gpu::GpuScalarKind::I32 = reduction.map_kernel.scalar else {
-            return Err("GPU range reductions currently require Int range map kernels".to_string());
+            return Err("GPU range reductions currently require i64 range map kernels".to_string());
         };
-        if reduction.output_ty != Ty::Int {
+        if reduction.output_ty != Ty::I64 {
             return Err(format!(
-                "GPU range reduction expected Int output, found `{}`",
+                "GPU range reduction expected i64 output, found `{}`",
                 reduction.output_ty
             ));
         }
-        let range_ty = Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]);
+        let range_ty = Ty::Tuple(vec![Ty::I64, Ty::I64, Ty::I64]);
         let range =
             self.emit_endpoint_expected(out, &reduction.range_source, env, Some(&range_ty))?;
         let identity = self.emit_endpoint(out, &reduction.identity, env)?;
@@ -3014,7 +3014,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let canonical = self.canonical_name(op);
         if self.gpu_enabled && matches!(canonical.as_str(), "add" | "min" | "max") {
             match item_ty.as_ref() {
-                Ty::Int => {
+                Ty::I64 => {
                     let tmp = self.next_temp();
                     out.push_str(&format!(
                         "  int64_t {tmp} = fa_gpu_reduce_i64({}, {}.items, {}.count, {});\n",
@@ -3025,10 +3025,10 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     ));
                     return Ok(Value {
                         code: tmp,
-                        ty: Ty::Int,
+                        ty: Ty::I64,
                     });
                 }
-                Ty::Real => {
+                Ty::F64 => {
                     let tmp = self.next_temp();
                     out.push_str(&format!(
                         "  double {tmp} = fa_gpu_reduce_f64({}, {}.items, {}.count, {});\n",
@@ -3039,7 +3039,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     ));
                     return Ok(Value {
                         code: tmp,
-                        ty: Ty::Real,
+                        ty: Ty::F64,
                     });
                 }
                 _ => {}
@@ -3455,19 +3455,19 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             "last_index_of" => out.push_str(&format!(
                 "  {target} = fa_last_index_of({input}.f0, {input}.f1);\n"
             )),
-            "slice" if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int, Ty::Int])) =>
+            "slice" if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64, Ty::I64])) =>
             {
                 out.push_str(&format!(
                     "  {target} = fa_bytes_slice({input}.f0, {input}.f1, {input}.f2);\n"
                 ));
             }
-            "take" if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) =>
+            "take" if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64])) =>
             {
                 out.push_str(&format!(
                     "  {target} = fa_bytes_take({input}.f0, {input}.f1);\n"
                 ));
             }
-            "drop" if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) =>
+            "drop" if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64])) =>
             {
                 out.push_str(&format!(
                     "  {target} = fa_bytes_drop({input}.f0, {input}.f1);\n"
@@ -4031,8 +4031,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let [Ty::Seq(value_ty), Ty::Seq(id_ty)] = items.as_slice() else {
             return Err("group_by_id expected sequence inputs".to_string());
         };
-        if id_ty.as_ref() != &Ty::Int {
-            return Err("group_by_id expected Seq[Int] ids".to_string());
+        if id_ty.as_ref() != &Ty::I64 {
+            return Err("group_by_id expected Seq[i64] ids".to_string());
         }
         let group_ty = Ty::Seq(value_ty.clone());
         let group_new = self.types.seq_new_name(&group_ty)?;
@@ -4177,8 +4177,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let Ty::Tuple(items) = input_ty else {
             return Err("take expected tuple input".to_string());
         };
-        if !matches!(items.as_slice(), [Ty::Seq(_), Ty::Int]) {
-            return Err("take expected (Seq[V],Int) input".to_string());
+        if !matches!(items.as_slice(), [Ty::Seq(_), Ty::I64]) {
+            return Err("take expected (Seq[V],i64) input".to_string());
         }
         let new_fn = self.types.seq_new_name(output_ty)?;
         let count = self.next_temp();
@@ -4207,8 +4207,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let Ty::Tuple(items) = input_ty else {
             return Err("drop expected tuple input".to_string());
         };
-        if !matches!(items.as_slice(), [Ty::Seq(_), Ty::Int]) {
-            return Err("drop expected (Seq[V],Int) input".to_string());
+        if !matches!(items.as_slice(), [Ty::Seq(_), Ty::I64]) {
+            return Err("drop expected (Seq[V],i64) input".to_string());
         }
         let new_fn = self.types.seq_new_name(output_ty)?;
         let offset = self.next_temp();
@@ -4241,8 +4241,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let Ty::Tuple(items) = input_ty else {
             return Err("fill expected tuple input".to_string());
         };
-        if !matches!(items.as_slice(), [_, Ty::Int]) {
-            return Err("fill expected (V,Int) input".to_string());
+        if !matches!(items.as_slice(), [_, Ty::I64]) {
+            return Err("fill expected (V,i64) input".to_string());
         }
         let new_fn = self.types.seq_new_name(output_ty)?;
         let i = self.next_temp();
@@ -4624,9 +4624,9 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     fn recognize_vector_score_accumulator(&self, callable: &TypedCallable, input_ty: &Ty) -> bool {
         if input_ty
             != &Ty::Tuple(vec![
-                Ty::Seq(Box::new(Ty::Real)),
-                Ty::Seq(Box::new(Ty::Real)),
-                Ty::Real,
+                Ty::Seq(Box::new(Ty::F64)),
+                Ty::Seq(Box::new(Ty::F64)),
+                Ty::F64,
             ])
         {
             return false;
@@ -4637,12 +4637,12 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let [out_left, out_right, out_score] = callable.outputs.as_slice() else {
             return false;
         };
-        if left_port.ty != Ty::Seq(Box::new(Ty::Real))
-            || right_port.ty != Ty::Seq(Box::new(Ty::Real))
-            || score_port.ty != Ty::Real
+        if left_port.ty != Ty::Seq(Box::new(Ty::F64))
+            || right_port.ty != Ty::Seq(Box::new(Ty::F64))
+            || score_port.ty != Ty::F64
             || out_left.ty != left_port.ty
             || out_right.ty != right_port.ty
-            || out_score.ty != Ty::Real
+            || out_score.ty != Ty::F64
         {
             return false;
         }
@@ -4733,14 +4733,14 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     }
 
     fn recognize_matrix_score_accumulator(&self, callable: &TypedCallable, input_ty: &Ty) -> bool {
-        let matrix_ty = Ty::Seq(Box::new(Ty::Seq(Box::new(Ty::Real))));
-        let vector_ty = Ty::Seq(Box::new(Ty::Real));
+        let matrix_ty = Ty::Seq(Box::new(Ty::Seq(Box::new(Ty::F64))));
+        let vector_ty = Ty::Seq(Box::new(Ty::F64));
         if input_ty
             != &Ty::Tuple(vec![
                 matrix_ty.clone(),
                 matrix_ty.clone(),
                 vector_ty.clone(),
-                Ty::Real,
+                Ty::F64,
             ])
         {
             return false;
@@ -4754,11 +4754,11 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         if left_port.ty != matrix_ty
             || right_port.ty != matrix_ty
             || vector_port.ty != vector_ty
-            || score_port.ty != Ty::Real
+            || score_port.ty != Ty::F64
             || out_left.ty != matrix_ty
             || out_right.ty != matrix_ty
             || out_vector.ty != vector_ty
-            || out_score.ty != Ty::Real
+            || out_score.ty != Ty::F64
         {
             return false;
         }

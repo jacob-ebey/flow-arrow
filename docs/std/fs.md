@@ -6,11 +6,11 @@ Boundary file I/O nodes for command-line programs and effectful wrappers.
 
 ```text
 read_file    : Bytes                  -> Faultable[Bytes]
-write_file   : (Bytes,Bytes)          -> Faultable[Int]
+write_file   : (Bytes,Bytes)          -> Faultable[i64]
 exists       : Bytes                  -> Bool
 is_file      : Bytes                  -> Bool
 is_dir       : Bytes                  -> Bool
-file_size    : Bytes                  -> Faultable[Int]
+file_size    : Bytes                  -> Faultable[i64]
 join_path    : (Bytes,Bytes)          -> Bytes
 basename     : Bytes                  -> Bytes
 dirname      : Bytes                  -> Bytes
@@ -18,10 +18,10 @@ list_dir     : Bytes                  -> Faultable[Seq[Bytes]]
 walk_files   : Bytes                  -> Faultable[Seq[Bytes]]
 read_files   : Seq[Bytes]             -> Faultable[Seq[(Bytes,Bytes)]]
 open_file    : Bytes                  -> Faultable[Stream[Bytes]]
-size         : Stream[Bytes]          -> Faultable[Int]
-read_at      : (Stream[Bytes],Int,Int) -> Faultable[Bytes]
-copy_to_file : (Stream[Bytes],Bytes)   -> Faultable[Int]
-close        : Stream[V]              -> Faultable[Int]
+size         : Stream[Bytes]          -> Faultable[i64]
+read_at      : (Stream[Bytes],i64,i64) -> Faultable[Bytes]
+copy_to_file : (Stream[Bytes],Bytes)   -> Faultable[i64]
+close        : Stream[V]              -> Faultable[i64]
 ```
 
 `write_file` takes `(path, contents)` and returns `0` on success.
@@ -127,7 +127,7 @@ Closes a stream handle.
 import std.cli { Args }
 import std.fs { read_file, write_file }
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     "input.bin" -> read_file -> $contents
     ("copy.bin", $contents) -> write_file -> $exit_code
 }

@@ -22,7 +22,7 @@ This example instead implements a **parallel, scan-based, SIMD-style
 tokenizer**:
 
 1. Each input byte is mapped to a 4-state transition table encoded as an
-   `Int`. The 4 states are `OUT`, `STR` (inside a string), `ESC` (just past
+   `i64`. The 4 states are `OUT`, `STR` (inside a string), `ESC` (just past
    a backslash inside a string), and `RUN` (inside a number or literal name
    like `true`/`false`/`null`).
 2. `scan compose_trans` fuses per-byte transition tables into per-position

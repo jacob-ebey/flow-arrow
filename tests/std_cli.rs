@@ -7,7 +7,7 @@ fn std_cli_args_type_runs() {
     let source = r#"
         import std.cli { Args }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             0 -> $exit_code
         }
     "#;
@@ -27,7 +27,7 @@ fn std_cli_argv_runs() {
         import std.cli { Args, argv }
         import std.io { write_stdout }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             $args -> argv -> $raw_args
             $raw_args -> concat_bytes -> $output
             $output -> write_stdout -> $exit_code
@@ -57,7 +57,7 @@ fn std_cli_flag_helpers_run() {
         import std.cli { Args, flag_present, flag_value }
         import std.io { write_stdout }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             ($args, "--verbose") -> flag_present -> $verbose
             ($args, "--name") -> flag_value -> $name
             ($verbose, "verbose", "quiet") -> select -> $mode
@@ -90,7 +90,7 @@ fn std_cli_flag_value_accepts_separate_value_and_missing_faults() {
         import std.fault { expect }
         import std.io { write_stdout }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             ($args, "--verbose") -> flag_present -> $verbose
             ($args, "--missing") -> flag_present -> $missing
             ($args, "--name") -> flag_value -> expect -> $name

@@ -23,9 +23,9 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let Ty::Tuple(items) = input.ty.clone() else {
             return Err("range_step expected tuple input".to_string());
         };
-        if items.as_slice() != [Ty::Int, Ty::Int, Ty::Int] {
+        if items.as_slice() != [Ty::I64, Ty::I64, Ty::I64] {
             return Err(format!(
-                "range_step expected (Int, Int, Int), found `{}`",
+                "range_step expected (i64, i64, i64), found `{}`",
                 input.ty
             ));
         }
@@ -302,8 +302,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let (Ty::Seq(value_item_ty), Ty::Seq(id_item_ty)) = (values_ty, ids_ty) else {
             return Err("group_by_id expected sequence inputs".to_string());
         };
-        if id_item_ty.as_ref() != &Ty::Int {
-            return Err("group_by_id expected Seq[Int] ids".to_string());
+        if id_item_ty.as_ref() != &Ty::I64 {
+            return Err("group_by_id expected Seq[i64] ids".to_string());
         }
         let group_ty = Ty::Seq(value_item_ty.clone());
         let values = self.extract_tuple_field(&input, 0)?;
@@ -957,8 +957,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let Ty::Tuple(items) = input.ty.clone() else {
             return Err("fill expected tuple input".to_string());
         };
-        let [item_ty, Ty::Int] = items.as_slice() else {
-            return Err("fill expected (V,Int) input".to_string());
+        let [item_ty, Ty::I64] = items.as_slice() else {
+            return Err("fill expected (V,i64) input".to_string());
         };
         let item = self.extract_tuple_field(&input, 0)?;
         let count = self.extract_tuple_field(&input, 1)?.into_int_value();
@@ -1013,8 +1013,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let Ty::Tuple(items) = input.ty.clone() else {
             return Err("slice expected tuple input".to_string());
         };
-        let [seq_ty @ Ty::Seq(_), Ty::Int, Ty::Int] = items.as_slice() else {
-            return Err("slice expected (Seq[V],Int,Int) input".to_string());
+        let [seq_ty @ Ty::Seq(_), Ty::I64, Ty::I64] = items.as_slice() else {
+            return Err("slice expected (Seq[V],i64,i64) input".to_string());
         };
         let seq = self.extract_tuple_field(&input, 0)?;
         let start = self.extract_tuple_field(&input, 1)?.into_int_value();
@@ -1106,8 +1106,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let Ty::Tuple(items) = input.ty.clone() else {
             return Err("get_or expected tuple input".to_string());
         };
-        let [seq_ty @ Ty::Seq(_), Ty::Int, fallback_ty] = items.as_slice() else {
-            return Err("get_or expected (Seq[V],Int,V) input".to_string());
+        let [seq_ty @ Ty::Seq(_), Ty::I64, fallback_ty] = items.as_slice() else {
+            return Err("get_or expected (Seq[V],i64,V) input".to_string());
         };
         let seq = self.extract_tuple_field(&input, 0)?;
         let index = self.extract_tuple_field(&input, 1)?.into_int_value();
@@ -1200,8 +1200,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let Ty::Tuple(items) = input.ty.clone() else {
             return Err("set expected tuple input".to_string());
         };
-        let [seq_ty @ Ty::Seq(_), Ty::Int, item_ty] = items.as_slice() else {
-            return Err("set expected (Seq[V],Int,V) input".to_string());
+        let [seq_ty @ Ty::Seq(_), Ty::I64, item_ty] = items.as_slice() else {
+            return Err("set expected (Seq[V],i64,V) input".to_string());
         };
         let seq = self.extract_tuple_field(&input, 0)?;
         let index = self.extract_tuple_field(&input, 1)?.into_int_value();
@@ -2975,8 +2975,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let Ty::Tuple(items) = input.ty.clone() else {
             return Err(format!("{name} expected tuple input"));
         };
-        let [seq_ty @ Ty::Seq(_), Ty::Int] = items.as_slice() else {
-            return Err(format!("{name} expected (Seq[V],Int) input"));
+        let [seq_ty @ Ty::Seq(_), Ty::I64] = items.as_slice() else {
+            return Err(format!("{name} expected (Seq[V],i64) input"));
         };
         let seq = self.extract_tuple_field(input, 0)?;
         let count = self.extract_tuple_field(input, 1)?.into_int_value();

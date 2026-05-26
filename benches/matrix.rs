@@ -344,7 +344,7 @@ import std.math {{ add as scalar_add, eq }}
 import std.vector {{ sum as vector_sum }}
 import std.matrix {{ matmul, matvec, row_sums, sum as matrix_sum }}
 
-node kernel(left: Seq[Seq[Real]], right: Seq[Seq[Real]], vector: Seq[Real], score: Real) -> (out_left: Seq[Seq[Real]], out_right: Seq[Seq[Real]], out_vector: Seq[Real], out_score: Real) {{
+node kernel(left: Seq[Seq[f64]], right: Seq[Seq[f64]], vector: Seq[f64], score: f64) -> (out_left: Seq[Seq[f64]], out_right: Seq[Seq[f64]], out_vector: Seq[f64], out_score: f64) {{
     ($left, $right) -> matmul -> $product
     $product -> matrix_sum -> $product_sum
     ($left, $vector) -> matvec -> $mv
@@ -358,11 +358,11 @@ node kernel(left: Seq[Seq[Real]], right: Seq[Seq[Real]], vector: Seq[Real], scor
     $vector -> $out_vector
 }}
 
-node final_score(left: Seq[Seq[Real]], right: Seq[Seq[Real]], vector: Seq[Real], score: Real) -> out: Real {{
+node final_score(left: Seq[Seq[f64]], right: Seq[Seq[f64]], vector: Seq[f64], score: f64) -> out: f64 {{
     $score -> $out
 }}
 
-program main(args: Args) -> exit_code: Int {{
+program main(args: Args) -> exit_code: i64 {{
     {} -> $left
     {} -> $right
     {} -> $vector

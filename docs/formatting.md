@@ -34,7 +34,7 @@ Every file ends with exactly one trailing newline.
 import std.cli { Args }
 import std.math { add }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     (1, 2) -> add -> $exit_code
 }
 ```
@@ -53,9 +53,9 @@ Group transitions, nodes, and programs are separated from neighboring
 declarations by one blank line.
 
 ```flow
-type Pair = (Int, Real)
+type Pair = (i64, f64)
 
-node add_pair(pair: Pair) -> out: Int {
+node add_pair(pair: Pair) -> out: i64 {
     $pair -> add -> $out
 }
 ```
@@ -100,7 +100,7 @@ header.
 Single-output callables omit output parentheses:
 
 ```flow
-node abs(value: Real) -> out: Real {
+node abs(value: f64) -> out: f64 {
     $value -> scalar_abs -> $out
 }
 ```
@@ -108,7 +108,7 @@ node abs(value: Real) -> out: Real {
 Multiple-output callables use a parenthesized output list:
 
 ```flow
-node split(value: Pair) -> (left: Int, right: Real) {
+node split(value: Pair) -> (left: i64, right: f64) {
     $value -> first -> $left
     $value -> second -> $right
 }
@@ -121,10 +121,10 @@ Type punctuation is normalized:
 - Port types use `name: Type`.
 - Tuple and type-argument commas are followed by one space.
 - Union alternatives use ` | `.
-- Brackets stay tight: `Seq[Real]`, not `Seq [ Real ]`.
+- Brackets stay tight: `Seq[f64]`, not `Seq [ f64 ]`.
 
 ```flow
-node f(input: (Seq[Real], Seq[Real])) -> out: Int | Real {
+node f(input: (Seq[f64], Seq[f64])) -> out: i64 | f64 {
     $input -> g -> $out
 }
 ```
@@ -180,7 +180,7 @@ write `identity:` with one space after the colon.
 String literals are re-escaped with the compiler-supported escapes:
 `\"`, `\\`, `\n`, `\t`, and `\r`.
 
-Real literals remain real literals. For example, parsed `0.0` is printed as
+f64 literals remain real literals. For example, parsed `0.0` is printed as
 `0.0`, not `0`, so formatting does not turn a real literal into an integer
 literal.
 

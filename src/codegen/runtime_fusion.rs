@@ -194,7 +194,7 @@ impl<'a> TypedCodegen<'a> {
             Fusion::Sqrt(inner) => {
                 let tmp = self.next_temp();
                 out.push_str(&format!("  double {tmp};\n"));
-                self.emit_fusion_assign(out, &tmp, &Ty::Real, inner, input, input_ty)?;
+                self.emit_fusion_assign(out, &tmp, &Ty::F64, inner, input, input_ty)?;
                 out.push_str(&format!("  {target} = sqrt({tmp});\n"));
                 Ok(())
             }
@@ -271,7 +271,7 @@ impl<'a> TypedCodegen<'a> {
         let Ty::Seq(item_ty) = row_ty.as_ref() else {
             return Err("matvec-sum fusion expected matrix input".to_string());
         };
-        if item_ty.as_ref() != &Ty::Real {
+        if item_ty.as_ref() != &Ty::F64 {
             return Err("matvec-sum fusion expected real matrix input".to_string());
         }
 
@@ -311,8 +311,8 @@ impl<'a> TypedCodegen<'a> {
         let [Ty::Seq(left_row_ty), Ty::Seq(right_row_ty)] = items.as_slice() else {
             return Err("matmul-sum fusion expected matrix pair input".to_string());
         };
-        if !matches!(left_row_ty.as_ref(), Ty::Seq(item_ty) if item_ty.as_ref() == &Ty::Real)
-            || !matches!(right_row_ty.as_ref(), Ty::Seq(item_ty) if item_ty.as_ref() == &Ty::Real)
+        if !matches!(left_row_ty.as_ref(), Ty::Seq(item_ty) if item_ty.as_ref() == &Ty::F64)
+            || !matches!(right_row_ty.as_ref(), Ty::Seq(item_ty) if item_ty.as_ref() == &Ty::F64)
         {
             return Err("matmul-sum fusion expected real matrix inputs".to_string());
         }
@@ -375,7 +375,7 @@ impl<'a> TypedCodegen<'a> {
     ) -> Result<(), String> {
         let total = self.next_temp();
         out.push_str(&format!("  double {total} = 0.0;\n"));
-        self.emit_fused_sum(out, &total, input, &Ty::Seq(Box::new(Ty::Real)))?;
+        self.emit_fused_sum(out, &total, input, &Ty::Seq(Box::new(Ty::F64)))?;
         out.push_str(&format!("  {target} = {total} / (double){input}.count;\n"));
         Ok(())
     }

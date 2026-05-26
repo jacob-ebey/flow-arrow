@@ -43,16 +43,16 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let value = match name {
             "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
                 let function_name = match (&output_ty, name) {
-                    (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::Int => {
+                    (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::I64 => {
                         "fa_faultable_i64_div"
                     }
-                    (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::Real => {
+                    (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::F64 => {
                         "fa_faultable_f64_div"
                     }
-                    (Ty::Faultable(inner), "rem") if inner.as_ref() == &Ty::Int => {
+                    (Ty::Faultable(inner), "rem") if inner.as_ref() == &Ty::I64 => {
                         "fa_faultable_i64_rem"
                     }
-                    (Ty::Faultable(inner), "rem") if inner.as_ref() == &Ty::Real => {
+                    (Ty::Faultable(inner), "rem") if inner.as_ref() == &Ty::F64 => {
                         "fa_faultable_f64_rem"
                     }
                     _ => {
@@ -61,17 +61,20 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                         ));
                     }
                 };
-                if matches!(&output_ty, Ty::Faultable(inner) if inner.as_ref() == &Ty::Real) {
+                if matches!(&output_ty, Ty::Faultable(inner) if inner.as_ref() == &Ty::F64) {
                     let Ty::Tuple(items) = input.ty.clone() else {
                         return Err(format!("`{name}` expected tuple input"));
                     };
                     let [left_ty, right_ty] = items.as_slice() else {
                         return Err(format!("`{name}` expected pair input"));
                     };
+                    if left_ty != &Ty::F64 || right_ty != &Ty::F64 {
+                        return Err(format!(
+                            "`{name}` expected matching f64 operands, found `{left_ty}` and `{right_ty}`"
+                        ));
+                    }
                     let left = self.extract_tuple_field(&input, 0)?;
                     let right = self.extract_tuple_field(&input, 1)?;
-                    let left = self.cast_to_real(left, left_ty)?;
-                    let right = self.cast_to_real(right, right_ty)?;
                     self.emit_runtime_sret_call(
                         function_name,
                         &output_ty,
@@ -79,7 +82,10 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                             self.context.f64_type().into(),
                             self.context.f64_type().into(),
                         ],
-                        &[left.into(), right.into()],
+                        &[
+                            left.into_float_value().into(),
+                            right.into_float_value().into(),
+                        ],
                     )?
                 } else {
                     self.emit_runtime_binary(function_name, input, &output_ty)?
@@ -90,12 +96,14 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             }
             "from_int" => self.emit_from_int(input)?,
             "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
-                let value = self.cast_to_real(input.value, &input.ty)?;
+                if input.ty != Ty::F64 {
+                    return Err(format!("sqrt expected f64 input, found `{}`", input.ty));
+                }
                 self.emit_runtime_sret_call(
                     "fa_faultable_sqrt",
                     &output_ty,
                     &[self.context.f64_type().into()],
-                    &[value.into()],
+                    &[input.value.into_float_value().into()],
                 )?
             }
             "neg" | "abs" | "sqrt" | "exp" | "sin" | "cos" => {
@@ -164,13 +172,13 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             "expect" => self.emit_expect(input, &output_ty)?,
             "index_of" => self.emit_runtime_binary("fa_index_of", input, &output_ty)?,
             "last_index_of" => self.emit_runtime_binary("fa_last_index_of", input, &output_ty)?,
-            "slice" if matches!(input.ty, Ty::Tuple(ref items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int, Ty::Int])) => {
+            "slice" if matches!(input.ty, Ty::Tuple(ref items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64, Ty::I64])) => {
                 self.emit_runtime_ternary("fa_bytes_slice", input, &output_ty)?
             }
-            "take" if matches!(input.ty, Ty::Tuple(ref items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) => {
+            "take" if matches!(input.ty, Ty::Tuple(ref items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64])) => {
                 self.emit_runtime_binary("fa_bytes_take", input, &output_ty)?
             }
-            "drop" if matches!(input.ty, Ty::Tuple(ref items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) => {
+            "drop" if matches!(input.ty, Ty::Tuple(ref items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64])) => {
                 self.emit_runtime_binary("fa_bytes_drop", input, &output_ty)?
             }
             "repeat_bytes" => self.emit_runtime_binary("fa_bytes_repeat", input, &output_ty)?,
@@ -260,13 +268,13 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 "fa_write_stdout",
                 input,
                 &output_ty,
-                &Ty::Int,
+                &Ty::I64,
             )?,
             "write_stderr" => self.emit_maybe_faultable_runtime_unary(
                 "fa_write_stderr",
                 input,
                 &output_ty,
-                &Ty::Int,
+                &Ty::I64,
             )?,
             "read_stdin" => {
                 let fn_value = self.runtime_function(
@@ -1339,7 +1347,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 input,
                 output_ty,
                 "byte_length",
-                |this, plain_input| this.emit_byte_length(plain_input, &Ty::Int),
+                |this, plain_input| this.emit_byte_length(plain_input, &Ty::I64),
             );
         }
         if input.ty != Ty::Bytes {
@@ -1360,7 +1368,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 return Err(format!("length expected Seq, found `{}`", input.ty));
             }
             return self.emit_faultable_count(input, output_ty, "length", |this, plain_input| {
-                this.emit_length(plain_input, &Ty::Int)
+                this.emit_length(plain_input, &Ty::I64)
             });
         }
         match input.ty {
@@ -1385,7 +1393,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 input,
                 output_ty,
                 "inner_length",
-                |this, plain_input| this.emit_inner_length(plain_input, &Ty::Int),
+                |this, plain_input| this.emit_inner_length(plain_input, &Ty::I64),
             );
         }
         let Ty::Seq(row_ty) = input.ty.clone() else {
@@ -1465,8 +1473,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 "faultable {name} expected faultable output, found `{output_ty}`"
             ));
         };
-        if output_inner.as_ref() != &Ty::Int {
-            return Err(format!("faultable {name} expected Faultable[Int] output"));
+        if output_inner.as_ref() != &Ty::I64 {
+            return Err(format!("faultable {name} expected Faultable[i64] output"));
         }
         let output_llvm_ty = self.types.basic_type(output_ty)?;
         let out_ptr = self

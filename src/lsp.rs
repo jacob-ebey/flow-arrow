@@ -1438,8 +1438,8 @@ impl Analysis {
         }
         for ty in [
             "Unit",
-            "Int",
-            "Real",
+            "i64",
+            "f64",
             "Bool",
             "Bytes",
             "Fault",
@@ -2233,11 +2233,11 @@ mod tests {
         let source = r#"
             import std.math { add }
 
-            node inc(value: Int) -> out: Int {
+            node inc(value: i64) -> out: i64 {
                 ($value, 1) -> add -> $out
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> inc -> $exit_code
             }
         "#;
@@ -2291,7 +2291,7 @@ mod tests {
     #[test]
     fn parser_diagnostics_use_source_spans() {
         let error =
-            parser::parse_diagnostic("program main(args: Args) -> exit_code: Int {\n    @\n}\n")
+            parser::parse_diagnostic("program main(args: Args) -> exit_code: i64 {\n    @\n}\n")
                 .expect_err("parse should fail");
         assert_eq!(error.span.start.line, 1);
         assert_eq!(error.span.start.character, 4);
@@ -2302,7 +2302,7 @@ mod tests {
         let source = r#"import std.bytes { missing }
 import std.cli { Args }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     0 -> $exit_code
 }
 "#;
@@ -2327,7 +2327,7 @@ program main(args: Args) -> exit_code: Int {
         let source = r#"import std.cli { Args }
 import std.int { parse_int }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     ["1"] -> map parse_int -> $numbers
     0 -> $exit_code
 }
@@ -2336,11 +2336,11 @@ program main(args: Args) -> exit_code: Int {
 
         let parse_int_hover =
             hover_result(&analysis, position_of(source, "parse_int ->")).expect("stage hover");
-        assert!(parse_int_hover.contains("map parse_int: Seq[Bytes] -> Seq[Faultable[Int]]"));
+        assert!(parse_int_hover.contains("map parse_int: Seq[Bytes] -> Seq[Faultable[i64]]"));
 
         let numbers_hover =
             hover_result(&analysis, position_of(source, "$numbers")).expect("variable hover");
-        assert!(numbers_hover.contains("$numbers: Seq[Faultable[Int]]"));
+        assert!(numbers_hover.contains("$numbers: Seq[Faultable[i64]]"));
 
         let source_hover =
             hover_result(&analysis, position_of(source, "[\"1\"]")).expect("source hover");
@@ -2351,11 +2351,11 @@ program main(args: Args) -> exit_code: Int {
     fn lsp_infers_destructured_binding_types() {
         let source = r#"import std.cli { Args }
 
-node pair(input: Int) -> out: Faultable[(Int, Bytes)] {
+node pair(input: i64) -> out: Faultable[(i64, Bytes)] {
     ($input, "x") -> $out
 }
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     1 -> pair -> ($left, $right)
     $left -> $exit_code
 }
@@ -2387,7 +2387,7 @@ program main(args: Args) -> exit_code: Faultable[Int] {
             hover_result(&analysis, position_of(source, "-> ($left")).expect("arrow hover");
         assert!(
             arrow_hover
-                .contains("($left, $right): Faultable[(Int,Bytes)] -> Faultable[(Int,Bytes)]")
+                .contains("($left, $right): Faultable[(i64,Bytes)] -> Faultable[(i64,Bytes)]")
         );
 
         let right_completion = analysis
@@ -2398,7 +2398,7 @@ program main(args: Args) -> exit_code: Faultable[Int] {
         assert!(right_completion.detail.contains("Faultable[Bytes]"));
 
         let hints = inlay_hints_result(&analysis, None);
-        assert!(hints.contains(": Faultable[Int]"));
+        assert!(hints.contains(": Faultable[i64]"));
         assert!(hints.contains(": Faultable[Bytes]"));
     }
 
@@ -2406,11 +2406,11 @@ program main(args: Args) -> exit_code: Faultable[Int] {
     fn lsp_summarizes_library_modules_for_destructured_repeat_bindings() {
         let source = r#"import std.math { add }
 
-extern node fib(depth: Int) -> result: Int {
+extern node fib(depth: i64) -> result: i64 {
     (0, 1) -> repeat<$depth> fib_step -> ($result, $)
 }
 
-node fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
+node fib_step(a: i64, b: i64) -> (next_a: i64, next_b: i64) {
     $b       -> $next_a
     ($a, $b) -> add -> $next_b
 }
@@ -2419,22 +2419,22 @@ node fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
 
         let result_hover =
             hover_result(&analysis, position_of(source, "$result")).expect("result hover");
-        assert!(result_hover.contains("$result: Int"));
+        assert!(result_hover.contains("$result: i64"));
 
         let repeat_hover =
             hover_result(&analysis, position_of(source, "fib_step ->")).expect("repeat hover");
-        assert!(repeat_hover.contains("repeat fib_step: (Int,Int) -> (Int,Int)"));
+        assert!(repeat_hover.contains("repeat fib_step: (i64,i64) -> (i64,i64)"));
 
         let completions = analysis.completion_symbols();
         let result_completion = completions
             .iter()
             .find(|completion| completion.label == "$result")
             .expect("result completion");
-        assert!(result_completion.detail.contains("Int"));
+        assert!(result_completion.detail.contains("i64"));
         assert!(!completions.iter().any(|completion| completion.label == "$"));
 
         let hints = inlay_hints_result(&analysis, None);
-        assert!(hints.contains(": Int"));
+        assert!(hints.contains(": i64"));
     }
 
     fn position_of(source: &str, needle: &str) -> Position {

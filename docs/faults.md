@@ -50,7 +50,7 @@ Handling faults is optional. If a definition does not handle a faultable
 operation, the faultability propagates through its output type:
 
 ```flow
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     () -> read_stdin -> parse_int -> $exit_code
 }
 ```
@@ -89,7 +89,7 @@ For valid input, the graph should keep the same parallel shape. For
 invalid input, the program should be able to produce diagnostics such as:
 
 ```text
-line 2: expected Real, got "wat"
+line 2: expected f64, got "wat"
 ```
 
 and return a non-zero exit code through explicit graph structure.

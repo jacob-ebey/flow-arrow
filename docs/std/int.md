@@ -1,19 +1,19 @@
 # `std.int`
 
-Pure parsing and formatting utilities for `Int` values.
+Pure parsing and formatting utilities for `i64` values.
 
 ## Nodes
 
 ```text
-parse_int  : Bytes -> Faultable[Int]
-format_int : Int   -> Bytes
+parse_int  : Bytes -> Faultable[i64]
+format_int : i64   -> Bytes
 ```
 
 ## Semantics
 
 ### `parse_int`
 
-Parses ASCII decimal bytes into an `Int`.
+Parses ASCII decimal bytes into an `i64`.
 
 - Leading and trailing ASCII whitespace are ignored.
 - A leading `-` is accepted.
@@ -23,7 +23,7 @@ Parses ASCII decimal bytes into an `Int`.
 
 ### `format_int`
 
-Formats an `Int` as deterministic ASCII decimal bytes.
+Formats an `i64` as deterministic ASCII decimal bytes.
 
 - No leading `+`.
 - No leading zeroes except for the value `0`.

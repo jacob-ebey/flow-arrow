@@ -11,7 +11,7 @@ import std.cli { Args, argv }
 import std.cv { load, grayscale, save_jpeg }
 import std.seq { head, tail }
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     $args                 -> argv      -> $paths
     $paths                -> head      -> $input_path
     $paths                -> tail      -> head      -> $output_path

@@ -14,7 +14,7 @@ fn build_accepts_target_option_before_path() {
         r#"
             import std.cli { Args }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> $exit_code
             }
         "#,
@@ -46,7 +46,7 @@ fn build_accepts_optimization_and_extra_compiler_flags() {
         r#"
             import std.cli { Args }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> $exit_code
             }
         "#,

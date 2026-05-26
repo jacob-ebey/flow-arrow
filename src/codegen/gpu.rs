@@ -139,8 +139,8 @@ impl GpuPlan {
                 continue;
             };
             let scalar = match (&input.ty, &output.ty) {
-                (Ty::Int, Ty::Int) => GpuScalarKind::I32,
-                (Ty::Real, Ty::Real) => GpuScalarKind::F32,
+                (Ty::I64, Ty::I64) => GpuScalarKind::I32,
+                (Ty::F64, Ty::F64) => GpuScalarKind::F32,
                 _ => continue,
             };
             if input.ty != output.ty {
@@ -297,7 +297,7 @@ impl GpuPlan {
         if self.canonical_name(name, *symbol) != "range_step" {
             return None;
         }
-        if call.output != Ty::Seq(Box::new(Ty::Int)) {
+        if call.output != Ty::Seq(Box::new(Ty::I64)) {
             return None;
         }
         let TypedStageKind::Bind { target } = &bind.kind else {
@@ -483,10 +483,10 @@ impl<'a> ScalarKernelBuilder<'a> {
             return Err("GPU scalar kernels require one output".to_string());
         };
         match (&input.ty, &output.ty) {
-            (Ty::Int, Ty::Int) | (Ty::Real, Ty::Real) => {}
+            (Ty::I64, Ty::I64) | (Ty::F64, Ty::F64) => {}
             _ => {
                 return Err(
-                    "GPU scalar kernels currently require Int -> Int or Real -> Real".to_string(),
+                    "GPU scalar kernels currently require i64 -> i64 or f64 -> f64".to_string(),
                 );
             }
         }

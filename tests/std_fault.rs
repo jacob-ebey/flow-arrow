@@ -8,7 +8,7 @@ fn std_fault_nodes_run() {
         import std.io { write_stderr }
         import std.real { parse_real }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             ["1", "bad"] -> fault map parse_real { ok -> $numbers, fault -> $faults }
             $faults -> has_faults -> $invalid
             $faults -> format_faults -> $message
@@ -26,7 +26,7 @@ fn std_fault_nodes_run() {
     assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "");
     assert_eq!(
         String::from_utf8(output.stderr).expect("utf8"),
-        "line 2: expected Real, got \"bad\"\n"
+        "line 2: expected f64, got \"bad\"\n"
     );
 }
 
@@ -41,11 +41,11 @@ fn std_fault_collect_accepts_faultable_sequence() {
         import std.real { parse_real }
         import std.seq { head, length }
 
-        node parse_items(items: Seq[Bytes]) -> out: Faultable[Seq[Real]] {
+        node parse_items(items: Seq[Bytes]) -> out: Faultable[Seq[f64]] {
             $items -> map parse_real -> collect -> $out
         }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             [["1", "2"], ["3"]] -> map parse_items -> collect -> head -> length -> format_int -> $count
             ["ok:", $count, "\n"] -> concat_bytes -> write_stdout -> $exit_code
         }
@@ -90,7 +90,7 @@ fn plain_values_flow_into_faultable_outputs() {
             [$input] -> $out
         }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             "ok" -> maybe_lines -> concat_bytes -> write_stdout -> $exit_code
         }
     "#;
@@ -118,7 +118,7 @@ fn empty_sequence_select_and_discard_destructure_typecheck_and_run() {
             ("root", $paths) -> $out
         }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             false -> config -> ($, $paths)
             $paths -> length -> format_int -> write_stdout -> $exit_code
         }

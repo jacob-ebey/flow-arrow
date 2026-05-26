@@ -8,7 +8,7 @@ fn std_seq_expanded_helpers_run() {
         import std.io { write_stdout }
         import std.seq { drop, fill, is_empty, reverse, take }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             ["a", "b", "c", "d"] -> reverse -> $reversed
             ($reversed, 2) -> take -> $first_two
             ($reversed, 1) -> drop -> $without_first
@@ -45,7 +45,7 @@ fn std_seq_index_update_and_concat_helpers_run() {
         import std.io { write_stdout }
         import std.seq { append, at, concat, get, get_or, last, set, slice }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             ["a", "b", "c"] -> $items
             ($items, 1) -> get -> $got
             ($items, 20, "fallback") -> get_or -> $fallback
@@ -83,7 +83,7 @@ fn std_seq_fault_and_usage_paths_are_reported() {
                 import std.cli { Args }
                 import std.seq { drop, head }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     (["x"], 1) -> drop -> head -> expect -> $bad
                     0 -> $exit_code
                 }
@@ -96,7 +96,7 @@ fn std_seq_fault_and_usage_paths_are_reported() {
                 import std.cli { Args }
                 import std.seq { get }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     (["x"], 1) -> get -> $bad
                     0 -> $exit_code
                 }
@@ -109,7 +109,7 @@ fn std_seq_fault_and_usage_paths_are_reported() {
                 import std.cli { Args }
                 import std.seq { take }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     (["x"], -1) -> take -> $bad
                     0 -> $exit_code
                 }
@@ -122,7 +122,7 @@ fn std_seq_fault_and_usage_paths_are_reported() {
                 import std.cli { Args }
                 import std.seq { zip }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     (["a"], ["b", "c"]) -> zip -> $bad
                     0 -> $exit_code
                 }

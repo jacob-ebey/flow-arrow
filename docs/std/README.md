@@ -17,8 +17,8 @@ Initial modules:
 | [`std.http`](./http.md) | H2O-backed HTTP server boundary I/O |
 | [`std.io`](./io.md) | Stdin/stdout/stderr boundary I/O |
 | [`std.stream`](./stream.md) | Generic `Stream[T]` type |
-| [`std.real`](./real.md) | `Real` parsing and formatting |
-| [`std.int`](./int.md) | `Int` parsing and formatting |
+| [`std.real`](./real.md) | `f64` parsing and formatting |
+| [`std.int`](./int.md) | `i64` parsing and formatting |
 | [`std.math`](./math.md) | Arithmetic and comparisons |
 | [`std.predicates`](./predicates.md) | Reusable predicates |
 | [`std.seq`](./seq.md) | Generic sequence reshaping helpers |
@@ -38,7 +38,7 @@ import std.real { parse_real, format_real }
 import std.math { add }
 import std.predicates { not_empty }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     () -> read_stdin -> $input
     $input -> split_lines -> $lines
     $lines -> transform -> $output

@@ -7,7 +7,7 @@ fn std_bytes_nodes_run() {
         import std.cli { Args }
         import std.io { read_stdin, write_stdout }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             () -> read_stdin -> $input
             $input -> split_lines -> $lines
             ($lines, "|") -> join_bytes -> $joined
@@ -35,7 +35,7 @@ fn std_bytes_trim_split_on_strip_round_trip() {
         import std.cli { Args }
         import std.io { read_stdin, write_stdout }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             () -> read_stdin -> $input
             $input -> trim -> $framed
             ($framed, "[") -> strip_prefix -> $after_open
@@ -64,7 +64,7 @@ fn std_bytes_strip_prefix_fault_propagates() {
         import std.cli { Args }
         import std.io { read_stdin, write_stdout }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             () -> read_stdin -> $input
             ($input, "[") -> strip_prefix -> $inner
             [$inner, "\n"] -> concat_bytes -> $output
@@ -100,7 +100,7 @@ fn std_bytes_expanded_text_helpers_run() {
         import std.int { format_int }
         import std.io { write_stdout }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             "Hello Flow Flow" -> ascii_lower -> $lower
             $lower -> ascii_upper -> $upper
             ($lower, "hello") -> starts_with -> $starts
@@ -153,7 +153,7 @@ fn std_bytes_search_and_slice_edge_cases_run() {
         import std.int { format_int }
         import std.io { write_stdout }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             ("abc", "") -> starts_with -> $starts_empty
             ("abc", "") -> ends_with -> $ends_empty
             ("abc", "") -> contains -> $contains_empty
@@ -197,7 +197,7 @@ fn std_bytes_invalid_ranges_and_empty_needles_fault() {
                 import std.bytes { slice }
                 import std.cli { Args }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     ("abc", 2, 1) -> slice -> $bad
                     0 -> $exit_code
                 }
@@ -210,7 +210,7 @@ fn std_bytes_invalid_ranges_and_empty_needles_fault() {
                 import std.bytes { split_on }
                 import std.cli { Args }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     ("abc", "") -> split_on -> $bad
                     0 -> $exit_code
                 }
@@ -223,7 +223,7 @@ fn std_bytes_invalid_ranges_and_empty_needles_fault() {
                 import std.bytes { replace }
                 import std.cli { Args }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     ("abc", "", "x") -> replace -> $bad
                     0 -> $exit_code
                 }

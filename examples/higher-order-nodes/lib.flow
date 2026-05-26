@@ -4,14 +4,14 @@
 # export-oriented targets.
 import std.math { add }
 
-node increment(x: Int) -> y: Int {
+node increment(x: i64) -> y: i64 {
     ($x, 1) -> add -> $y
 }
 
-node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+node twice<step: node(i64) -> i64>(x: i64) -> y: i64 {
     $x -> step -> step -> $y
 }
 
-extern node answer(seed: Int) -> value: Int {
+extern node answer(seed: i64) -> value: i64 {
     $seed -> twice<increment> -> $value
 }

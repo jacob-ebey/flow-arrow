@@ -341,7 +341,7 @@ mod tests {
             import std.cli { Args }
             import std.bytes { missing }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> $exit_code
             }
         "#;
@@ -356,7 +356,7 @@ mod tests {
             import std.cli { Args }
             import std.cli { argv }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 $args -> argv -> $raw_args
                 0 -> $exit_code
             }
@@ -370,7 +370,7 @@ mod tests {
         let source = r#"
             import std.math { add }
 
-            extern node increment(value: Int) -> out: Int {
+            extern node increment(value: i64) -> out: i64 {
                 ($value, 1) -> add -> $out
             }
         "#;
@@ -384,7 +384,7 @@ mod tests {
         let source = r#"
             import std.int { parse_int }
 
-            extern node parse(bytes: Bytes) -> out: Faultable[Int] {
+            extern node parse(bytes: Bytes) -> out: Faultable[i64] {
                 $bytes -> parse_int -> $faOk
                 $faOk -> $out
             }
@@ -401,20 +401,20 @@ mod tests {
 
             foreign js module "node:os" {
                 pure node platform() -> value: Bytes = platform
-                pure node available_parallelism() -> value: Int = availableParallelism
+                pure node available_parallelism() -> value: i64 = availableParallelism
             }
 
             foreign js global "console" {
                 io node log(message: Bytes) -> done: Unit = log
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 () -> platform -> $platform
                 () -> available_parallelism -> $parallelism
                 $platform -> log -> success -> $exit_code
             }
 
-            node success(done: Unit) -> exit_code: Int {
+            node success(done: Unit) -> exit_code: i64 {
                 0 -> $exit_code
             }
         "#;
@@ -440,7 +440,7 @@ mod tests {
                 io node log(message: Bytes) -> done: Unit = log
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 ["a", "b"] -> filter log -> $kept
                 0 -> $exit_code
             }
@@ -459,7 +459,7 @@ mod tests {
                 pure node platform() -> value: Bytes = platform
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 () -> platform -> $platform
                 0 -> $exit_code
             }
@@ -474,10 +474,10 @@ mod tests {
             import std.cli { Args }
 
             foreign c header "native_math.h" {
-                pure node native_score(value: Int) -> score: Int = fa_native_score
+                pure node native_score(value: i64) -> score: i64 = fa_native_score
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 6 -> native_score -> $score
                 0 -> $exit_code
             }
@@ -493,10 +493,10 @@ mod tests {
             import std.cli { Args }
 
             foreign c header "native_math.h" {
-                pure node native_score(value: Int) -> score: Int = fa_native_score
+                pure node native_score(value: i64) -> score: i64 = fa_native_score
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 6 -> native_score -> $score
                 0 -> $exit_code
             }
@@ -510,18 +510,18 @@ mod tests {
         let source = r#"
             import std.math { add, mul }
 
-            extern node score_batch(width: Int) -> (scores: Seq[Int], weights: Seq[Int]) {
+            extern node score_batch(width: i64) -> (scores: Seq[i64], weights: Seq[i64]) {
                 (1, $width, 1) -> range_step -> $jobs
                 $jobs -> map score_job -> $scores
                 $jobs -> map weight_job -> $weights
             }
 
-            node score_job(n: Int) -> score: Int {
+            node score_job(n: i64) -> score: i64 {
                 ($n, $n) -> mul -> $square
                 ($square, $n) -> add -> $score
             }
 
-            node weight_job(n: Int) -> weight: Int {
+            node weight_job(n: i64) -> weight: i64 {
                 ($n, 2) -> mul -> $weight
             }
         "#;
@@ -588,34 +588,34 @@ mod tests {
         let source = r#"
             import std.math { add, gt, mul }
 
-            extern node double_all(values: Seq[Int]) -> out: Seq[Int] {
+            extern node double_all(values: Seq[i64]) -> out: Seq[i64] {
                 $values -> map double -> $out
             }
 
-            extern node pair(a: Seq[Int], b: Seq[Int]) -> (left: Seq[Int], right: Seq[Int]) {
+            extern node pair(a: Seq[i64], b: Seq[i64]) -> (left: Seq[i64], right: Seq[i64]) {
                 $a -> double_all -> $left
                 $b -> double_all -> $right
             }
 
-            extern node async_map(values: Seq[Int]) -> out: Seq[Int] {
+            extern node async_map(values: Seq[i64]) -> out: Seq[i64] {
                 $values -> map via_async -> $out
             }
 
-            extern node async_filter(values: Seq[Int]) -> out: Seq[Int] {
+            extern node async_filter(values: Seq[i64]) -> out: Seq[i64] {
                 $values -> filter positive_async -> $out
             }
 
-            node via_async(n: Int) -> out: Int {
+            node via_async(n: i64) -> out: i64 {
                 [$n]   -> double_all                -> $items
                 $items -> reduce add(identity: 0)   -> $out
             }
 
-            node positive_async(n: Int) -> keep: Bool {
+            node positive_async(n: i64) -> keep: Bool {
                 $n           -> via_async -> $doubled
                 ($doubled, 0) -> gt       -> $keep
             }
 
-            node double(n: Int) -> out: Int {
+            node double(n: i64) -> out: i64 {
                 ($n, 2) -> mul -> $out
             }
         "#;
@@ -644,11 +644,11 @@ mod tests {
         let source = r#"
             import std.math { add, mul }
 
-            extern node square_plus_one_all(values: Seq[Real]) -> out: Seq[Real] {
+            extern node square_plus_one_all(values: Seq[f64]) -> out: Seq[f64] {
                 $values -> map square_plus_one -> $out
             }
 
-            node square_plus_one(x: Real) -> y: Real {
+            node square_plus_one(x: f64) -> y: f64 {
                 ($x, $x) -> mul -> $square
                 ($square, 1.0) -> add -> $y
             }
@@ -728,11 +728,11 @@ mod tests {
             import std.cli { Args }
             import std.math { add }
 
-            node step(value: Int) -> out: Int {
+            node step(value: i64) -> out: i64 {
                 ($value, 1) -> add -> $out
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> repeat<4> step -> $exit_code
             }
         "#;
@@ -753,7 +753,7 @@ mod tests {
             import std.math { add as scalar_add, eq }
             import std.vector { dot, squared_distance, squared_norm }
 
-            node kernel(left: Seq[Real], right: Seq[Real], score: Real) -> (out_left: Seq[Real], out_right: Seq[Real], out_score: Real) {
+            node kernel(left: Seq[f64], right: Seq[f64], score: f64) -> (out_left: Seq[f64], out_right: Seq[f64], out_score: f64) {
                 ($left, $right) -> dot -> $dot
                 ($left, $right) -> squared_distance -> $distance_squared
                 $left -> squared_norm -> $norm_squared
@@ -764,11 +764,11 @@ mod tests {
                 $right -> $out_right
             }
 
-            node final_score(left: Seq[Real], right: Seq[Real], score: Real) -> out: Real {
+            node final_score(left: Seq[f64], right: Seq[f64], score: f64) -> out: f64 {
                 $score -> $out
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 ([1.0, 2.0], [3.0, 4.0], 0.0) -> repeat<2> kernel -> final_score -> $score
                 ($score, 48.0) -> eq -> $ok
                 ($ok, 0, 1) -> select -> $exit_code
@@ -789,11 +789,11 @@ mod tests {
             import std.math { add as scalar_add }
             import std.vector { dot, squared_distance, squared_norm }
 
-            extern node run() -> score: Real {
+            extern node run() -> score: f64 {
                 ([1.0, 2.0], [3.0, 4.0], 0.0) -> repeat<2> kernel -> final_score -> $score
             }
 
-            node kernel(left: Seq[Real], right: Seq[Real], score: Real) -> (out_left: Seq[Real], out_right: Seq[Real], out_score: Real) {
+            node kernel(left: Seq[f64], right: Seq[f64], score: f64) -> (out_left: Seq[f64], out_right: Seq[f64], out_score: f64) {
                 ($left, $right) -> dot -> $dot
                 ($left, $right) -> squared_distance -> $distance_squared
                 $left -> squared_norm -> $norm_squared
@@ -804,7 +804,7 @@ mod tests {
                 $right -> $out_right
             }
 
-            node final_score(left: Seq[Real], right: Seq[Real], score: Real) -> out: Real {
+            node final_score(left: Seq[f64], right: Seq[f64], score: f64) -> out: f64 {
                 $score -> $out
             }
         "#;
@@ -832,27 +832,27 @@ mod tests {
             import std.real { from_int }
             import std.vector { dot, squared_distance, squared_norm }
 
-            extern node run_gpu_accumulator(iterations: Int) -> score: Real {
+            extern node run_gpu_accumulator(iterations: i64) -> score: f64 {
                 (1, 1025, 1)         -> range_step                       -> $indices
                 $indices             -> map left_value                   -> $left
                 $indices             -> map right_value                  -> $right
                 ($left, $right, 0.0) -> repeat<$iterations> score_kernel -> final_score -> $score
             }
 
-            node left_value(index: Int) -> value: Real {
+            node left_value(index: i64) -> value: f64 {
                 ($index, 11)  -> rem      -> expect -> $wrapped
                 ($wrapped, 1) -> add      -> $offset
                 $offset       -> from_int -> $value
             }
 
-            node right_value(index: Int) -> value: Real {
+            node right_value(index: i64) -> value: f64 {
                 ($index, 3)    -> add      -> $shifted
                 ($shifted, 11) -> rem      -> expect -> $wrapped
                 ($wrapped, 1)  -> add      -> $offset
                 $offset        -> from_int -> $value
             }
 
-            node score_kernel(left: Seq[Real], right: Seq[Real], score: Real) -> (out_left: Seq[Real], out_right: Seq[Real], out_score: Real) {
+            node score_kernel(left: Seq[f64], right: Seq[f64], score: f64) -> (out_left: Seq[f64], out_right: Seq[f64], out_score: f64) {
                 ($left, $right)           -> dot              -> $dot
                 ($left, $right)           -> squared_distance -> $distance_squared
                 $left                     -> squared_norm     -> $norm_squared
@@ -863,7 +863,7 @@ mod tests {
                 $right                    -> $out_right
             }
 
-            node final_score(left: Seq[Real], right: Seq[Real], score: Real) -> out: Real {
+            node final_score(left: Seq[f64], right: Seq[f64], score: f64) -> out: f64 {
                 $score -> $out
             }
         "#;
@@ -907,19 +907,19 @@ mod tests {
             import std.math { add, rem }
             import std.real { from_int }
 
-            extern node build_vectors() -> (left: Seq[Real], right: Seq[Real]) {
+            extern node build_vectors() -> (left: Seq[f64], right: Seq[f64]) {
                 (1, 1025, 1) -> range_step      -> $indices
                 $indices     -> map left_value  -> $left
                 $indices     -> map right_value -> $right
             }
 
-            node left_value(index: Int) -> value: Real {
+            node left_value(index: i64) -> value: f64 {
                 ($index, 11)  -> rem      -> expect -> $wrapped
                 ($wrapped, 1) -> add      -> $offset
                 $offset       -> from_int -> $value
             }
 
-            node right_value(index: Int) -> value: Real {
+            node right_value(index: i64) -> value: f64 {
                 ($index, 3)    -> add      -> $shifted
                 ($shifted, 11) -> rem      -> expect -> $wrapped
                 ($wrapped, 1)  -> add      -> $offset
@@ -947,7 +947,7 @@ mod tests {
             import std.vector { sum as vector_sum }
             import std.matrix { matmul, matvec, row_sums, sum as matrix_sum }
 
-            node kernel(left: Seq[Seq[Real]], right: Seq[Seq[Real]], vector: Seq[Real], score: Real) -> (out_left: Seq[Seq[Real]], out_right: Seq[Seq[Real]], out_vector: Seq[Real], out_score: Real) {
+            node kernel(left: Seq[Seq[f64]], right: Seq[Seq[f64]], vector: Seq[f64], score: f64) -> (out_left: Seq[Seq[f64]], out_right: Seq[Seq[f64]], out_vector: Seq[f64], out_score: f64) {
                 ($left, $right) -> matmul -> $product
                 $product -> matrix_sum -> $product_sum
                 ($left, $vector) -> matvec -> $mv
@@ -961,11 +961,11 @@ mod tests {
                 $vector -> $out_vector
             }
 
-            node final_score(left: Seq[Seq[Real]], right: Seq[Seq[Real]], vector: Seq[Real], score: Real) -> out: Real {
+            node final_score(left: Seq[Seq[f64]], right: Seq[Seq[f64]], vector: Seq[f64], score: f64) -> out: f64 {
                 $score -> $out
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 (
                     [[1.0, 2.0], [3.0, 4.0]],
                     [[5.0, 6.0], [7.0, 8.0]],
@@ -990,11 +990,11 @@ mod tests {
         let fib_source = r#"
             import std.math { add }
 
-            extern node fib(depth: Int) -> result: Int {
+            extern node fib(depth: i64) -> result: i64 {
                 (0, 1) -> repeat<$depth> fib_step -> ($result, $)
             }
 
-            node fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
+            node fib_step(a: i64, b: i64) -> (next_a: i64, next_b: i64) {
                 $b       -> $next_a
                 ($a, $b) -> add -> $next_b
             }
@@ -1009,7 +1009,7 @@ mod tests {
         let concurrency_source = r#"
             import std.math { add, max, mul }
 
-            extern node score_batch(width: Int) -> (total_score: Int, peak_score: Int, total_weight: Int, peak_weight: Int) {
+            extern node score_batch(width: i64) -> (total_score: i64, peak_score: i64, total_weight: i64, peak_weight: i64) {
                 (1, $width, 1) -> range_step              -> $jobs
                 $jobs          -> map score_job           -> $scores
                 $jobs          -> map weight_job          -> $weights
@@ -1019,12 +1019,12 @@ mod tests {
                 $weights       -> reduce max(identity: 0) -> $peak_weight
             }
 
-            node score_job(n: Int) -> score: Int {
+            node score_job(n: i64) -> score: i64 {
                 ($n, $n)      -> mul -> $square
                 ($square, $n) -> add -> $score
             }
 
-            node weight_job(n: Int) -> weight: Int {
+            node weight_job(n: i64) -> weight: i64 {
                 ($n, 2)       -> mul -> $doubled
                 ($doubled, 1) -> add -> $weight
             }
@@ -1044,7 +1044,7 @@ mod tests {
         let source = r#"
             import "./lib.flow" { helper }
 
-            extern node demo(value: Int) -> out: Int {
+            extern node demo(value: i64) -> out: i64 {
                 $value -> helper -> $out
             }
         "#;
@@ -1054,7 +1054,7 @@ mod tests {
 
     #[test]
     fn in_memory_typescript_compile_reports_parse_line_numbers() {
-        let source = "extern node broken(value: Int) -> out: Int {\n    @\n}\n";
+        let source = "extern node broken(value: i64) -> out: i64 {\n    @\n}\n";
 
         let error = compile_typescript_library_source(source).expect_err("parse error");
 
@@ -1066,7 +1066,7 @@ mod tests {
     fn in_memory_javascript_artifact_compile_reports_typecheck_line_numbers() {
         let source = r#"import std.bytes { missing }
 
-extern node demo(value: Int) -> out: Int {
+extern node demo(value: i64) -> out: i64 {
     $value -> missing -> $out
 }
 "#;
@@ -1090,18 +1090,18 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.math { eq }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> match {
                     eq(0) -> zero
                     _ -> one
                 } -> $exit_code
             }
 
-            node zero(x: Int) -> y: Int {
+            node zero(x: i64) -> y: i64 {
                 0 -> $y
             }
 
-            node one(x: Int) -> y: Int {
+            node one(x: i64) -> y: i64 {
                 1 -> $y
             }
         "#;
@@ -1115,19 +1115,19 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.math { add }
 
-            node increment(x: Int) -> y: Int {
+            node increment(x: i64) -> y: i64 {
                 ($x, 1) -> add -> $y
             }
 
-            node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+            node twice<step: node(i64) -> i64>(x: i64) -> y: i64 {
                 $x -> step -> step -> $y
             }
 
-            node wrap<inner: node(Int) -> Int>(x: Int) -> y: Int {
+            node wrap<inner: node(i64) -> i64>(x: i64) -> y: i64 {
                 $x -> twice<inner> -> $y
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 40 -> wrap<increment> -> $exit_code
             }
         "#;
@@ -1141,11 +1141,11 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.int { format_int }
 
-            node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+            node twice<step: node(i64) -> i64>(x: i64) -> y: i64 {
                 $x -> step -> step -> $y
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 40 -> twice<format_int> -> $exit_code
             }
         "#;
@@ -1160,7 +1160,7 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.math { eq }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> match {
                     eq(0) -> 0
                     _ -> 1
@@ -1177,13 +1177,13 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.math { eq }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> match {
                     eq(0) -> zero
                 } -> $exit_code
             }
 
-            node zero(x: Int) -> y: Int {
+            node zero(x: i64) -> y: i64 {
                 0 -> $y
             }
         "#;
@@ -1197,18 +1197,18 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.math { eq }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> match {
                     _ -> zero
                     eq(0) -> one
                 } -> $exit_code
             }
 
-            node zero(x: Int) -> y: Int {
+            node zero(x: i64) -> y: i64 {
                 0 -> $y
             }
 
-            node one(x: Int) -> y: Int {
+            node one(x: i64) -> y: i64 {
                 1 -> $y
             }
         "#;
@@ -1221,18 +1221,18 @@ extern node demo(value: Int) -> out: Int {
         let source = r#"
             import std.cli { Args }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> match {
                     identity_int() -> zero
                     _ -> zero
                 } -> $exit_code
             }
 
-            node identity_int(x: Int) -> y: Int {
+            node identity_int(x: i64) -> y: i64 {
                 $x -> $y
             }
 
-            node zero(x: Int) -> y: Int {
+            node zero(x: i64) -> y: i64 {
                 0 -> $y
             }
         "#;
@@ -1247,18 +1247,18 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.math { eq }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> match {
                     eq(0) -> zero
                     _ -> bytes
                 } -> $exit_code
             }
 
-            node zero(x: Int) -> y: Int {
+            node zero(x: i64) -> y: i64 {
                 0 -> $y
             }
 
-            node bytes(x: Int) -> y: Bytes {
+            node bytes(x: i64) -> y: Bytes {
                 "bad" -> $y
             }
         "#;
@@ -1273,7 +1273,7 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.math { eq }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> match {
                     eq(0) -> 0
                     _ -> "bad"
@@ -1291,7 +1291,7 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.fs { open_file }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 "input.txt" -> open_file -> map id_bytes -> $stream
                 0 -> $exit_code
             }
@@ -1311,7 +1311,7 @@ extern node demo(value: Int) -> out: Int {
             import std.fs { open_file }
             import std.io { write_stdout }
 
-            program main(args: Args) -> exit_code: Faultable[Int] {
+            program main(args: Args) -> exit_code: Faultable[i64] {
                 "input.txt" -> open_file -> map write_stdout -> $stream
                 0 -> $exit_code
             }
@@ -1327,7 +1327,7 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.http as http
 
-            program main(args: Args) -> exit_code: Faultable[Int] {
+            program main(args: Args) -> exit_code: Faultable[i64] {
                 () -> http.default_config -> $config
                 $config -> http.listen -> $listener
                 $listener -> http.requests -> $requests
@@ -1354,7 +1354,7 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.math { add }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> $add
                 ($add, 1) -> add -> $exit_code
             }
@@ -1369,7 +1369,7 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.int { format_int }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 "not an int" -> format_int -> $exit_code
             }
         "#;
@@ -1384,7 +1384,7 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.math as math
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 (3, 1) -> math.sub -> $exit_code
             }
         "#;
@@ -1401,7 +1401,7 @@ extern node demo(value: Int) -> out: Int {
             import std.sqlite as sqlite
             import std.tuple { first }
 
-            program main(args: Args) -> exit_code: Faultable[Int] {
+            program main(args: Args) -> exit_code: Faultable[i64] {
                 () -> sqlite.open_memory -> $conn0
                 ($conn0, "CREATE TABLE todos (title TEXT NOT NULL)", []) -> sqlite.exec -> first -> $conn1
                 ($conn1, "INSERT INTO todos (title) VALUES (?)", ["write sqlite docs" -> sqlite.text]) -> sqlite.exec -> first -> $conn2
@@ -1420,11 +1420,11 @@ extern node demo(value: Int) -> out: Int {
         let source = r#"
             import std.cli { Args }
 
-            node pair(input: Int) -> out: Faultable[(Int, Int)] {
+            node pair(input: i64) -> out: Faultable[(i64, i64)] {
                 ($input, 2) -> $out
             }
 
-            program main(args: Args) -> exit_code: Faultable[Int] {
+            program main(args: Args) -> exit_code: Faultable[i64] {
                 1 -> pair -> ($left, $right)
                 $left -> $exit_code
             }
@@ -1441,7 +1441,7 @@ extern node demo(value: Int) -> out: Int {
         let source = r#"
             import std.cli { Args }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 (1, 2) -> ($left, $right) -> $exit_code
             }
         "#;
@@ -1455,7 +1455,7 @@ extern node demo(value: Int) -> out: Int {
         let source = r#"
             import std.cli { Args }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 (1, 2) -> ($left, $middle, $right)
                 $left -> $exit_code
             }
@@ -1470,7 +1470,7 @@ extern node demo(value: Int) -> out: Int {
         let source = r#"
             import std.cli { Args }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 [] -> $empty
                 0 -> $exit_code
             }
@@ -1481,46 +1481,37 @@ extern node demo(value: Int) -> out: Int {
     }
 
     #[test]
-    fn typechecks_mixed_numeric_add_and_llvm_type_names() {
+    fn typecheck_rejects_legacy_and_mixed_numeric_types() {
         let source = r#"
             import std.cli { Args }
             import std.math { add }
 
-            node mixed(left: i64, right: double) -> out: double {
-                ($left, $right) -> add -> $out
-            }
-
-            node numeric_identity(value: Int|Real) -> out: Int|Real {
-                $value -> $out
-            }
-
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 (1, 2.5) -> add -> $total
                 0 -> $exit_code
             }
         "#;
         let module = parser::parse(source).expect("parse");
-        typecheck::check_module(&module).expect("typecheck");
-        let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
-        assert!(!runtime_c.contains("FaValue"));
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("`add` input type mismatch: expected `f64`, found `i64`"));
     }
 
     #[test]
-    fn typechecks_mixed_numeric_sequence_literals() {
+    fn typecheck_rejects_numeric_union_runtime_types() {
         let source = r#"
             import std.cli { Args }
 
-            node count(values: Seq[Real]) -> out: Int {
-                2 -> $out
+            node numeric_identity(value: i64|f64) -> out: i64|f64 {
+                $value -> $out
             }
 
-            program main(args: Args) -> exit_code: Int {
-                [1, 2.5] -> count -> $exit_code
+            program main(args: Args) -> exit_code: i64 {
+                0 -> $exit_code
             }
         "#;
         let module = parser::parse(source).expect("parse");
-        typecheck::check_module(&module).expect("typecheck");
-        codegen::emit_runtime_c(&module).expect("runtime c");
+        let error = typecheck::check_module(&module).expect_err("typecheck should fail");
+        assert!(error.contains("union type `i64|f64` is not runtime-represented yet"));
     }
 
     #[test]
@@ -1529,7 +1520,7 @@ extern node demo(value: Int) -> out: Int {
             import std.cli { Args }
             import std.math { add }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 (1, 2) -> add -> $exit_code
             }
         "#;
@@ -1547,8 +1538,8 @@ extern node demo(value: Int) -> out: Int {
         match &main.chains[0].source.kind {
             typecheck::TypedEndpointKind::Tuple(items) => {
                 assert_eq!(items.len(), 2);
-                assert_eq!(items[0].ty.to_string(), "Int");
-                assert_eq!(items[1].ty.to_string(), "Int");
+                assert_eq!(items[0].ty.to_string(), "i64");
+                assert_eq!(items[1].ty.to_string(), "i64");
             }
             other => panic!("expected typed tuple source, found {other:?}"),
         }
@@ -1560,16 +1551,16 @@ extern node demo(value: Int) -> out: Int {
             }
             other => panic!("expected typed call stage, found {other:?}"),
         }
-        assert_eq!(main.chains[0].stages[0].input.to_string(), "(Int,Int)");
-        assert_eq!(main.chains[0].stages[0].output.to_string(), "Int");
+        assert_eq!(main.chains[0].stages[0].input.to_string(), "(i64,i64)");
+        assert_eq!(main.chains[0].stages[0].output.to_string(), "i64");
     }
 
     #[test]
     fn type_aliases_resolve_in_typecheck_and_codegen() {
         let source = r#"
-            type Pixel = (Real,(Real,Real))
+            type Pixel = (f64,(f64,f64))
             type Row = Seq[Pixel]
-            type Size = (Int,Int)
+            type Size = (i64,i64)
             type Image = (Size,Seq[Row])
 
             import std.cli { Args }
@@ -1578,7 +1569,7 @@ extern node demo(value: Int) -> out: Int {
                 $image -> $out
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 ((1, 1), [[(0.1, (0.2, 0.3))]]) -> passthrough -> $image
                 0 -> $exit_code
             }
@@ -1597,7 +1588,7 @@ extern node demo(value: Int) -> out: Int {
 
             import std.cli { Args }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> $exit_code
             }
         "#;
@@ -1625,7 +1616,7 @@ extern node demo(value: Int) -> out: Int {
                 $image -> grayscale -> $out
             }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 ((1, 1), [[(0.2, (0.4, 0.6))]]) -> process -> $image
                 $image -> image_size -> $size
                 (0.2, (0.4, 0.6)) -> keep_pixel -> $pixel
@@ -1637,7 +1628,7 @@ extern node demo(value: Int) -> out: Int {
         let runtime_c = codegen::emit_runtime_c(&module).expect("runtime c");
         assert!(runtime_c.contains("flow_node_process"));
         assert!(runtime_c.contains("flow_node___flow_std_cv_grayscale"));
-        assert!(runtime_c.contains("FaTuple_Real_Real"));
+        assert!(runtime_c.contains("FaTuple_f64_f64"));
     }
 
     #[test]
@@ -1652,10 +1643,10 @@ extern node demo(value: Int) -> out: Int {
                 import std.cli { Args }
                 import std.math { sub, eq, max }
 
-                program main(args: Args) -> exit_code: Int {
-                    (5, 2.5) -> sub -> $mixed_sub
-                    (2, 2.5) -> max -> $mixed_max
-                    ($mixed_sub, $mixed_max) -> eq -> $real_ok
+                program main(args: Args) -> exit_code: i64 {
+                    (5.0, 2.5) -> sub -> $real_sub
+                    (2.0, 2.5) -> max -> $real_max
+                    ($real_sub, $real_max) -> eq -> $real_ok
 
                     (4, 7) -> max -> $int_max
                     ($int_max, 7) -> eq -> $max_ok
@@ -1689,7 +1680,7 @@ extern node demo(value: Int) -> out: Int {
             r#"
                 import std.cli { Args }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     0 -> $exit_code
                 }
             "#,
@@ -1726,7 +1717,7 @@ extern node demo(value: Int) -> out: Int {
             r#"
                 import std.cli { Args }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     1 -> $exit_code
                 }
             "#,
@@ -1741,7 +1732,7 @@ extern node demo(value: Int) -> out: Int {
             r#"
                 import std.cli { Args }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     2 -> $exit_code
                 }
             "#,
@@ -1804,7 +1795,7 @@ extern node demo(value: Int) -> out: Int {
         assert_eq!(String::from_utf8(fault_output.stdout).expect("utf8"), "");
         assert_eq!(
             String::from_utf8(fault_output.stderr).expect("utf8"),
-            "line 2: expected Real, got \"wat\"\n"
+            "line 2: expected f64, got \"wat\"\n"
         );
     }
 
@@ -1834,7 +1825,7 @@ extern node demo(value: Int) -> out: Int {
             import std.int { parse_int, format_int }
             import std.math { add }
 
-            program main(args: Args) -> exit_code: Faultable[Int] {
+            program main(args: Args) -> exit_code: Faultable[i64] {
                 () -> read_stdin -> split_lines -> map parse_int -> $numbers
                 $numbers -> reduce add(identity: 0) -> $total
                 $total -> format_int -> $output
@@ -1940,7 +1931,7 @@ extern node demo(value: Int) -> out: Int {
                 import std.fault { expect }
                 import std.math { mul, div, rem, lt, gt, le, ge, eq }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     # mul: 3 * 4 = 12
                     (3, 4) -> mul -> $product
                     ($product, 12) -> eq -> $mul_ok
@@ -1999,7 +1990,7 @@ extern node demo(value: Int) -> out: Int {
                 import std.cli { Args }
                 import std.predicates { and, or, not }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     # and(true, true) = true
                     (true, true) -> and -> $and_tt
                     # or(false, true) = true
@@ -2037,7 +2028,7 @@ extern node demo(value: Int) -> out: Int {
                 import std.cli { Args }
                 import std.predicates { is_empty, xor, not, all, any }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     "" -> is_empty -> $empty_ok
                     "x" -> is_empty -> $nonempty_is_empty
                     $nonempty_is_empty -> not -> $nonempty_ok
@@ -2090,7 +2081,7 @@ extern node demo(value: Int) -> out: Int {
                 import std.cli { Args }
                 import std.io { write_stdout }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     (["hello", "world"], " ") -> join_bytes -> $joined
                     [$joined, "\n"] -> concat_bytes -> $output
                     $output -> write_stdout -> $exit_code
@@ -2124,7 +2115,7 @@ extern node demo(value: Int) -> out: Int {
                 import std.int { parse_int }
                 import std.math { eq }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     0 -> match {
                         eq(0) -> zero
                         bad_guard() -> one
@@ -2132,20 +2123,20 @@ extern node demo(value: Int) -> out: Int {
                     } -> $exit_code
                 }
 
-                node zero(x: Int) -> y: Int {
+                node zero(x: i64) -> y: i64 {
                     0 -> $y
                 }
 
-                node one(x: Int) -> y: Int {
+                node one(x: i64) -> y: i64 {
                     1 -> $y
                 }
 
-                node bad_guard(x: Int) -> r: Bool {
+                node bad_guard(x: i64) -> r: Bool {
                     "not-an-int" -> parse_int -> expect -> $n
                     ($n, 0) -> eq -> $r
                 }
 
-                node bad_body(x: Int) -> y: Int {
+                node bad_body(x: i64) -> y: i64 {
                     "not-an-int" -> parse_int -> expect -> $y
                 }
             "#,
@@ -2171,7 +2162,7 @@ extern node demo(value: Int) -> out: Int {
                 import std.cli { Args }
                 import std.math { eq }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     0 -> match {
                         eq(0) -> 0
                         _ -> 1

@@ -188,13 +188,13 @@ static FaFaultable_Bytes fa_strip_suffix(FaBytes input, FaBytes suffix) {
   return FaFaultable_Bytes_ok(fa_bytes_literal(input.bytes, input.len - suffix.len));
 }
 
-static FaSeq_Int fa_bytes_to_codes(FaBytes input) {
-  FaSeq_Int out = FaSeq_Int_new(input.len);
+static FaSeq_i64 fa_bytes_to_codes(FaBytes input) {
+  FaSeq_i64 out = FaSeq_i64_new(input.len);
   for (size_t i = 0; i < input.len; i++) out.items[i] = (unsigned char)input.bytes[i];
   return out;
 }
 
-static FaBytes fa_codes_to_bytes(FaSeq_Int codes) {
+static FaBytes fa_codes_to_bytes(FaSeq_i64 codes) {
   char *bytes = (char *)fa_malloc(fa_checked_size_add(codes.count, 1, "codes_to_bytes: byte length overflow"));
   for (size_t i = 0; i < codes.count; i++) bytes[i] = (char)codes.items[i];
   bytes[codes.count] = '\0';

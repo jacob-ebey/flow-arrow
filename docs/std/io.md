@@ -11,8 +11,8 @@ used as higher-order `map`, `filter`, `reduce`, or `scan` functions.
 
 ```text
 read_stdin   : ()    -> Bytes
-write_stdout : Bytes -> Int
-write_stderr : Bytes -> Int
+write_stdout : Bytes -> i64
+write_stderr : Bytes -> i64
 ```
 
 ## Semantics
@@ -37,7 +37,7 @@ Writes bytes to standard output and produces an exit code.
 
 - Produces `0` on success.
 - A boundary fault produces a non-zero host-defined exit code.
-- The program's returned `Int` exit code should depend on this node if
+- The program's returned `i64` exit code should depend on this node if
   stdout must be written before process exit.
 
 ### `write_stderr`
@@ -53,7 +53,7 @@ Writes bytes to standard error and produces an exit code.
 import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     () -> read_stdin -> $input
     $input -> transform -> $output
     $output -> write_stdout -> $exit_code

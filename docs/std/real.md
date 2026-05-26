@@ -1,20 +1,20 @@
 # `std.real`
 
-Pure parsing and formatting utilities for `Real` values.
+Pure parsing and formatting utilities for `f64` values.
 
 ## Nodes
 
 ```text
-parse_real  : Bytes -> Faultable[Real]
-format_real : Real  -> Bytes
-from_int    : Int   -> Real
+parse_real  : Bytes -> Faultable[f64]
+format_real : f64  -> Bytes
+from_int    : i64   -> f64
 ```
 
 ## Semantics
 
 ### `parse_real`
 
-Parses ASCII decimal bytes into a `Real`.
+Parses ASCII decimal bytes into a `f64`.
 
 - Leading and trailing ASCII whitespace are ignored.
 - Accepted syntax is the language's `REAL` literal form, plus integer
@@ -25,7 +25,7 @@ Parses ASCII decimal bytes into a `Real`.
 
 ### `format_real`
 
-Formats a `Real` as deterministic ASCII bytes.
+Formats a `f64` as deterministic ASCII bytes.
 
 - Output must be stable across supported targets for the same value.
 - Finite values use a shortest round-trippable decimal representation.
@@ -34,7 +34,7 @@ Formats a `Real` as deterministic ASCII bytes.
 
 ### `from_int`
 
-Converts an `Int` to the corresponding `Real`. This is intended for
+Converts an `i64` to the corresponding `f64`. This is intended for
 explicit numeric normalization, for example turning byte channel samples
 into `0.0..1.0` values.
 
@@ -49,7 +49,7 @@ node parse_then_format(input: Bytes) -> output: Faultable[Bytes] {
     $n -> format_real -> $output
 }
 
-node byte_to_unit(value: Int) -> out: Real {
+node byte_to_unit(value: i64) -> out: f64 {
     $value -> from_int -> $real
     ($real, 255.0) -> div -> $out
 }

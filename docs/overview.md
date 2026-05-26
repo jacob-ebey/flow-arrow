@@ -106,11 +106,11 @@ backend boundaries as an object shape instead of an anonymous tuple:
 
 ```flow
 struct Point {
-    x: Int,
-    y: Int,
+    x: i64,
+    y: i64,
 }
 
-node sum_point(point: Point) -> total: Int {
+node sum_point(point: Point) -> total: i64 {
     $point -> field x -> $x
     $point -> field y -> $y
     ($x, $y) -> add -> $total
@@ -152,7 +152,7 @@ Named ports are useful when order would be unclear.
 # 6. Example: hypotenuse
 
 ```flow
-node hypot(x: Real, y: Real) -> r: Real {
+node hypot(x: f64, y: f64) -> r: f64 {
     $x -> square -> $xx
     $y -> square -> $yy
     ($xx, $yy) -> add -> sqrt -> $r
@@ -256,7 +256,7 @@ $pairs -> map multiply_pair -> $products
 Reductions require an associative operation and identity.
 
 ```flow
-node dot(xs: Vec[N, Real], ys: Vec[N, Real]) -> s: Real {
+node dot(xs: Vec[N, f64], ys: Vec[N, f64]) -> s: f64 {
     ($xs, $ys) -> zip
              -> map multiply_pair
              -> reduce add(identity: 0)
@@ -296,7 +296,7 @@ graph stays static; only the *width* of parallel regions varies.
 `range` produces a sequence of integers from a runtime length:
 
 ```flow
-$n -> range -> $idxs                    # $idxs : Seq[Int], length = $n
+$n -> range -> $idxs                    # $idxs : Seq[i64], length = $n
 $idxs -> map compute_pixel -> $pixels
 $pixels -> reduce add(identity: 0) -> $total
 ```
@@ -346,7 +346,7 @@ Reusable nodes may take named static node parameters. The parameter is
 named in the declaration and supplied positionally at the use site:
 
 ```flow
-node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+node twice<step: node(i64) -> i64>(x: i64) -> y: i64 {
     $x -> step -> step -> $y
 }
 
@@ -399,7 +399,7 @@ depends on a value computed inside the loop.
 Illegal:
 
 ```flow
-node fib(n: Int) -> r: Int {
+node fib(n: i64) -> r: i64 {
     ...
     $n1 -> fib -> $a
     $n2 -> fib -> $b
@@ -458,7 +458,7 @@ ordinary input and returns an integer process exit code.
 import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     () -> read_stdin -> $input
     $input -> parse -> transform -> encode -> $output
     $output -> write_stdout -> $exit_code
@@ -484,7 +484,7 @@ foreign js global "console" {
 }
 
 foreign c header "./native_math.h" source "./native_math.c" {
-    pure node native_score(value: Int) -> score: Int = fa_native_score
+    pure node native_score(value: i64) -> score: i64 = fa_native_score
 }
 ```
 
@@ -627,9 +627,9 @@ $img ─────────┤                        ├─> equalize ─>
 
 ```flow
 node matmul(
-    a: Matrix[M, K, Real],
-    b: Matrix[K, N, Real]
-) -> c: Matrix[M, N, Real] {
+    a: Matrix[M, K, f64],
+    b: Matrix[K, N, f64]
+) -> c: Matrix[M, N, f64] {
 
     ($a, $b) -> grid<M, N> {
         cell(i, j) {
@@ -690,13 +690,13 @@ import "./filters.flow" { blur, sobel as detect_edges }
 import "./format.flow" as format
 
 # type aliases
-type Pixel = (Real,Real)
+type Pixel = (f64,f64)
 
 # pipeline
 $x -> f -> $y
 
 # static node parameter
-node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+node twice<step: node(i64) -> i64>(x: i64) -> y: i64 {
     $x -> step -> step -> $y
 }
 40 -> twice<increment> -> $answer
@@ -725,7 +725,7 @@ $xs -> reduce associative_op(identity: $e) -> $y
 $xs -> scan associative_op(identity: $e) -> $ys
 
 # fixed or runtime repeat
-$x -> repeat<$n> step -> $y      # repeat count may be a literal or runtime Int
+$x -> repeat<$n> step -> $y      # repeat count may be a literal or runtime i64
 
 # pure selection
 ($predicate, $true_value, $false_value) -> select -> $y

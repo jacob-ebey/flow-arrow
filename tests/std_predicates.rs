@@ -6,7 +6,7 @@ fn std_predicate_nodes_run() {
         import std.cli { Args }
         import std.predicates { not_empty, is_empty, and, or, xor, not, all, any }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             "x" -> not_empty -> $not_empty_ok
             "" -> is_empty -> $is_empty_ok
             (true, true) -> and -> $and_ok

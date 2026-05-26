@@ -6,19 +6,19 @@ The CV stdlib exports `Size`, `Pixel`, and `Image` aliases for its
 normalized sRGB image shape:
 
 ```text
-Size = (Int,Int)
-Pixel = (Real,(Real,Real))
+Size = (i64,i64)
+Pixel = (f64,(f64,f64))
 Image = (Size,Seq[Seq[Pixel]])
 ```
 
 `Size` is `(width,height)`. The outer sequence is image rows,
 each inner sequence is a scanline, and pixels are sRGB triples written as
-`(red,(green,blue))`. Channel values are normalized `Real` values in
+`(red,(green,blue))`. Channel values are normalized `f64` values in
 `0.0..1.0`; codec nodes convert to and from 8-bit file samples at the
 native boundary.
 
 The row-matrix shape makes image geometry explicit. For numeric matrix
-pipelines, use the channel matrix views, which return `Seq[Seq[Real]]`
+pipelines, use the channel matrix views, which return `Seq[Seq[f64]]`
 and can be passed directly to `std.matrix`.
 
 ## Codecs
@@ -40,11 +40,11 @@ decode_pnm  : Bytes -> Faultable[Image]
 decode_pgm  : Bytes -> Faultable[Image]
 decode_ppm  : Bytes -> Faultable[Image]
 
-save_jpeg   : (Bytes,Image) -> Faultable[Int]
-save_png    : (Bytes,Image) -> Faultable[Int]
-save_bmp    : (Bytes,Image) -> Faultable[Int]
-save_pgm    : (Bytes,Image) -> Faultable[Int]
-save_ppm    : (Bytes,Image) -> Faultable[Int]
+save_jpeg   : (Bytes,Image) -> Faultable[i64]
+save_png    : (Bytes,Image) -> Faultable[i64]
+save_bmp    : (Bytes,Image) -> Faultable[i64]
+save_pgm    : (Bytes,Image) -> Faultable[i64]
+save_ppm    : (Bytes,Image) -> Faultable[i64]
 
 encode_jpeg : Image -> Faultable[Bytes]
 encode_png  : Image -> Faultable[Bytes]
@@ -60,8 +60,8 @@ encode_ppm  : Image -> Faultable[Bytes]
 
 ```text
 dimensions  : Image -> Size
-width       : Image -> Int
-height      : Image -> Int
+width       : Image -> i64
+height      : Image -> i64
 pixel_rows  : Image -> Seq[Seq[Pixel]]
 pixels      : Image -> Seq[Pixel]
 map_pixels  : (Image,Seq[Seq[Pixel]]) -> Image
@@ -77,10 +77,10 @@ byte-to-image adapters and tests.
 ```text
 grayscale     : Image -> Image
 invert        : Image -> Image
-threshold     : (Image,Real) -> Image
-brighten      : (Image,Real) -> Image
-darken        : (Image,Real) -> Image
-contrast      : (Image,Real) -> Image
+threshold     : (Image,f64) -> Image
+brighten      : (Image,f64) -> Image
+darken        : (Image,f64) -> Image
+contrast      : (Image,f64) -> Image
 red_channel   : Image -> Image
 green_channel : Image -> Image
 blue_channel  : Image -> Image
@@ -96,10 +96,10 @@ Channel values are clamped to `0.0..1.0` where transforms can overflow.
 ## Matrix Views
 
 ```text
-red_matrix   : Image -> Seq[Seq[Real]]
-green_matrix : Image -> Seq[Seq[Real]]
-blue_matrix  : Image -> Seq[Seq[Real]]
-luma_matrix  : Image -> Seq[Seq[Real]]
+red_matrix   : Image -> Seq[Seq[f64]]
+green_matrix : Image -> Seq[Seq[f64]]
+blue_matrix  : Image -> Seq[Seq[f64]]
+luma_matrix  : Image -> Seq[Seq[f64]]
 ```
 
 These views bridge `std.cv` into `std.matrix`:
@@ -109,11 +109,11 @@ import std.cli { Args }
 import std.cv { Image, luma_matrix, load }
 import std.matrix { mean }
 
-node average_luma(image: Image) -> value: Real {
+node average_luma(image: Image) -> value: f64 {
     $image -> luma_matrix -> mean -> $value
 }
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     "input.png" -> load -> average_luma -> $value
     0 -> $exit_code
 }
@@ -129,7 +129,7 @@ node make_gray(image: Image) -> out: Image {
     $image -> grayscale -> $out
 }
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     "input.png" -> load -> make_gray -> $image
     ("copy.jpg", $image) -> save_jpeg -> $exit_code
 }

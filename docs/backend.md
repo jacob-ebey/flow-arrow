@@ -233,12 +233,12 @@ compiles any local `source` files as additional clang objects before linking:
 
 ```flow
 foreign c header "./native_math.h" source "./native_math.c" {
-    pure node native_score(value: Int) -> score: Int = fa_native_score
+    pure node native_score(value: i64) -> score: i64 = fa_native_score
 }
 ```
 
 The C function must use FlowArrow's C ABI lowering for the declared input and
-output types. For example, `Int` lowers to `int64_t`, `Real` to `double`, and
+output types. For example, `i64` lowers to `int64_t`, `f64` to `double`, and
 `Bytes` to `FaBytes` (`char *bytes; size_t len`). If a `foreign c` declaration
 omits `source`, the symbol must be supplied through normal linker inputs.
 WASM builds reject foreign declarations for now.
@@ -274,9 +274,9 @@ flowarrow run --gpu path/to/main.flow
 The compiler keeps GPU support in the backend lowering pipeline, not in a
 separate evaluator. A backend-neutral GPU planner walks the typed module and
 recognizes GPU-legal typed regions. The implemented scalar path covers pure
-`Seq[Int] -> Seq[Int]` and `Seq[Real] -> Seq[Real]` `map` kernels plus numeric
-`reduce add`, `reduce min`, and `reduce max` over `Seq[Int]` and `Seq[Real]`.
-It also recognizes `range_step -> map Int -> reduce` groups and lowers them as
+`Seq[i64] -> Seq[i64]` and `Seq[f64] -> Seq[f64]` `map` kernels plus numeric
+`reduce add`, `reduce min`, and `reduce max` over `Seq[i64]` and `Seq[f64]`.
+It also recognizes `range_step -> map i64 -> reduce` groups and lowers them as
 GPU-resident virtual-range reductions, so the host does not materialize the
 range or mapped sequence when every downstream consumer is reducible on the GPU.
 The planner lowers map regions to WGSL with explicit storage buffers and a
@@ -350,7 +350,7 @@ are rejected because the browser compiler has no source file path.
   slice is `--crate-type cdylib` with ABI-compatible top-level
   `extern node` declarations exported as core WASM functions. Exported
   node inputs and outputs are
-  currently limited to scalar `Int` and `Real` values, with `Int`
+  currently limited to scalar `i64` and `f64` values, with `i64`
   represented as WASM `i64`.
 - The `wasm32-wasi` target produces a module runnable under wasmtime
   / wasmer / wasi-compatible hosts. This target is planned but not yet

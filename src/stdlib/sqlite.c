@@ -13,7 +13,7 @@ typedef struct {
   bool finalized;
 } FaSqliteRowStreamState;
 
-static FaFaultable_Tuple_SqliteConnection_Int fa_sqlite_exec(FaTuple_SqliteConnection_Bytes_Seq_SqliteValue input);
+static FaFaultable_Tuple_SqliteConnection_i64 fa_sqlite_exec(FaTuple_SqliteConnection_Bytes_Seq_SqliteValue input);
 
 static FaFault fa_sqlite_fault_message(const char *operation, int rc, const char *message) {
   size_t op_len = strlen(operation);
@@ -121,17 +121,17 @@ static FaFaultable_SqliteConnection fa_sqlite_open_memory(FaUnit unit) {
   return fa_sqlite_open_flags(fa_bytes_literal(":memory:", 8), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, "open_memory");
 }
 
-static FaFaultable_Int fa_sqlite_close(FaSqliteConnection connection) {
+static FaFaultable_i64 fa_sqlite_close(FaSqliteConnection connection) {
   if (!connection.state || connection.state->closed) {
-    return FaFaultable_Int_fault(fa_sqlite_fault_cstr("std.sqlite: connection is closed"));
+    return FaFaultable_i64_fault(fa_sqlite_fault_cstr("std.sqlite: connection is closed"));
   }
   connection.state->closed = true;
   connection.state->close_requested = true;
   fa_sqlite_release(connection.state);
-  return FaFaultable_Int_ok(0);
+  return FaFaultable_i64_ok(0);
 }
 
-static FaFaultable_SqliteConnection fa_sqlite_busy_timeout(FaTuple_SqliteConnection_Int input) {
+static FaFaultable_SqliteConnection fa_sqlite_busy_timeout(FaTuple_SqliteConnection_i64 input) {
   FaFault fault;
   sqlite3 *db = fa_sqlite_db(input.f0, &fault, "busy_timeout");
   if (!db) return FaFaultable_SqliteConnection_fault(fault);
@@ -158,7 +158,7 @@ static FaFaultable_SqliteConnection fa_sqlite_exec_no_params(FaSqliteConnection 
   input.f0 = connection;
   input.f1 = fa_bytes_literal(sql, strlen(sql));
   input.f2 = params;
-  FaFaultable_Tuple_SqliteConnection_Int result = fa_sqlite_exec(input);
+  FaFaultable_Tuple_SqliteConnection_i64 result = fa_sqlite_exec(input);
   if (result.is_fault) return FaFaultable_SqliteConnection_fault(result.fault);
   return FaFaultable_SqliteConnection_ok(result.value.f0);
 }
@@ -328,36 +328,36 @@ static FaSqliteRow fa_sqlite_copy_row(sqlite3_stmt *stmt) {
   return row;
 }
 
-static FaFaultable_Tuple_SqliteConnection_Int fa_sqlite_exec(FaTuple_SqliteConnection_Bytes_Seq_SqliteValue input) {
+static FaFaultable_Tuple_SqliteConnection_i64 fa_sqlite_exec(FaTuple_SqliteConnection_Bytes_Seq_SqliteValue input) {
   FaFault fault;
   sqlite3 *db = fa_sqlite_db(input.f0, &fault, "exec");
-  if (!db) return FaFaultable_Tuple_SqliteConnection_Int_fault(fault);
+  if (!db) return FaFaultable_Tuple_SqliteConnection_i64_fault(fault);
   sqlite3_stmt *stmt = NULL;
   if (fa_sqlite_prepare(db, input.f1, "exec", &stmt, &fault) != 0) {
-    return FaFaultable_Tuple_SqliteConnection_Int_fault(fault);
+    return FaFaultable_Tuple_SqliteConnection_i64_fault(fault);
   }
   if (fa_sqlite_bind_params(db, stmt, input.f2, &fault) != 0) {
     sqlite3_finalize(stmt);
-    return FaFaultable_Tuple_SqliteConnection_Int_fault(fault);
+    return FaFaultable_Tuple_SqliteConnection_i64_fault(fault);
   }
   int rc = sqlite3_step(stmt);
   if (rc == SQLITE_ROW) {
     sqlite3_finalize(stmt);
-    return FaFaultable_Tuple_SqliteConnection_Int_fault(fa_sqlite_fault_cstr("std.sqlite: exec returned rows; use query or query_all"));
+    return FaFaultable_Tuple_SqliteConnection_i64_fault(fa_sqlite_fault_cstr("std.sqlite: exec returned rows; use query or query_all"));
   }
   if (rc != SQLITE_DONE) {
     fault = fa_sqlite_fault(db, "exec", rc);
     sqlite3_finalize(stmt);
-    return FaFaultable_Tuple_SqliteConnection_Int_fault(fault);
+    return FaFaultable_Tuple_SqliteConnection_i64_fault(fault);
   }
   rc = sqlite3_finalize(stmt);
   if (rc != SQLITE_OK) {
-    return FaFaultable_Tuple_SqliteConnection_Int_fault(fa_sqlite_fault(db, "exec", rc));
+    return FaFaultable_Tuple_SqliteConnection_i64_fault(fa_sqlite_fault(db, "exec", rc));
   }
-  FaTuple_SqliteConnection_Int value;
+  FaTuple_SqliteConnection_i64 value;
   value.f0 = input.f0;
   value.f1 = (int64_t)sqlite3_changes64(db);
-  return FaFaultable_Tuple_SqliteConnection_Int_ok(value);
+  return FaFaultable_Tuple_SqliteConnection_i64_ok(value);
 }
 
 static int fa_sqlite_row_stream_close(void *state_ptr, FaFault *fault) {
@@ -473,17 +473,17 @@ static FaFaultable_Tuple_SqliteConnection_Seq_SqliteRow fa_sqlite_query_all(FaTu
 }
 
 static int64_t fa_sqlite_column_count(FaSqliteRow row) {
-  return fa_checked_size_to_i64(row.count, "std.sqlite: column count exceeds Int range");
+  return fa_checked_size_to_i64(row.count, "std.sqlite: column count exceeds i64 range");
 }
 
-static FaFaultable_Bytes fa_sqlite_column_name(FaTuple_SqliteRow_Int input) {
+static FaFaultable_Bytes fa_sqlite_column_name(FaTuple_SqliteRow_i64 input) {
   if (input.f1 < 0 || (size_t)input.f1 >= input.f0.count) {
     return fa_sqlite_bytes_fault("std.sqlite: column index out of range");
   }
   return FaFaultable_Bytes_ok(input.f0.names[input.f1]);
 }
 
-static FaFaultable_SqliteValue fa_sqlite_value_at(FaTuple_SqliteRow_Int input) {
+static FaFaultable_SqliteValue fa_sqlite_value_at(FaTuple_SqliteRow_i64 input) {
   if (input.f1 < 0 || (size_t)input.f1 >= input.f0.count) {
     return fa_sqlite_value_fault("std.sqlite: column index out of range");
   }
@@ -515,14 +515,14 @@ static bool fa_sqlite_is_null(FaSqliteValue value) {
   return value.kind == FA_SQLITE_NULL;
 }
 
-static FaFaultable_Int fa_sqlite_as_int(FaSqliteValue value) {
-  if (value.kind != FA_SQLITE_INT) return FaFaultable_Int_fault(fa_sqlite_fault_cstr("std.sqlite: value is not an integer"));
-  return FaFaultable_Int_ok(value.int_value);
+static FaFaultable_i64 fa_sqlite_as_int(FaSqliteValue value) {
+  if (value.kind != FA_SQLITE_INT) return FaFaultable_i64_fault(fa_sqlite_fault_cstr("std.sqlite: value is not an integer"));
+  return FaFaultable_i64_ok(value.int_value);
 }
 
-static FaFaultable_Real fa_sqlite_as_real(FaSqliteValue value) {
-  if (value.kind != FA_SQLITE_REAL) return FaFaultable_Real_fault(fa_sqlite_fault_cstr("std.sqlite: value is not a real"));
-  return FaFaultable_Real_ok(value.real_value);
+static FaFaultable_f64 fa_sqlite_as_real(FaSqliteValue value) {
+  if (value.kind != FA_SQLITE_REAL) return FaFaultable_f64_fault(fa_sqlite_fault_cstr("std.sqlite: value is not a real"));
+  return FaFaultable_f64_ok(value.real_value);
 }
 
 static FaFaultable_Bytes fa_sqlite_as_text(FaSqliteValue value) {

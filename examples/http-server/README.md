@@ -29,18 +29,18 @@ The `std.http` surface used by `main.flow` is:
 
 ```text
 http.default_config     : () -> http.ServerConfig
-http.with_tcp_listener  : (http.ServerConfig, Bytes, Int) -> http.ServerConfig
+http.with_tcp_listener  : (http.ServerConfig, Bytes, i64) -> http.ServerConfig
 http.with_http2         : (http.ServerConfig, Bool) -> http.ServerConfig
 http.with_http3         : (http.ServerConfig, Bool) -> http.ServerConfig
 http.with_tls          : (http.ServerConfig, Bytes, Bytes) -> http.ServerConfig
 http.listen            : http.ServerConfig -> Faultable[http.Listener]
 http.requests          : http.Listener -> Stream[http.Request]
-http.serve             : (http.Listener, Stream[http.Response]) -> Faultable[Int]
+http.serve             : (http.Listener, Stream[http.Response]) -> Faultable[i64]
 
 http.route             : (http.Request, Bytes, Bytes) -> Bool
 http.body              : http.Request -> Bytes
 http.response          : http.Request -> http.Response
-http.with_status       : (http.Response, Int) -> http.Response
+http.with_status       : (http.Response, i64) -> http.Response
 http.with_header       : (http.Response, Bytes, Bytes) -> http.Response
 http.text              : (http.Response, Bytes) -> http.Response
 http.json              : (http.Response, Bytes) -> http.Response

@@ -152,9 +152,8 @@ joining. Typecheck and codegen both use that module.
 - `src/codegen/mod.rs` has a separate `Ty`, separate `TypeParser`,
   `builtin_output_type`, `sequence_item_type`, output assignability helpers,
   C type naming, LLVM type lowering, and ABI export checks.
-- The two parsers already differ: the codegen parser skips whitespace and has a
-  `Number` builtin alias, while the typechecker parser is stricter and encodes
-  stdlib special cases separately.
+- The two parsers already differ: the codegen parser skips whitespace while the
+  typechecker parser is stricter and encodes stdlib special cases separately.
 
 ### Why This Hurts
 

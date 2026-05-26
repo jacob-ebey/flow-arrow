@@ -381,10 +381,10 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     ) -> Result<BasicTypeEnum<'ctx>, String> {
         match abi {
             DirectExportAbi::Wasm => match ty {
-                Ty::Int => Ok(self.context.i64_type().into()),
-                Ty::Real => Ok(self.context.f64_type().into()),
+                Ty::I64 => Ok(self.context.i64_type().into()),
+                Ty::F64 => Ok(self.context.f64_type().into()),
                 other => Err(format!(
-                    "WASM export `{export_name}` uses `{other}`; only Int and Real scalar inputs and outputs are supported"
+                    "WASM export `{export_name}` uses `{other}`; only i64 and f64 scalar inputs and outputs are supported"
                 )),
             },
         }
@@ -683,17 +683,17 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         env: &mut HashMap<String, LlvmValue<'ctx>>,
     ) -> Result<(), String> {
         let gpu::GpuScalarKind::I32 = reduction.map_kernel.scalar else {
-            return Err("GPU range reductions currently require Int range map kernels".to_string());
+            return Err("GPU range reductions currently require i64 range map kernels".to_string());
         };
-        if reduction.output_ty != Ty::Int {
+        if reduction.output_ty != Ty::I64 {
             return Err(format!(
-                "GPU range reduction expected Int output, found `{}`",
+                "GPU range reduction expected i64 output, found `{}`",
                 reduction.output_ty
             ));
         }
         let range = self.emit_range_tuple_values(&reduction.range_source, env)?;
         let identity = self.emit_endpoint(&reduction.identity, env)?;
-        let identity = self.coerce_value_to_ty(identity, &Ty::Int)?;
+        let identity = self.coerce_value_to_ty(identity, &Ty::I64)?;
         let map_expr = self
             .builder
             .build_global_string_ptr(&reduction.map_kernel.map_expr, "gpu_map_expr")
@@ -748,7 +748,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         endpoint: &TypedEndpoint,
         env: &HashMap<String, LlvmValue<'ctx>>,
     ) -> Result<[IntValue<'ctx>; 3], String> {
-        let range_ty = Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]);
+        let range_ty = Ty::Tuple(vec![Ty::I64, Ty::I64, Ty::I64]);
         let value = self.emit_endpoint_expected(endpoint, env, Some(&range_ty))?;
         let tuple = value.value.into_struct_value();
         let start = self
@@ -2565,9 +2565,9 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         if let Some(plan) = self.codegen.gpu_repeat_accumulator(node, &input.ty) {
             return self.emit_gpu_repeat_accumulator(plan, input, count);
         }
-        let Ty::Int = count.ty else {
+        let Ty::I64 = count.ty else {
             return Err(format!(
-                "`repeat {node}` count expected Int, found `{}`",
+                "`repeat {node}` count expected i64, found `{}`",
                 count.ty
             ));
         };
@@ -2873,8 +2873,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let canonical = self.codegen.canonical_name(op);
         if self.options.gpu && matches!(canonical.as_str(), "add" | "min" | "max") {
             match item_ty.as_ref() {
-                Ty::Int => {
-                    let identity = self.coerce_value_to_ty(identity, &Ty::Int)?;
+                Ty::I64 => {
+                    let identity = self.coerce_value_to_ty(identity, &Ty::I64)?;
                     let input_items = self.seq_items(input.value)?;
                     let count = self.seq_count(input.value)?;
                     let reduce_fn = self.gpu_reduce_i64_function();
@@ -2899,15 +2899,15 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                         .try_as_basic_value()
                         .basic()
                         .ok_or_else(|| {
-                            "native GPU Int reduce did not return a value".to_string()
+                            "native GPU i64 reduce did not return a value".to_string()
                         })?;
                     return Ok(LlvmValue {
                         value: reduced,
-                        ty: Ty::Int,
+                        ty: Ty::I64,
                     });
                 }
-                Ty::Real => {
-                    let identity = self.coerce_value_to_ty(identity, &Ty::Real)?;
+                Ty::F64 => {
+                    let identity = self.coerce_value_to_ty(identity, &Ty::F64)?;
                     let input_items = self.seq_items(input.value)?;
                     let count = self.seq_count(input.value)?;
                     let reduce_fn = self.gpu_reduce_f64_function();
@@ -2932,11 +2932,11 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                         .try_as_basic_value()
                         .basic()
                         .ok_or_else(|| {
-                            "native GPU Real reduce did not return a value".to_string()
+                            "native GPU f64 reduce did not return a value".to_string()
                         })?;
                     return Ok(LlvmValue {
                         value: reduced,
-                        ty: Ty::Real,
+                        ty: Ty::F64,
                     });
                 }
                 _ => {}
@@ -3286,11 +3286,16 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let [left_ty, right_ty] = items.as_slice() else {
             return Err(format!("`{name}` expected pair input"));
         };
+        if left_ty != right_ty {
+            return Err(format!(
+                "`{name}` expected matching operand types, found `{left_ty}` and `{right_ty}`"
+            ));
+        }
         let left = self.extract_tuple_field(&input, 0)?;
         let right = self.extract_tuple_field(&input, 1)?;
-        if matches!(left_ty, Ty::Real) || matches!(right_ty, Ty::Real) {
-            let left = self.cast_to_real(left, left_ty)?;
-            let right = self.cast_to_real(right, right_ty)?;
+        if matches!(left_ty, Ty::F64) {
+            let left = left.into_float_value();
+            let right = right.into_float_value();
             let result = match name {
                 "add" => self.builder.build_float_add(left, right, "add"),
                 "sub" => self.builder.build_float_sub(left, right, "sub"),
@@ -3401,8 +3406,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     }
 
     fn emit_from_int(&mut self, input: LlvmValue<'ctx>) -> Result<BasicValueEnum<'ctx>, String> {
-        if input.ty != Ty::Int {
-            return Err(format!("from_int expected Int, found `{}`", input.ty));
+        if input.ty != Ty::I64 {
+            return Err(format!("from_int expected i64, found `{}`", input.ty));
         }
         Ok(self
             .builder
@@ -3423,8 +3428,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match name {
             "neg" => match input.ty {
-                Ty::Int => self.emit_checked_i64_unary("fa_checked_i64_neg", "neg", input.value),
-                Ty::Real => Ok(self
+                Ty::I64 => self.emit_checked_i64_unary("fa_checked_i64_neg", "neg", input.value),
+                Ty::F64 => Ok(self
                     .builder
                     .build_float_neg(input.value.into_float_value(), "neg")
                     .map_err(|error| format!("LLVM backend failed to build neg: {error}"))?
@@ -3432,8 +3437,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 ref other => Err(format!("neg expected numeric input, found `{other}`")),
             },
             "abs" => match input.ty {
-                Ty::Int => self.emit_checked_i64_unary("fa_checked_i64_abs", "abs", input.value),
-                Ty::Real => {
+                Ty::I64 => self.emit_checked_i64_unary("fa_checked_i64_abs", "abs", input.value),
+                Ty::F64 => {
                     let value = input.value.into_float_value();
                     let negative = self
                         .builder
@@ -3455,10 +3460,12 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 ref other => Err(format!("abs expected numeric input, found `{other}`")),
             },
             "sqrt" | "exp" | "sin" | "cos" => {
-                if output_ty != &Ty::Real {
-                    return Err(format!("{name} expected Real output, found `{output_ty}`"));
+                if output_ty != &Ty::F64 {
+                    return Err(format!("{name} expected f64 output, found `{output_ty}`"));
                 }
-                let value = self.cast_to_real(input.value, &input.ty)?;
+                if input.ty != Ty::F64 {
+                    return Err(format!("{name} expected f64 input, found `{}`", input.ty));
+                }
                 let runtime_name = if name == "sqrt" {
                     "fa_checked_sqrt"
                 } else {
@@ -3470,7 +3477,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     &[self.context.f64_type().into()],
                 )?;
                 self.builder
-                    .build_call(fn_value, &[value.into()], name)
+                    .build_call(fn_value, &[input.value.into_float_value().into()], name)
                     .map_err(|error| format!("LLVM backend failed to call `{name}`: {error}"))?
                     .try_as_basic_value()
                     .basic()
@@ -3512,8 +3519,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let [left_ty, right_ty] = items.as_slice() else {
             return Err(format!("`{name}` expected pair input"));
         };
-        if left_ty != &Ty::Int || right_ty != &Ty::Int {
-            return Err(format!("`{name}` expected Int operands"));
+        if left_ty != &Ty::I64 || right_ty != &Ty::I64 {
+            return Err(format!("`{name}` expected i64 operands"));
         }
         let left = self.extract_tuple_field(&input, 0)?.into_int_value();
         let right = self.extract_tuple_field(&input, 1)?.into_int_value();
@@ -3542,11 +3549,16 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let [left_ty, right_ty] = items.as_slice() else {
             return Err(format!("`{name}` expected pair input"));
         };
+        if left_ty != right_ty {
+            return Err(format!(
+                "`{name}` expected matching operand types, found `{left_ty}` and `{right_ty}`"
+            ));
+        }
         let left = self.extract_tuple_field(&input, 0)?;
         let right = self.extract_tuple_field(&input, 1)?;
-        let bit = if matches!(left_ty, Ty::Real) || matches!(right_ty, Ty::Real) {
-            let left = self.cast_to_real(left, left_ty)?;
-            let right = self.cast_to_real(right, right_ty)?;
+        let bit = if matches!(left_ty, Ty::F64) {
+            let left = left.into_float_value();
+            let right = right.into_float_value();
             let pred = match name {
                 "eq" => inkwell::FloatPredicate::OEQ,
                 "lt" => inkwell::FloatPredicate::OLT,
@@ -3679,12 +3691,12 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         ty: &Ty,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match ty {
-            Ty::Real => Ok(self
+            Ty::F64 => Ok(self
                 .builder
                 .build_float_add(left.into_float_value(), right.into_float_value(), "add")
                 .map_err(|error| format!("LLVM backend failed to build real add: {error}"))?
                 .into()),
-            Ty::Int => Ok(self
+            Ty::I64 => Ok(self
                 .builder
                 .build_int_add(left.into_int_value(), right.into_int_value(), "add")
                 .map_err(|error| format!("LLVM backend failed to build int add: {error}"))?
@@ -3701,7 +3713,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         ty: &Ty,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match ty {
-            Ty::Real => {
+            Ty::F64 => {
                 let pred = if op == "min" {
                     inkwell::FloatPredicate::OLT
                 } else {
@@ -3717,7 +3729,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     .build_select(cmp, left, right, op)
                     .map_err(|error| format!("LLVM backend failed to select {op}: {error}"))
             }
-            Ty::Int => {
+            Ty::I64 => {
                 let pred = if op == "min" {
                     IntPredicate::SLT
                 } else {
@@ -3747,22 +3759,6 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         }
 
         match (expected_ty, value.ty.clone()) {
-            (Ty::Real, Ty::Int) => {
-                let real = self
-                    .builder
-                    .build_signed_int_to_float(
-                        value.value.into_int_value(),
-                        self.context.f64_type(),
-                        "int_to_real",
-                    )
-                    .map_err(|error| {
-                        format!("LLVM backend failed to coerce Int to Real: {error}")
-                    })?;
-                Ok(LlvmValue {
-                    value: real.into(),
-                    ty: Ty::Real,
-                })
-            }
             (Ty::Faultable(inner), actual)
                 if unwrap_faultable_tuple(&actual)
                     .as_ref()
@@ -3770,10 +3766,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             {
                 self.coerce_faultable_tuple_to_faultable(value, inner)
             }
-            (Ty::Faultable(inner), actual)
-                if inner.as_ref() == &actual
-                    || (inner.as_ref() == &Ty::Real && actual == Ty::Int) =>
-            {
+            (Ty::Faultable(inner), actual) if inner.as_ref() == &actual => {
                 let plain = self.coerce_value_to_ty(value, inner)?;
                 let wrapped = self.faultable_value(inner, false, None, Some(plain.value))?;
                 Ok(LlvmValue {
@@ -4162,25 +4155,6 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             value,
             ty: ty.clone(),
         })
-    }
-
-    fn cast_to_real(
-        &mut self,
-        value: BasicValueEnum<'ctx>,
-        ty: &Ty,
-    ) -> Result<inkwell::values::FloatValue<'ctx>, String> {
-        match ty {
-            Ty::Real => Ok(value.into_float_value()),
-            Ty::Int => self
-                .builder
-                .build_signed_int_to_float(
-                    value.into_int_value(),
-                    self.context.f64_type(),
-                    "sitofp",
-                )
-                .map_err(|error| format!("LLVM backend failed to cast Int to Real: {error}")),
-            other => Err(format!("expected numeric value, found `{other}`")),
-        }
     }
 
     fn current_function(&self) -> Result<FunctionValue<'ctx>, String> {
@@ -4923,11 +4897,11 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             .get(&program.name)
             .map(|sig| sig.output.clone())
         {
-            Some(Ty::Int) => self
+            Some(Ty::I64) => self
                 .builder
                 .build_int_truncate(result.into_int_value(), i32_ty, "exit")
                 .map_err(|error| format!("LLVM backend failed to truncate exit code: {error}"))?,
-            Some(Ty::Faultable(inner)) if inner.as_ref() == &Ty::Int => {
+            Some(Ty::Faultable(inner)) if inner.as_ref() == &Ty::I64 => {
                 let fault_block = self.context.append_basic_block(flow_main, "fault");
                 let ok_block = self.context.append_basic_block(flow_main, "ok");
                 let is_fault = self.extract_faultable_is_fault(result)?;
@@ -5013,8 +4987,9 @@ impl<'ctx> LlvmTypeRegistry<'ctx> {
             Ty::Unit => Ok(self
                 .struct_type(ty, &[self.context.i32_type().into()])?
                 .into()),
-            Ty::Int => Ok(self.context.i64_type().into()),
-            Ty::Real | Ty::OneOf(_) => Ok(self.context.f64_type().into()),
+            Ty::I64 => Ok(self.context.i64_type().into()),
+            Ty::F64 => Ok(self.context.f64_type().into()),
+            Ty::OneOf(_) => Err(format!("union type `{ty}` is not runtime-represented")),
             Ty::Bool => Ok(self.context.i8_type().into()),
             Ty::Bytes => Ok(self
                 .struct_type(

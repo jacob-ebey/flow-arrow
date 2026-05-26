@@ -6,7 +6,7 @@ fn intrinsic_nodes_run() {
         import std.cli { Args }
         import std.math { add, eq }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             (0, 5, 2) -> range_step -> $values
             $values -> reduce add(identity: 0) -> $sum
             ($sum, 6) -> eq -> $ok

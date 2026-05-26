@@ -8,7 +8,7 @@ import std.int { format_int }
 foreign js module "node:os" {
     pure node platform() -> value: Bytes = platform
     pure node arch() -> value: Bytes = arch
-    pure node available_parallelism() -> value: Int = availableParallelism
+    pure node available_parallelism() -> value: i64 = availableParallelism
     pure node homedir() -> value: Bytes = homedir
 }
 
@@ -19,11 +19,11 @@ foreign js global "console" {
 struct RuntimeInfo {
     platform: Bytes,
     arch: Bytes,
-    parallelism: Int,
+    parallelism: i64,
     home: Bytes,
 }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     () -> platform              -> $platform
     () -> arch                  -> $arch
     () -> available_parallelism -> $parallelism
@@ -45,6 +45,6 @@ node render_runtime_info(info: RuntimeInfo) -> message: Bytes {
     ["FlowArrow TS interop\n", "platform: ", $platform, "\n", "arch: ", $arch, "\n", "available parallelism: ", $parallelism_bytes, "\n", "home: ", $home] -> concat_bytes -> $message
 }
 
-node exit_success(done: Unit) -> exit_code: Int {
+node exit_success(done: Unit) -> exit_code: i64 {
     0 -> $exit_code
 }

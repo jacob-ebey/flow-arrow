@@ -19,18 +19,18 @@ http.Response
 
 ```text
 default_config     : () -> http.ServerConfig
-with_tcp_listener  : (http.ServerConfig, Bytes, Int) -> http.ServerConfig
+with_tcp_listener  : (http.ServerConfig, Bytes, i64) -> http.ServerConfig
 with_tls           : (http.ServerConfig, Bytes, Bytes) -> http.ServerConfig
 with_http2         : (http.ServerConfig, Bool) -> http.ServerConfig
 with_http3         : (http.ServerConfig, Bool) -> http.ServerConfig
 listen             : http.ServerConfig -> Faultable[http.Listener]
 requests           : http.Listener -> Stream[http.Request]
-serve              : (http.Listener, Stream[http.Response]) -> Faultable[Int]
+serve              : (http.Listener, Stream[http.Response]) -> Faultable[i64]
 
 route              : (http.Request, Bytes, Bytes) -> Bool
 body               : http.Request -> Bytes
 response           : http.Request -> http.Response
-with_status        : (http.Response, Int) -> http.Response
+with_status        : (http.Response, i64) -> http.Response
 with_header        : (http.Response, Bytes, Bytes) -> http.Response
 text               : (http.Response, Bytes) -> http.Response
 json               : (http.Response, Bytes) -> http.Response
@@ -71,7 +71,7 @@ against H2O's evloop backend.
 import std.cli { Args }
 import std.http as http
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     ()                         -> http.default_config    -> $config0
     ($config0, "0.0.0.0", 8080) -> http.with_tcp_listener -> $config
     $config                     -> http.listen            -> $listener

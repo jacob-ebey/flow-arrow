@@ -44,7 +44,7 @@ function log(message: string): undefined {
 
 The complete application in `main.flow` reads several values from `node:os`,
 collects them into `RuntimeInfo`, renders a message, and writes it with
-`console.log`. The `program main(args: Args) -> exit_code: Int` shape stays
+`console.log`. The `program main(args: Args) -> exit_code: i64` shape stays
 compatible with the existing executable entrypoint contract.
 
 Build as an ESM application:

@@ -14,7 +14,7 @@ const SQLITE_SOURCE: &str = r#"
     import std.stream as stream
     import std.tuple { first }
 
-    program main(args: Args) -> exit_code: Faultable[Int] {
+    program main(args: Args) -> exit_code: Faultable[i64] {
         () -> sqlite.open_memory -> $conn0
         ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", []) -> sqlite.exec -> first -> $conn1
         ($conn1, "INSERT INTO todos (title) VALUES (?)", ["alpha" -> sqlite.text]) -> sqlite.exec -> first -> $conn2
@@ -77,11 +77,11 @@ fn std_sqlite_rejects_effectful_node_under_map() {
         import std.cli { Args }
         import std.sqlite { Connection, close }
 
-        node bad(conn: Connection) -> out: Seq[Faultable[Int]] {
+        node bad(conn: Connection) -> out: Seq[Faultable[i64]] {
             [$conn] -> map close -> $out
         }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             0 -> $exit_code
         }
     "#;
@@ -98,7 +98,7 @@ fn non_sqlite_build_does_not_emit_sqlite_runtime() {
         r#"
             import std.cli { Args }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> $exit_code
             }
         "#,
@@ -139,7 +139,7 @@ fn std_sqlite_runtime_query_all_values_and_transactions_run() {
         import std.sqlite as sqlite
         import std.tuple { first }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             () -> sqlite.open_memory -> $conn0
             ($conn0, "CREATE TABLE sample (id INTEGER, score REAL, name TEXT, payload BLOB, optional TEXT)", []) -> sqlite.exec -> first -> $conn1
             $conn1 -> sqlite.begin -> $conn2
@@ -187,7 +187,7 @@ fn std_sqlite_runtime_faults_on_bad_param_count() {
         import std.sqlite as sqlite
         import std.tuple { first }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             () -> sqlite.open_memory -> $conn0
             ($conn0, "CREATE TABLE t (id INTEGER)", []) -> sqlite.exec -> first -> $conn1
             ($conn1, "INSERT INTO t (id) VALUES (?)", []) -> sqlite.exec -> first -> $conn2

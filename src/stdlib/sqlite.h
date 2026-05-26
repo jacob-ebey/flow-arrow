@@ -58,7 +58,7 @@ typedef struct {
 typedef struct {
   FaSqliteConnection f0;
   int64_t f1;
-} FaTuple_SqliteConnection_Int;
+} FaTuple_SqliteConnection_i64;
 
 typedef struct {
   FaSqliteConnection f0;
@@ -79,7 +79,7 @@ typedef struct {
 typedef struct {
   FaSqliteRow f0;
   int64_t f1;
-} FaTuple_SqliteRow_Int;
+} FaTuple_SqliteRow_i64;
 
 typedef struct {
   FaSqliteRow f0;
@@ -89,8 +89,8 @@ typedef struct {
 typedef struct {
   bool is_fault;
   FaFault fault;
-  FaTuple_SqliteConnection_Int value;
-} FaFaultable_Tuple_SqliteConnection_Int;
+  FaTuple_SqliteConnection_i64 value;
+} FaFaultable_Tuple_SqliteConnection_i64;
 
 typedef struct {
   bool is_fault;
@@ -146,15 +146,15 @@ static FaFaultable_SqliteValue FaFaultable_SqliteValue_fault(FaFault fault) {
   return out;
 }
 
-static FaFaultable_Tuple_SqliteConnection_Int FaFaultable_Tuple_SqliteConnection_Int_ok(FaTuple_SqliteConnection_Int value) {
-  FaFaultable_Tuple_SqliteConnection_Int out;
+static FaFaultable_Tuple_SqliteConnection_i64 FaFaultable_Tuple_SqliteConnection_i64_ok(FaTuple_SqliteConnection_i64 value) {
+  FaFaultable_Tuple_SqliteConnection_i64 out;
   out.is_fault = false;
   out.value = value;
   return out;
 }
 
-static FaFaultable_Tuple_SqliteConnection_Int FaFaultable_Tuple_SqliteConnection_Int_fault(FaFault fault) {
-  FaFaultable_Tuple_SqliteConnection_Int out;
+static FaFaultable_Tuple_SqliteConnection_i64 FaFaultable_Tuple_SqliteConnection_i64_fault(FaFault fault) {
+  FaFaultable_Tuple_SqliteConnection_i64 out;
   out.is_fault = true;
   out.fault = fault;
   return out;

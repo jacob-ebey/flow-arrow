@@ -5,5 +5,5 @@ pub const H: &[&str] = &[super::RUNTIME_H];
 pub const C: &str = include_str!("io.c");
 
 pub const READ_STDIN: StdSymbol = io_node(MODULE, "read_stdin", "()", "Bytes");
-pub const WRITE_STDOUT: StdSymbol = io_node(MODULE, "write_stdout", "Bytes", "Int");
-pub const WRITE_STDERR: StdSymbol = io_node(MODULE, "write_stderr", "Bytes", "Int");
+pub const WRITE_STDOUT: StdSymbol = io_node(MODULE, "write_stdout", "Bytes", "i64");
+pub const WRITE_STDERR: StdSymbol = io_node(MODULE, "write_stderr", "Bytes", "i64");

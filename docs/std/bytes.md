@@ -14,21 +14,21 @@ trim         : Bytes -> Bytes
 contains     : (Bytes, Bytes) -> Bool
 starts_with  : (Bytes, Bytes) -> Bool
 ends_with    : (Bytes, Bytes) -> Bool
-index_of     : (Bytes, Bytes) -> Int
-last_index_of: (Bytes, Bytes) -> Int
-slice        : (Bytes, Int, Int) -> Bytes
-take         : (Bytes, Int) -> Bytes
-drop         : (Bytes, Int) -> Bytes
+index_of     : (Bytes, Bytes) -> i64
+last_index_of: (Bytes, Bytes) -> i64
+slice        : (Bytes, i64, i64) -> Bytes
+take         : (Bytes, i64) -> Bytes
+drop         : (Bytes, i64) -> Bytes
 replace      : (Bytes, Bytes, Bytes) -> Bytes
-repeat_bytes : (Bytes, Int) -> Bytes
+repeat_bytes : (Bytes, i64) -> Bytes
 ascii_lower  : Bytes -> Bytes
 ascii_upper  : Bytes -> Bytes
 split_on     : (Bytes, Bytes) -> Seq[Bytes]
 strip_prefix : (Bytes, Bytes) -> Faultable[Bytes]
 strip_suffix : (Bytes, Bytes) -> Faultable[Bytes]
-bytes_to_codes : Bytes -> Seq[Int]
-codes_to_bytes : Seq[Int] -> Bytes
-byte_length    : Bytes -> Int
+bytes_to_codes : Bytes -> Seq[i64]
+codes_to_bytes : Seq[i64] -> Bytes
+byte_length    : Bytes -> i64
 ```
 
 ## Semantics
@@ -125,7 +125,7 @@ import std.bytes { split_lines, concat_bytes }
 import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     () -> read_stdin -> $input
     $input -> split_lines -> $lines
     ["line count not implemented yet", "\n"] -> concat_bytes -> $output

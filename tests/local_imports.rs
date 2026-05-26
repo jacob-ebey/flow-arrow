@@ -14,7 +14,7 @@ fn local_flow_imports_typecheck_and_run() {
         r#"
             import std.math { add }
 
-            extern node plus_one(value: Int) -> out: Int {
+            extern node plus_one(value: i64) -> out: i64 {
                 ($value, 1) -> add -> $out
             }
         "#,
@@ -26,7 +26,7 @@ fn local_flow_imports_typecheck_and_run() {
             import "./helper.flow" { plus_one }
             import std.cli { Args }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> plus_one -> $exit_code
             }
         "#,
@@ -46,7 +46,7 @@ fn local_flow_import_rejects_non_extern_node() {
     fs::write(
         &helper_path,
         r#"
-            node hidden(value: Int) -> out: Int {
+            node hidden(value: i64) -> out: i64 {
                 $value -> $out
             }
         "#,
@@ -58,7 +58,7 @@ fn local_flow_import_rejects_non_extern_node() {
             import "./helper.flow" { hidden }
             import std.cli { Args }
 
-            program main(args: Args) -> exit_code: Int {
+            program main(args: Args) -> exit_code: i64 {
                 0 -> hidden -> $exit_code
             }
         "#,

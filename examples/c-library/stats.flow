@@ -5,13 +5,13 @@
 import std.math { add, max, mul }
 
 struct JobSummary {
-    total_score: Int,
-    peak_score: Int,
-    total_weight: Int,
-    peak_weight: Int,
+    total_score: i64,
+    peak_score: i64,
+    total_weight: i64,
+    peak_weight: i64,
 }
 
-extern node score_batch(width: Int) -> summary: JobSummary {
+extern node score_batch(width: i64) -> summary: JobSummary {
     (1, $width, 1) -> range_step              -> $jobs
     $jobs          -> map score_job           -> $scores
     $jobs          -> map weight_job          -> $weights
@@ -27,12 +27,12 @@ extern node score_batch(width: Int) -> summary: JobSummary {
     } -> $summary
 }
 
-node score_job(n: Int) -> score: Int {
+node score_job(n: i64) -> score: i64 {
     ($n, $n)      -> mul -> $square
     ($square, $n) -> add -> $score
 }
 
-node weight_job(n: Int) -> weight: Int {
+node weight_job(n: i64) -> weight: i64 {
     ($n, 2)       -> mul -> $doubled
     ($doubled, 1) -> add -> $weight
 }

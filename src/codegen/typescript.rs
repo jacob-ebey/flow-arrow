@@ -597,7 +597,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         matches!(
             self.codegen.canonical_name(op).as_str(),
             "add" | "min" | "max"
-        ) && matches!(item_ty.as_ref(), Ty::Int | Ty::Real)
+        ) && matches!(item_ty.as_ref(), Ty::I64 | Ty::F64)
     }
 
     fn emit_callable(&mut self, out: &mut String, callable: &TypedCallable) -> Result<(), String> {
@@ -778,7 +778,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         if reductions.is_empty() {
             return Ok(());
         }
-        let range_ty = Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]);
+        let range_ty = Ty::Tuple(vec![Ty::I64, Ty::I64, Ty::I64]);
         let mut targets = Vec::with_capacity(reductions.len());
         let mut calls = Vec::with_capacity(reductions.len());
         for reduction in reductions {
@@ -792,16 +792,16 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             let identity = self.emit_endpoint(out, &reduction.identity, env, indent)?;
             match reduction.map_kernel.scalar {
                 gpu::GpuScalarKind::I32 => {
-                    if reduction.output_ty != Ty::Int {
+                    if reduction.output_ty != Ty::I64 {
                         return Err(format!(
-                            "GPU range reduction expected Int output, found `{}`",
+                            "GPU range reduction expected i64 output, found `{}`",
                             reduction.output_ty
                         ));
                     }
                 }
                 gpu::GpuScalarKind::F32 => {
                     return Err(
-                        "GPU range reductions currently require Int range map kernels".to_string(),
+                        "GPU range reductions currently require i64 range map kernels".to_string(),
                     );
                 }
             }
@@ -959,8 +959,8 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                     return Ok(None);
                 }
                 let function = match item_ty.as_ref() {
-                    Ty::Int => "faGpuReduceI32",
-                    Ty::Real => "faGpuReduceF32",
+                    Ty::I64 => "faGpuReduceI32",
+                    Ty::F64 => "faGpuReduceF32",
                     _ => return Ok(None),
                 };
                 Ok(Some(AsyncChainBatchItem::Reduce {
@@ -1524,7 +1524,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         if self.codegen.canonical_name(name) != "range_step" {
             return None;
         }
-        if call.output != Ty::Seq(Box::new(Ty::Int)) {
+        if call.output != Ty::Seq(Box::new(Ty::I64)) {
             return None;
         }
         let TypedStageKind::Bind { target } = &bind.kind else {
@@ -1627,7 +1627,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         env: &mut HashMap<String, TsValue>,
         indent: &str,
     ) -> Result<(), String> {
-        let range_ty = Ty::Tuple(vec![Ty::Int, Ty::Int, Ty::Int]);
+        let range_ty = Ty::Tuple(vec![Ty::I64, Ty::I64, Ty::I64]);
         let typed_outputs = batch
             .items
             .iter()
@@ -2361,7 +2361,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 tuple_field(input, 0),
                 tuple_field(input, 1)
             ),
-            "slice" if matches!(&input.ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int, Ty::Int])) =>
+            "slice" if matches!(&input.ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64, Ty::I64])) =>
             {
                 format!(
                     "{}.slice(Number({}), Number({}))",
@@ -2370,7 +2370,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                     tuple_field(input, 2)
                 )
             }
-            "take" if matches!(&input.ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) =>
+            "take" if matches!(&input.ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64])) =>
             {
                 format!(
                     "{}.slice(0, Number({}))",
@@ -2378,7 +2378,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                     tuple_field(input, 1)
                 )
             }
-            "drop" if matches!(&input.ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) =>
+            "drop" if matches!(&input.ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64])) =>
             {
                 format!(
                     "{}.slice(Number({}))",
@@ -2419,9 +2419,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 ts_numeric_binary_expr(name, input, output_ty)
             }
-            "neg" if output_ty == &Ty::Int => format!("faCheckedI64Neg({})", input.code),
+            "neg" if output_ty == &Ty::I64 => format!("faCheckedI64Neg({})", input.code),
             "neg" => format!("(-{})", input.code),
-            "abs" if output_ty == &Ty::Int => format!("faCheckedI64Abs({})", input.code),
+            "abs" if output_ty == &Ty::I64 => format!("faCheckedI64Abs({})", input.code),
             "abs" => format!("Math.abs({})", input.code),
             "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
                 format!("faFaultableSqrt({})", input.code)
@@ -2777,7 +2777,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             let canonical = self.codegen.canonical_name(op);
             if matches!(canonical.as_str(), "add" | "min" | "max") {
                 match plain_item_ty {
-                    Ty::Int => {
+                    Ty::I64 => {
                         let batch = self.next_temp();
                         out.push_str(&format!(
                             "{body_indent}const {batch}: [{}] = await Promise.all([faGpuReduceI32({}, {}, {})]);\n",
@@ -2789,7 +2789,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                         out.push_str(&format!("{body_indent}{tmp} = {batch}[0];\n"));
                         return Ok(ts_value(tmp, output_ty));
                     }
-                    Ty::Real => {
+                    Ty::F64 => {
                         let batch = self.next_temp();
                         out.push_str(&format!(
                             "{body_indent}const {batch}: [{}] = await Promise.all([faGpuReduceF32({}, {}, {})]);\n",
@@ -3288,8 +3288,8 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             return Ok(None);
         }
         let worker_fn = match (input_ty, output_ty) {
-            (Ty::Int, Ty::Int) => "faParallelMapBigInt",
-            (Ty::Real, Ty::Real) => "faParallelMapNumber",
+            (Ty::I64, Ty::I64) => "faParallelMapBigInt",
+            (Ty::F64, Ty::F64) => "faParallelMapNumber",
             (Ty::Bool, Ty::Bool) => "faParallelMapBool",
             _ => return Ok(None),
         };
@@ -3450,9 +3450,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 ts_numeric_binary_expr(name, input, output_ty)
             }
-            "neg" if output_ty == &Ty::Int => format!("faCheckedI64Neg({})", input.code),
+            "neg" if output_ty == &Ty::I64 => format!("faCheckedI64Neg({})", input.code),
             "neg" => format!("(-{})", input.code),
-            "abs" if output_ty == &Ty::Int => format!("faCheckedI64Abs({})", input.code),
+            "abs" if output_ty == &Ty::I64 => format!("faCheckedI64Abs({})", input.code),
             "abs" => format!("Math.abs({})", input.code),
             "sqrt" => format!("faCheckedSqrt({})", input.code),
             "exp" => format!("Math.exp({})", input.code),
@@ -3679,7 +3679,7 @@ fn const_range_len(start: i64, stop: i64, step: i64) -> String {
 
 fn sync_map_output_storage(ty: &Ty) -> SyncMapOutputStorage {
     match ty {
-        Ty::Seq(item) if matches!(item.as_ref(), Ty::Real) => SyncMapOutputStorage::Float64Array,
+        Ty::Seq(item) if matches!(item.as_ref(), Ty::F64) => SyncMapOutputStorage::Float64Array,
         _ => SyncMapOutputStorage::Array,
     }
 }
@@ -3754,8 +3754,9 @@ fn ts_index(code: &str, index: usize) -> String {
 fn ts_type(ty: &Ty) -> String {
     match ty {
         Ty::Unit => "undefined".to_string(),
-        Ty::Int => "bigint".to_string(),
-        Ty::Real | Ty::OneOf(_) => "number".to_string(),
+        Ty::I64 => "bigint".to_string(),
+        Ty::F64 => "number".to_string(),
+        Ty::OneOf(_) => "never".to_string(),
         Ty::Bool => "boolean".to_string(),
         Ty::Bytes => "string".to_string(),
         Ty::Args => "FaArgs".to_string(),
@@ -3822,8 +3823,8 @@ fn foreign_module_alias(specifier: &str) -> String {
 fn foreign_result_expr(raw: &str, ty: &Ty) -> String {
     match ty {
         Ty::Unit => "undefined".to_string(),
-        Ty::Int => format!("BigInt({raw})"),
-        Ty::Real => format!("Number({raw})"),
+        Ty::I64 => format!("BigInt({raw})"),
+        Ty::F64 => format!("Number({raw})"),
         Ty::Bool => format!("Boolean({raw})"),
         Ty::Bytes => format!("String({raw})"),
         _ => format!("{raw} as {}", ts_type(ty)),
@@ -3869,19 +3870,19 @@ fn ts_numeric_binary_expr(name: &str, input: &TsValue, output_ty: &Ty) -> String
     let left = tuple_field(input, 0);
     let right = tuple_field(input, 1);
     match name {
-        "add" if output_ty == &Ty::Int => format!("faCheckedI64Add({left}, {right})"),
+        "add" if output_ty == &Ty::I64 => format!("faCheckedI64Add({left}, {right})"),
         "add" => format!("({left} + {right})"),
-        "sub" if output_ty == &Ty::Int => format!("faCheckedI64Sub({left}, {right})"),
+        "sub" if output_ty == &Ty::I64 => format!("faCheckedI64Sub({left}, {right})"),
         "sub" => format!("({left} - {right})"),
-        "mul" if output_ty == &Ty::Int => format!("faCheckedI64Mul({left}, {right})"),
+        "mul" if output_ty == &Ty::I64 => format!("faCheckedI64Mul({left}, {right})"),
         "mul" => format!("({left} * {right})"),
-        "div" if output_ty == &Ty::Int => format!("faCheckedI64Div({left}, {right})"),
+        "div" if output_ty == &Ty::I64 => format!("faCheckedI64Div({left}, {right})"),
         "div" => format!("faCheckedRealDiv({left}, {right})"),
-        "rem" if output_ty == &Ty::Int => format!("faCheckedI64Rem({left}, {right})"),
+        "rem" if output_ty == &Ty::I64 => format!("faCheckedI64Rem({left}, {right})"),
         "rem" => format!("faCheckedRealRem({left}, {right})"),
         "min" => format!("({left} <= {right} ? {left} : {right})"),
         "max" => format!("({left} >= {right} ? {left} : {right})"),
-        _ if matches!(output_ty, Ty::Real) => "Number.NaN".to_string(),
+        _ if matches!(output_ty, Ty::F64) => "Number.NaN".to_string(),
         _ => "0n".to_string(),
     }
 }
@@ -3893,10 +3894,10 @@ fn ts_faultable_numeric_binary_expr(name: &str, input: &TsValue, output_ty: &Ty)
     let left = tuple_field(input, 0);
     let right = tuple_field(input, 1);
     match (name, inner.as_ref()) {
-        ("div", Ty::Int) => format!("faFaultableI64Div({left}, {right})"),
-        ("div", Ty::Real) => format!("faFaultableRealDiv(Number({left}), Number({right}))"),
-        ("rem", Ty::Int) => format!("faFaultableI64Rem({left}, {right})"),
-        ("rem", Ty::Real) => format!("faFaultableRealRem(Number({left}), Number({right}))"),
+        ("div", Ty::I64) => format!("faFaultableI64Div({left}, {right})"),
+        ("div", Ty::F64) => format!("faFaultableRealDiv({left}, {right})"),
+        ("rem", Ty::I64) => format!("faFaultableI64Rem({left}, {right})"),
+        ("rem", Ty::F64) => format!("faFaultableRealRem({left}, {right})"),
         _ => unreachable!(),
     }
 }
@@ -4707,7 +4708,7 @@ function faGpuRuntime(): Promise<FaGpuRuntimeModule> {
 
 function faGpuAssertI32(value: bigint): number {
   if (value < -2147483648n || value > 2147483647n) {
-    throw new Error("FlowArrow GPU Int currently requires signed 32-bit values");
+    throw new Error("FlowArrow GPU i64 currently requires signed 32-bit values");
   }
   return Number(value);
 }

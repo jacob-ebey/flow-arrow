@@ -37,12 +37,12 @@ pub const OPEN_READONLY: StdSymbol = io_node(
 );
 pub const OPEN_MEMORY: StdSymbol =
     io_node(MODULE, "open_memory", "()", "Faultable[sqlite.Connection]");
-pub const CLOSE: StdSymbol = io_node(MODULE, "close", "sqlite.Connection", "Faultable[Int]");
+pub const CLOSE: StdSymbol = io_node(MODULE, "close", "sqlite.Connection", "Faultable[i64]");
 
 pub const BUSY_TIMEOUT: StdSymbol = io_node(
     MODULE,
     "busy_timeout",
-    "(sqlite.Connection,Int)",
+    "(sqlite.Connection,i64)",
     "Faultable[sqlite.Connection]",
 );
 pub const FOREIGN_KEYS: StdSymbol = io_node(
@@ -77,8 +77,8 @@ pub const ROLLBACK: StdSymbol = io_node(
 );
 
 pub const NULL: StdSymbol = node(MODULE, "null", "()", "sqlite.Value");
-pub const INT: StdSymbol = node(MODULE, "int", "Int", "sqlite.Value");
-pub const REAL: StdSymbol = node(MODULE, "real", "Real", "sqlite.Value");
+pub const INT: StdSymbol = node(MODULE, "int", "i64", "sqlite.Value");
+pub const REAL: StdSymbol = node(MODULE, "real", "f64", "sqlite.Value");
 pub const TEXT: StdSymbol = node(MODULE, "text", "Bytes", "sqlite.Value");
 pub const BLOB: StdSymbol = node(MODULE, "blob", "Bytes", "sqlite.Value");
 
@@ -86,7 +86,7 @@ pub const EXEC: StdSymbol = io_node(
     MODULE,
     "exec",
     "(sqlite.Connection,Bytes,Seq[sqlite.Value])",
-    "Faultable[(sqlite.Connection,Int)]",
+    "Faultable[(sqlite.Connection,i64)]",
 );
 pub const QUERY: StdSymbol = io_node(
     MODULE,
@@ -101,17 +101,17 @@ pub const QUERY_ALL: StdSymbol = io_node(
     "Faultable[(sqlite.Connection,Seq[sqlite.Row])]",
 );
 
-pub const COLUMN_COUNT: StdSymbol = node(MODULE, "column_count", "sqlite.Row", "Int");
+pub const COLUMN_COUNT: StdSymbol = node(MODULE, "column_count", "sqlite.Row", "i64");
 pub const COLUMN_NAME: StdSymbol = node(
     MODULE,
     "column_name",
-    "(sqlite.Row,Int)",
+    "(sqlite.Row,i64)",
     "Faultable[Bytes]",
 );
 pub const VALUE_AT: StdSymbol = node(
     MODULE,
     "value_at",
-    "(sqlite.Row,Int)",
+    "(sqlite.Row,i64)",
     "Faultable[sqlite.Value]",
 );
 pub const VALUE_NAMED: StdSymbol = node(
@@ -123,7 +123,7 @@ pub const VALUE_NAMED: StdSymbol = node(
 
 pub const KIND: StdSymbol = node(MODULE, "kind", "sqlite.Value", "Bytes");
 pub const IS_NULL: StdSymbol = node(MODULE, "is_null", "sqlite.Value", "Bool");
-pub const AS_INT: StdSymbol = node(MODULE, "as_int", "sqlite.Value", "Faultable[Int]");
-pub const AS_REAL: StdSymbol = node(MODULE, "as_real", "sqlite.Value", "Faultable[Real]");
+pub const AS_INT: StdSymbol = node(MODULE, "as_int", "sqlite.Value", "Faultable[i64]");
+pub const AS_REAL: StdSymbol = node(MODULE, "as_real", "sqlite.Value", "Faultable[f64]");
 pub const AS_TEXT: StdSymbol = node(MODULE, "as_text", "sqlite.Value", "Faultable[Bytes]");
 pub const AS_BLOB: StdSymbol = node(MODULE, "as_blob", "sqlite.Value", "Faultable[Bytes]");

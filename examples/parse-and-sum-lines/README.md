@@ -42,7 +42,7 @@ This example uses the proposed partitioning syntax:
 $lines -> fault map parse_real { ok -> $numbers, fault -> $faults }
 ```
 
-The `ok` output is a `Seq[Real]` containing successfully parsed values.
+The `ok` output is a `Seq[f64]` containing successfully parsed values.
 The `fault` output is a `Seq[Fault]` containing diagnostics for invalid
 elements.
 
@@ -59,7 +59,7 @@ wat
 the designed mechanism should be able to produce a diagnostic such as:
 
 ```text
-line 2: expected Real, got "wat"
+line 2: expected f64, got "wat"
 ```
 
 and return a non-zero exit code through explicit graph structure. For

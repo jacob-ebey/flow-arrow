@@ -3086,7 +3086,7 @@ impl GpuParam for f32 {
 
 fn checked_i32(value: i64) -> i32 {
     i32::try_from(value).unwrap_or_else(|_| {
-        fail("FlowArrow GPU Int currently requires signed 32-bit values");
+        fail("FlowArrow GPU i64 currently requires signed 32-bit values");
     })
 }
 
@@ -3564,7 +3564,7 @@ mod tests {
             r#"
                 import std.cli { Args }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     0 -> $exit_code
                 }
             "#,

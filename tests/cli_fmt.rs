@@ -2,8 +2,8 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-const UNFORMATTED: &str = r#"program   main( args:Args)->exit_code:Int{0->$exit_code}"#;
-const FORMATTED: &str = r#"program main(args: Args) -> exit_code: Int {
+const UNFORMATTED: &str = r#"program   main( args:Args)->exit_code:i64{0->$exit_code}"#;
+const FORMATTED: &str = r#"program main(args: Args) -> exit_code: i64 {
     0 -> $exit_code
 }
 "#;

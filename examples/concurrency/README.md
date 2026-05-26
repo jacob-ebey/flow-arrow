@@ -91,7 +91,7 @@ flowchart TD
     main_call_write_stdout -- "binds" --> main_value__24exit_code
   end
   subgraph callable_score_job["node score_job"]
-    score_job_value__24n_3a_20Int(["$n: Int"])
+    score_job_value__24n_3a_20Int(["$n: i64"])
     score_job_input_input_a_28_24n_2c_20_24n_29(["input<br/>($n, $n)"])
     score_job_value__24n_3a_20Int -- "item" --> score_job_input_input_a_28_24n_2c_20_24n_29
     score_job_value__24n_3a_20Int -- "item" --> score_job_input_input_a_28_24n_2c_20_24n_29
@@ -108,7 +108,7 @@ flowchart TD
     score_job_call_add -- "binds" --> score_job_value__24score
   end
   subgraph callable_weight_job["node weight_job"]
-    weight_job_value__24n_3a_20Int(["$n: Int"])
+    weight_job_value__24n_3a_20Int(["$n: i64"])
     weight_job_input_input_a_28_24n_2c_202_29(["input<br/>($n, 2)"])
     weight_job_value__24n_3a_20Int -- "item" --> weight_job_input_input_a_28_24n_2c_202_29
     weight_job_call_mul["mul"]

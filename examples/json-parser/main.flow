@@ -59,7 +59,7 @@ import std.math { add, max }
 import std.predicates { not_empty }
 import std.real { parse_real, format_real }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     ()                 -> read_stdin       -> $input
     $input             -> trim             -> $framed
     ($framed, "[")     -> strip_prefix     -> $after_open_fault
@@ -95,15 +95,15 @@ program main(args: Args) -> exit_code: Int {
 #
 # Pure: no I/O, no mutation, no branching. Only `format_int`,
 # `format_real`, and a fixed-arity `concat_bytes`.
-node render_summary(count: Int, sum: Real) -> output: Bytes {
+node render_summary(count: i64, sum: f64) -> output: Bytes {
     $count                                                    -> format_int   -> $count_str
     $sum                                                      -> format_real  -> $sum_str
     ["{\"count\":", $count_str, ",\"sum\":", $sum_str, "}\n"] -> concat_bytes -> $output
 }
 
-# Map a Real to the integer 1. Used to count elements by reducing a
+# Map a f64 to the integer 1. Used to count elements by reducing a
 # sequence of ones; `length` is in the spec but not yet implemented in
 # the compiler, so this is the portable way to compute a count today.
-node one(x: Real) -> n: Int {
+node one(x: f64) -> n: i64 {
     1 -> $n
 }

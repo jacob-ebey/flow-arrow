@@ -7,11 +7,11 @@ import std.int { format_int }
 import std.io { write_stdout }
 
 foreign c header "./native_math.h" source "./native_math.c" {
-    pure node native_score(value: Int) -> score: Int = fa_native_score
-    pure node native_label(score: Int) -> label: Bytes = fa_native_label
+    pure node native_score(value: i64) -> score: i64 = fa_native_score
+    pure node native_label(score: i64) -> label: Bytes = fa_native_label
 }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     6      -> native_score -> $score
     $score -> native_label -> $label
     $score -> format_int   -> $score_bytes

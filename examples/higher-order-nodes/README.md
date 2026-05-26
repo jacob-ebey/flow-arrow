@@ -3,7 +3,7 @@
 Demonstrates static node parameters:
 
 ```flow
-node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+node twice<step: node(i64) -> i64>(x: i64) -> y: i64 {
     $x -> step -> step -> $y
 }
 

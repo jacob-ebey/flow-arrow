@@ -9,7 +9,7 @@ fn std_int_nodes_run() {
         import std.io { write_stdout }
         import std.math { add }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             "41" -> parse_int -> $parsed
             ($parsed, 1) -> add -> $value
             $value -> format_int -> $text
@@ -36,7 +36,7 @@ fn std_int_parse_edges_and_faults_run() {
         import std.io { write_stdout }
         import std.math { add }
 
-        program main(args: Args) -> exit_code: Faultable[Int] {
+        program main(args: Args) -> exit_code: Faultable[i64] {
             " -42 " -> parse_int -> $negative
             "0" -> parse_int -> $zero
             ($negative, $zero) -> add -> format_int -> $sum
@@ -58,7 +58,7 @@ fn std_int_parse_edges_and_faults_run() {
         import std.fault { expect }
         import std.int { parse_int }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             "12x" -> parse_int -> expect -> $bad
             0 -> $exit_code
         }
@@ -66,5 +66,5 @@ fn std_int_parse_edges_and_faults_run() {
     let output = support::run_source("int-parse-fault", fault_source, b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("expected Int"), "stderr was: {stderr}");
+    assert!(stderr.contains("expected i64"), "stderr was: {stderr}");
 }

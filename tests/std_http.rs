@@ -7,7 +7,7 @@ const HTTP_SOURCE: &str = r#"
     import std.cli { Args }
     import std.http as http
 
-    program main(args: Args) -> exit_code: Faultable[Int] {
+    program main(args: Args) -> exit_code: Faultable[i64] {
         () -> http.default_config -> $config
         $config -> http.listen -> $listener
         $listener -> http.requests -> $requests

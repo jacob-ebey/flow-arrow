@@ -176,7 +176,7 @@ LLVM output:
 
 ```flow
 foreign c header "./native_math.h" source "./native_math.c" {
-    pure node native_score(value: Int) -> score: Int = fa_native_score
+    pure node native_score(value: i64) -> score: i64 = fa_native_score
 }
 ```
 
@@ -194,7 +194,7 @@ Static node parameters are named in the declaration body and supplied
 positionally at use sites:
 
 ```flow
-node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+node twice<step: node(i64) -> i64>(x: i64) -> y: i64 {
     $x -> step -> step -> $y
 }
 
@@ -241,7 +241,7 @@ graph.
 
 A `program_decl` has identical syntax to a `node_decl`; the difference
 is semantic: the canonical command-line entry point is
-`program main(args: Args) -> exit_code: Int`, with stdin/stdout/stderr
+`program main(args: Args) -> exit_code: i64`, with stdin/stdout/stderr
 handled by explicit `std.io` boundary nodes or effectful wrapper nodes
 (see `overview.md` §13).
 
@@ -275,18 +275,15 @@ type_arg       ::= type
 Examples (informative):
 
 ```text
-Real
-Int
-Bool
+f64
 i64
-double
-Int|Real
+Bool
 Fault
-Faultable[Real]
+Faultable[f64]
 Image[H, W]
 Image[H, W, RGB]
-Vec[N, Real]
-Matrix[M, K, Real]
+Vec[N, f64]
+Matrix[M, K, f64]
 Kernel[3, 3]
 ```
 
@@ -498,7 +495,7 @@ Notes:
   returns them must say so in its output type. Effectful fault maps use
   the same deterministic input-order evaluation as effectful `map`.
 - `repeat<$n>` accepts either an integer literal **or** a `variable_ref` of
-  type `Int`. When `N` is a runtime value, the iteration count varies
+  type `i64`. When `N` is a runtime value, the iteration count varies
   per invocation but the body graph is still static.
 - `select` is invoked as `(predicate, when_true, when_false) -> select`.
   Both candidate values are ordinary graph inputs and are evaluated
@@ -514,9 +511,9 @@ Notes:
 - `field name` projects the named field from a struct value.
 - `grid<...>` introduces shape-indexed parallelism. Each `grid_dim`
   may be an integer literal, a compile-time identifier (shape
-  variable), or a runtime `Int` value. Topology is fixed; only the
+  variable), or a runtime `i64` value. Topology is fixed; only the
   width of the parallel region varies.
-- `range` takes a single `Int` and produces `Seq[Int]` of that length
+- `range` takes a single `i64` and produces `Seq[i64]` of that length
   (`0..n`). `range_between` takes `(start, stop)`; `range_step` takes
   `(start, stop, step)`. Output length is data-dependent but graph
   topology is not.
@@ -524,7 +521,7 @@ Notes:
   producing a `Seq[T]` whose length is data-dependent. Compiled as a
   parallel predicate evaluation followed by a parallel prefix-sum
   compaction.
-- `length` takes a `Seq[T]` and produces its `Int` length.
+- `length` takes a `Seq[T]` and produces its `i64` length.
 
 ### 6.0.1 Dynamic sizes vs. dynamic topology (normative)
 

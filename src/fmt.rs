@@ -843,14 +843,14 @@ mod tests {
     fn formats_dense_program_spacing() {
         assert_formats(
             r#"import   std.cli{Args}
-type Pair=(Int,Real)
-program   main( args:Args)->exit_code:Int{(1,2)->add->$sum
+type Pair=(i64,f64)
+program   main( args:Args)->exit_code:i64{(1,2)->add->$sum
 $sum-> $exit_code}"#,
             r#"import std.cli { Args }
 
-type Pair = (Int, Real)
+type Pair = (i64, f64)
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     (1, 2) -> add -> $sum
     $sum   -> $exit_code
 }
@@ -863,7 +863,7 @@ program main(args: Args) -> exit_code: Int {
         assert_formats(
             r#"import std.math{add as plus,sub,mul,div,eq}
 import "./helpers.flow" as helper
-program main(args:Args)->exit_code:Int{0->$exit_code}"#,
+program main(args:Args)->exit_code:i64{0->$exit_code}"#,
             r#"import std.math {
     add as plus,
     sub,
@@ -873,7 +873,7 @@ program main(args:Args)->exit_code:Int{0->$exit_code}"#,
 }
 import "./helpers.flow" as helper
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     0 -> $exit_code
 }
 "#,
@@ -883,9 +883,9 @@ program main(args: Args) -> exit_code: Int {
     #[test]
     fn formats_callable_ports_and_type_whitespace() {
         assert_formats(
-            r#"node split(input:(Seq[Real],Seq[Real]),value:Int|Real)->(left:Seq[Real],right:Faultable[Int]){$input->first->$left
+            r#"node split(input:(Seq[f64],Seq[f64]),value:i64|f64)->(left:Seq[f64],right:Faultable[i64]){$input->first->$left
 $value->wrap->$right}"#,
-            r#"node split(input: (Seq[Real], Seq[Real]), value: Int | Real) -> (left: Seq[Real], right: Faultable[Int]) {
+            r#"node split(input: (Seq[f64], Seq[f64]), value: i64 | f64) -> (left: Seq[f64], right: Faultable[i64]) {
     $input -> first -> $left
     $value -> wrap  -> $right
 }
@@ -896,8 +896,8 @@ $value->wrap->$right}"#,
     #[test]
     fn formats_extern_node_declarations() {
         assert_formats(
-            r#"extern node expose(value:Int)->out:Int{$value->$out}"#,
-            r#"extern node expose(value: Int) -> out: Int {
+            r#"extern node expose(value:i64)->out:i64{$value->$out}"#,
+            r#"extern node expose(value: i64) -> out: i64 {
     $value -> $out
 }
 "#,
@@ -907,9 +907,9 @@ $value->wrap->$right}"#,
     #[test]
     fn formats_tuple_binding_targets() {
         assert_formats(
-            r#"program main(args:Args)->exit_code:Int{(1,2)->pair->($left,$right)
+            r#"program main(args:Args)->exit_code:i64{(1,2)->pair->($left,$right)
 $left->$exit_code}"#,
-            r#"program main(args: Args) -> exit_code: Int {
+            r#"program main(args: Args) -> exit_code: i64 {
     (1, 2) -> pair -> ($left, $right)
     $left  -> $exit_code
 }
@@ -920,16 +920,16 @@ $left->$exit_code}"#,
     #[test]
     fn formats_long_struct_literals_on_multiple_lines() {
         assert_formats(
-            r#"struct JobSummary{total_score:Int,peak_score:Int,total_weight:Int,peak_weight:Int}
-extern node score_batch(width:Int)->summary:JobSummary{JobSummary{total_score:$total_score,peak_score:$peak_score,total_weight:$total_weight,peak_weight:$peak_weight}->$summary}"#,
+            r#"struct JobSummary{total_score:i64,peak_score:i64,total_weight:i64,peak_weight:i64}
+extern node score_batch(width:i64)->summary:JobSummary{JobSummary{total_score:$total_score,peak_score:$peak_score,total_weight:$total_weight,peak_weight:$peak_weight}->$summary}"#,
             r#"struct JobSummary {
-    total_score: Int,
-    peak_score: Int,
-    total_weight: Int,
-    peak_weight: Int,
+    total_score: i64,
+    peak_score: i64,
+    total_weight: i64,
+    peak_weight: i64,
 }
 
-extern node score_batch(width: Int) -> summary: JobSummary {
+extern node score_batch(width: i64) -> summary: JobSummary {
     JobSummary {
         total_score: $total_score,
         peak_score: $peak_score,
@@ -944,20 +944,20 @@ extern node score_batch(width: Int) -> summary: JobSummary {
     #[test]
     fn formats_literals_without_changing_real_kinds() {
         assert_formats(
-            "program main(args: Args) -> exit_code: Int {\n    [0.0,\"a\\n\\\"b\",true,false,()] -> sink -> $exit_code\n}\n",
-            "program main(args: Args) -> exit_code: Int {\n    [0.0, \"a\\n\\\"b\", true, false, ()] -> sink -> $exit_code\n}\n",
+            "program main(args: Args) -> exit_code: i64 {\n    [0.0,\"a\\n\\\"b\",true,false,()] -> sink -> $exit_code\n}\n",
+            "program main(args: Args) -> exit_code: i64 {\n    [0.0, \"a\\n\\\"b\", true, false, ()] -> sink -> $exit_code\n}\n",
         );
     }
 
     #[test]
     fn formats_combinator_stages() {
         assert_formats(
-            r#"program main(args: Args) -> exit_code: Int {
+            r#"program main(args: Args) -> exit_code: i64 {
 ["1","bad"]->fault map parse_real{ok->$numbers,fault->$faults}
 $numbers->filter positive->map abs->reduce add(identity:0.0)->$total
 $total->scan add(identity: 0.0)->repeat<$total> emit->$exit_code
 }"#,
-            r#"program main(args: Args) -> exit_code: Int {
+            r#"program main(args: Args) -> exit_code: i64 {
     ["1", "bad"] -> fault map parse_real { ok -> $numbers, fault -> $faults }
     $numbers     -> filter positive         -> map abs             -> reduce add(identity: 0.0) -> $total
     $total       -> scan add(identity: 0.0) -> repeat<$total> emit -> $exit_code
@@ -969,10 +969,10 @@ $total->scan add(identity: 0.0)->repeat<$total> emit->$exit_code
     #[test]
     fn formats_match_stage_as_multiline_block() {
         assert_formats(
-            r#"program main(args:Args)->exit_code:Int{0->match{eq(0)->zero _->one}->$exit_code}
-node zero(x:Int)->y:Int{0->$y}
-node one(x:Int)->y:Int{1->$y}"#,
-            r#"program main(args: Args) -> exit_code: Int {
+            r#"program main(args:Args)->exit_code:i64{0->match{eq(0)->zero _->one}->$exit_code}
+node zero(x:i64)->y:i64{0->$y}
+node one(x:i64)->y:i64{1->$y}"#,
+            r#"program main(args: Args) -> exit_code: i64 {
     0
     -> match {
         eq(0) -> zero
@@ -981,11 +981,11 @@ node one(x:Int)->y:Int{1->$y}"#,
     -> $exit_code
 }
 
-node zero(x: Int) -> y: Int {
+node zero(x: i64) -> y: i64 {
     0 -> $y
 }
 
-node one(x: Int) -> y: Int {
+node one(x: i64) -> y: i64 {
     1 -> $y
 }
 "#,
@@ -995,8 +995,8 @@ node one(x: Int) -> y: Int {
     #[test]
     fn formats_match_inline_value_targets() {
         assert_formats(
-            r#"program main(args:Args)->exit_code:Int{0->match{eq(0)->0 _->1}->$exit_code}"#,
-            r#"program main(args: Args) -> exit_code: Int {
+            r#"program main(args:Args)->exit_code:i64{0->match{eq(0)->0 _->1}->$exit_code}"#,
+            r#"program main(args: Args) -> exit_code: i64 {
     0
     -> match {
         eq(0) -> 0
@@ -1015,7 +1015,7 @@ node one(x: Int) -> y: Int {
 import std.cli { Args }
 
 # entry docs
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     # bind status
     0 -> $exit_code # status code
 }
@@ -1024,7 +1024,7 @@ program main(args: Args) -> exit_code: Int {
 import std.cli { Args }
 
 # entry docs
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     # bind status
     0 -> $exit_code  # status code
 }
@@ -1035,7 +1035,7 @@ program main(args: Args) -> exit_code: Int {
     #[test]
     fn keeps_comments_before_multiline_chain_continuations_on_the_next_chain() {
         assert_formats(
-            r#"program main(args: Args) -> exit_code: Int {
+            r#"program main(args: Args) -> exit_code: i64 {
     # first line
     [$a,
      $b]
@@ -1047,7 +1047,7 @@ program main(args: Args) -> exit_code: Int {
         -> concat -> $exit_code
 }
 "#,
-            r#"program main(args: Args) -> exit_code: Int {
+            r#"program main(args: Args) -> exit_code: i64 {
     # first line
     [$a, $b] -> concat -> $joined
 
@@ -1061,7 +1061,7 @@ program main(args: Args) -> exit_code: Int {
     #[test]
     fn blank_lines_reset_chain_alignment_groups() {
         assert_formats(
-            r#"program main(args: Args) -> exit_code: Int {
+            r#"program main(args: Args) -> exit_code: i64 {
 $a->first_long->$x
 $bb->f->$y
 
@@ -1069,7 +1069,7 @@ $c->g->$z
 $longer->h->$exit_code
 }
 "#,
-            r#"program main(args: Args) -> exit_code: Int {
+            r#"program main(args: Args) -> exit_code: i64 {
     $a  -> first_long -> $x
     $bb -> f          -> $y
 
@@ -1083,11 +1083,11 @@ $longer->h->$exit_code
     #[test]
     fn preserves_hashes_inside_strings() {
         assert_formats(
-            r##"program main(args: Args) -> exit_code: Int {
+            r##"program main(args: Args) -> exit_code: i64 {
     "#not-comment" -> echo -> $exit_code # comment
 }
 "##,
-            r##"program main(args: Args) -> exit_code: Int {
+            r##"program main(args: Args) -> exit_code: i64 {
     "#not-comment" -> echo -> $exit_code  # comment
 }
 "##,
@@ -1098,7 +1098,7 @@ $longer->h->$exit_code
     fn preserves_standalone_block_comments() {
         assert_formats(
             r#"/* module */
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     /*
      * body
      */
@@ -1106,7 +1106,7 @@ program main(args: Args) -> exit_code: Int {
 }
 "#,
             r#"/* module */
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     /*
     * body
     */
@@ -1120,13 +1120,13 @@ program main(args: Args) -> exit_code: Int {
     fn wraps_long_imports_even_when_item_count_is_small() {
         assert_formats(
             r#"import std.very_long_module_name { incredibly_long_imported_name, another_extremely_long_imported_name }
-program main(args: Args) -> exit_code: Int { 0 -> $exit_code }"#,
+program main(args: Args) -> exit_code: i64 { 0 -> $exit_code }"#,
             r#"import std.very_long_module_name {
     incredibly_long_imported_name,
     another_extremely_long_imported_name,
 }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     0 -> $exit_code
 }
 "#,

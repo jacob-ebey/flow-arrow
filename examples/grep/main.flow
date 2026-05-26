@@ -42,7 +42,7 @@ import std.seq {
     zip,
 }
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     $args     -> argv -> $raw_args
     $raw_args -> head -> $needle
     $raw_args -> tail -> $targets
@@ -163,12 +163,12 @@ node grep_file(input: (Bytes, Bytes, Bytes)) -> out: Seq[Bytes] {
     ($matches, $path)          -> broadcast_right -> map format_match     -> $out
 }
 
-node line_contains(input: ((Int, Bytes), Bytes)) -> keep: Bool {
+node line_contains(input: ((i64, Bytes), Bytes)) -> keep: Bool {
     $input           -> (($line_number, $line), $needle)
     ($line, $needle) -> contains -> $keep
 }
 
-node format_match(input: (((Int, Bytes), Bytes), Bytes)) -> out: Bytes {
+node format_match(input: (((i64, Bytes), Bytes), Bytes)) -> out: Bytes {
     $input                                            -> ((($line_number, $line), $needle), $path)
     $line_number                                      -> format_int   -> $line_number_text
     [$path, ":", $line_number_text, ":", $line, "\n"] -> concat_bytes -> $out

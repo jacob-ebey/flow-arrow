@@ -23,7 +23,7 @@ import std.io { write_stdout }
 import std.int { format_int }
 import std.math { sub, eq }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     (99, 0, -1)    -> range_step                        -> $indices
     $indices       -> map verse_for                     -> $verses
     $verses        -> reduce concat_bytes(identity: "") -> $body
@@ -37,7 +37,7 @@ program main(args: Args) -> exit_code: Int {
 #   "n bottles of beer on the wall, n bottles of beer.\n"
 #   "Take one down and pass it around, (n-1) bottles of beer on the wall.\n\n"
 #
-node verse_for(n: Int) -> v: Bytes {
+node verse_for(n: i64) -> v: Bytes {
     $n      -> format_int -> $n_str
     ($n, 1) -> sub        -> $m
     $m      -> format_int -> $m_str
@@ -56,7 +56,7 @@ node verse_for(n: Int) -> v: Bytes {
     [$line1, $line2] -> concat_bytes -> $v
 }
 
-node bottle_word(n: Int) -> word: Bytes {
+node bottle_word(n: i64) -> word: Bytes {
     $n
     -> match {
         eq(1) -> "bottle"

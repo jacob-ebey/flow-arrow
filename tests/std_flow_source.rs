@@ -27,7 +27,7 @@ fn std_vector_source_nodes_run() {
             distance,
         }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             [1.0, 2.0, 3.5] -> sum -> $total
             ($total, 6.5) -> eq -> $sum_ok
 
@@ -110,7 +110,7 @@ fn source_backed_stdlib_alias_imports_are_rewritten() {
         import std.math { eq }
         import std.vector as vector
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             [2.0, 3.0, 4.0] -> vector.sum -> $total
             ($total, 9.0) -> eq -> $ok
             ($ok, 0, 1) -> select -> $exit_code
@@ -163,7 +163,7 @@ fn std_matrix_source_nodes_run() {
             gram,
         }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]] -> $a
             [[6.0, 5.0, 4.0], [3.0, 2.0, 1.0]] -> $b
 
@@ -300,7 +300,7 @@ fn source_backed_stdlib_reports_unknown_exports() {
         import std.cli { Args }
         import std.vector { missing }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             0 -> $exit_code
         }
     "#;
@@ -317,7 +317,7 @@ fn source_backed_matrix_helpers_are_private() {
         import std.cli { Args }
         import std.matrix { row_matmul }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             0 -> $exit_code
         }
     "#;
@@ -334,7 +334,7 @@ fn source_backed_stdlib_helpers_are_private() {
         import std.cli { Args }
         import std.vector { dot_pair }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             0 -> $exit_code
         }
     "#;

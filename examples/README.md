@@ -25,11 +25,11 @@ import std.stream as stream
 ```text
 # Byte / text
 split_lines       : Bytes -> Seq[Bytes]
-parse_int         : Bytes -> Faultable[Int]
-parse_real        : Bytes -> Faultable[Real]
-format_int        : Int   -> Bytes                 # propagates Faultable[Int] -> Faultable[Bytes]
-format_real       : Real  -> Bytes                 # propagates Faultable[Real] -> Faultable[Bytes]
-from_int          : Int   -> Real
+parse_int         : Bytes -> Faultable[i64]
+parse_real        : Bytes -> Faultable[f64]
+format_int        : i64   -> Bytes                 # propagates Faultable[i64] -> Faultable[Bytes]
+format_real       : f64  -> Bytes                 # propagates Faultable[f64] -> Faultable[Bytes]
+from_int          : i64   -> f64
 concat_bytes      : Seq[Bytes] -> Bytes              # associative; identity: ""
 join_bytes        : (Seq[Bytes], Bytes) -> Bytes     # joins with separator
 trim              : Bytes -> Bytes                   # strips leading/trailing ASCII whitespace
@@ -41,36 +41,36 @@ strip_suffix      : (Bytes, Bytes) -> Faultable[Bytes] # faults if input does no
 Args              # CLI argument/flag input type
 argv              : Args -> Seq[Bytes]      # excludes executable name
 read_stdin        : ()    -> Bytes
-write_stdout      : Bytes -> Int
-write_stderr      : Bytes -> Int
+write_stdout      : Bytes -> i64
+write_stderr      : Bytes -> i64
 http.listen       : http.ServerConfig -> Faultable[http.Listener]
 http.requests     : http.Listener -> Stream[http.Request]
-http.serve        : (http.Listener, Stream[http.Response]) -> Faultable[Int]
+http.serve        : (http.Listener, Stream[http.Response]) -> Faultable[i64]
 sqlite.open       : Bytes -> Faultable[sqlite.Connection]
-sqlite.exec       : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, Int)]
+sqlite.exec       : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, i64)]
 sqlite.query      : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, Stream[sqlite.Row])]
 stream.to_seq     : Stream[V] -> Faultable[Seq[V]]
 walk_files        : Bytes -> Faultable[Seq[Bytes]]
 read_files        : Seq[Bytes] -> Faultable[Seq[(Bytes,Bytes)]]
 
 # Arithmetic
-add               : (Int|Real, Int|Real) -> Int|Real # associative
-sub               : (Int|Real, Int|Real) -> Int|Real
-mul               : (Int|Real, Int|Real) -> Int|Real
-div               : (Int|Real, Int|Real) -> Int|Real # truncates toward zero for Int
-rem               : (Int|Real, Int|Real) -> Int|Real # same sign as dividend for Int
-neg               : Int|Real -> Int|Real
-abs               : Int|Real -> Int|Real
-sqrt              : Int|Real -> Real
-min               : (Int|Real, Int|Real) -> Int|Real
-max               : (Int|Real, Int|Real) -> Int|Real
+add               : (i64, i64) -> i64 | (f64, f64) -> f64 # associative
+sub               : (i64, i64) -> i64 | (f64, f64) -> f64
+mul               : (i64, i64) -> i64 | (f64, f64) -> f64
+div               : (i64, i64) -> Faultable[i64] | (f64, f64) -> Faultable[f64]
+rem               : (i64, i64) -> Faultable[i64] | (f64, f64) -> Faultable[f64]
+neg               : i64 -> i64 | f64 -> f64
+abs               : i64 -> i64 | f64 -> f64
+sqrt              : f64 -> Faultable[f64]
+min               : (i64, i64) -> i64 | (f64, f64) -> f64
+max               : (i64, i64) -> i64 | (f64, f64) -> f64
 
 # Comparisons
-eq                : (Int|Real, Int|Real) -> Bool
-lt                : (Int|Real, Int|Real) -> Bool
-gt                : (Int|Real, Int|Real) -> Bool
-le                : (Int|Real, Int|Real) -> Bool
-ge                : (Int|Real, Int|Real) -> Bool
+eq                : (i64, i64) -> Bool | (f64, f64) -> Bool
+lt                : (i64, i64) -> Bool | (f64, f64) -> Bool
+gt                : (i64, i64) -> Bool | (f64, f64) -> Bool
+le                : (i64, i64) -> Bool | (f64, f64) -> Bool
+ge                : (i64, i64) -> Bool | (f64, f64) -> Bool
 
 # Boolean logic
 and               : (Bool, Bool) -> Bool

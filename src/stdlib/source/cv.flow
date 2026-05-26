@@ -28,19 +28,19 @@ import std.cv.native {
     encode_ppm as encode_ppm_native,
 }
 
-type Size = (Int, Int)
-type Pixel = (Real, (Real, Real))
+type Size = (i64, i64)
+type Pixel = (f64, (f64, f64))
 type Image = (Size, Seq[Seq[Pixel]])
 
 extern node dimensions(image: Image) -> shape: Size {
     $image -> first -> $shape
 }
 
-extern node width(image: Image) -> value: Int {
+extern node width(image: Image) -> value: i64 {
     $image -> dimensions -> first -> $value
 }
 
-extern node height(image: Image) -> value: Int {
+extern node height(image: Image) -> value: i64 {
     $image -> dimensions -> second -> $value
 }
 
@@ -58,22 +58,22 @@ extern node map_pixels(inputs: (Image, Seq[Seq[Pixel]])) -> image: Image {
     ($shape, $values) -> $image
 }
 
-node clamp_channel(value: Real) -> out: Real {
+node clamp_channel(value: f64) -> out: f64 {
     ($value, 0.0) -> math_max -> $low
     ($low, 1.0)   -> math_min -> $out
 }
 
-node gray_value_to_srgb_pixel(value: Real) -> pixel: Pixel {
+node gray_value_to_srgb_pixel(value: f64) -> pixel: Pixel {
     $value                           -> clamp_channel -> $channel
     ($channel, ($channel, $channel)) -> $pixel
 }
 
-node gray_code_to_srgb_pixel(code: Int) -> pixel: Pixel {
+node gray_code_to_srgb_pixel(code: i64) -> pixel: Pixel {
     $code               -> from_int -> $real_code
     ($real_code, 255.0) -> math_div -> expect -> gray_value_to_srgb_pixel -> $pixel
 }
 
-node srgb_pixel_to_luma(pixel: Pixel) -> luma: Real {
+node srgb_pixel_to_luma(pixel: Pixel) -> luma: f64 {
     $pixel                           -> first    -> $red
     $pixel                           -> second   -> $green_blue
     $green_blue                      -> first    -> $green
@@ -124,7 +124,7 @@ node invert_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
     $row -> map invert_pixel -> $out
 }
 
-node threshold_pixel(inputs: (Pixel, Real)) -> out: Pixel {
+node threshold_pixel(inputs: (Pixel, f64)) -> out: Pixel {
     $inputs             -> first                    -> srgb_pixel_to_luma -> $luma
     $inputs             -> second                   -> $threshold
     ($luma, $threshold) -> math_gt                  -> $above
@@ -132,7 +132,7 @@ node threshold_pixel(inputs: (Pixel, Real)) -> out: Pixel {
     $channel            -> gray_value_to_srgb_pixel -> $out
 }
 
-extern node threshold(inputs: (Image, Real)) -> out: Image {
+extern node threshold(inputs: (Image, f64)) -> out: Image {
     $inputs           -> first           -> $image
     $inputs           -> second          -> $cutoff
     $image            -> pixel_rows      -> $rows
@@ -140,17 +140,17 @@ extern node threshold(inputs: (Image, Real)) -> out: Image {
     ($image, $values) -> map_pixels      -> $out
 }
 
-node threshold_row(inputs: (Seq[Pixel], Real)) -> out: Seq[Pixel] {
+node threshold_row(inputs: (Seq[Pixel], f64)) -> out: Seq[Pixel] {
     $inputs         -> first           -> $row
     $inputs         -> second          -> $cutoff
     ($row, $cutoff) -> broadcast_right -> map threshold_pixel -> $out
 }
 
-node brighten_channel(inputs: (Real, Real)) -> out: Real {
+node brighten_channel(inputs: (f64, f64)) -> out: f64 {
     $inputs -> math_add -> clamp_channel -> $out
 }
 
-node brighten_pixel(inputs: (Pixel, Real)) -> out: Pixel {
+node brighten_pixel(inputs: (Pixel, f64)) -> out: Pixel {
     $inputs                             -> first            -> $pixel
     $inputs                             -> second           -> $amount
     $pixel                              -> first            -> $red
@@ -163,7 +163,7 @@ node brighten_pixel(inputs: (Pixel, Real)) -> out: Pixel {
     ($out_red, ($out_green, $out_blue)) -> $out
 }
 
-extern node brighten(inputs: (Image, Real)) -> out: Image {
+extern node brighten(inputs: (Image, f64)) -> out: Image {
     $inputs           -> first           -> $image
     $inputs           -> second          -> $amount
     $image            -> pixel_rows      -> $rows
@@ -171,19 +171,19 @@ extern node brighten(inputs: (Image, Real)) -> out: Image {
     ($image, $values) -> map_pixels      -> $out
 }
 
-node brighten_row(inputs: (Seq[Pixel], Real)) -> out: Seq[Pixel] {
+node brighten_row(inputs: (Seq[Pixel], f64)) -> out: Seq[Pixel] {
     $inputs         -> first           -> $row
     $inputs         -> second          -> $amount
     ($row, $amount) -> broadcast_right -> map brighten_pixel -> $out
 }
 
-extern node darken(inputs: (Image, Real)) -> out: Image {
+extern node darken(inputs: (Image, f64)) -> out: Image {
     $inputs           -> first    -> $image
     $inputs           -> second   -> math_neg -> $amount
     ($image, $amount) -> brighten -> $out
 }
 
-node contrast_channel(inputs: (Real, Real)) -> out: Real {
+node contrast_channel(inputs: (f64, f64)) -> out: f64 {
     $inputs              -> first    -> $channel
     $inputs              -> second   -> $factor
     ($channel, 0.5)      -> math_sub -> $centered
@@ -191,7 +191,7 @@ node contrast_channel(inputs: (Real, Real)) -> out: Real {
     ($scaled, 0.5)       -> math_add -> clamp_channel -> $out
 }
 
-node contrast_pixel(inputs: (Pixel, Real)) -> out: Pixel {
+node contrast_pixel(inputs: (Pixel, f64)) -> out: Pixel {
     $inputs                             -> first            -> $pixel
     $inputs                             -> second           -> $factor
     $pixel                              -> first            -> $red
@@ -204,7 +204,7 @@ node contrast_pixel(inputs: (Pixel, Real)) -> out: Pixel {
     ($out_red, ($out_green, $out_blue)) -> $out
 }
 
-extern node contrast(inputs: (Image, Real)) -> out: Image {
+extern node contrast(inputs: (Image, f64)) -> out: Image {
     $inputs           -> first           -> $image
     $inputs           -> second          -> $factor
     $image            -> pixel_rows      -> $rows
@@ -212,7 +212,7 @@ extern node contrast(inputs: (Image, Real)) -> out: Image {
     ($image, $values) -> map_pixels      -> $out
 }
 
-node contrast_row(inputs: (Seq[Pixel], Real)) -> out: Seq[Pixel] {
+node contrast_row(inputs: (Seq[Pixel], f64)) -> out: Seq[Pixel] {
     $inputs         -> first           -> $row
     $inputs         -> second          -> $factor
     ($row, $factor) -> broadcast_right -> map contrast_pixel -> $out
@@ -230,51 +230,51 @@ node blue_channel_pixel(pixel: Pixel) -> out: Pixel {
     $pixel -> second -> second -> gray_value_to_srgb_pixel -> $out
 }
 
-node red_value(pixel: Pixel) -> out: Real {
+node red_value(pixel: Pixel) -> out: f64 {
     $pixel -> first -> $out
 }
 
-node green_value(pixel: Pixel) -> out: Real {
+node green_value(pixel: Pixel) -> out: f64 {
     $pixel -> second -> first -> $out
 }
 
-node blue_value(pixel: Pixel) -> out: Real {
+node blue_value(pixel: Pixel) -> out: f64 {
     $pixel -> second -> second -> $out
 }
 
-node luma_value(pixel: Pixel) -> out: Real {
+node luma_value(pixel: Pixel) -> out: f64 {
     $pixel -> srgb_pixel_to_luma -> $out
 }
 
-node red_matrix_row(row: Seq[Pixel]) -> out: Seq[Real] {
+node red_matrix_row(row: Seq[Pixel]) -> out: Seq[f64] {
     $row -> map red_value -> $out
 }
 
-node green_matrix_row(row: Seq[Pixel]) -> out: Seq[Real] {
+node green_matrix_row(row: Seq[Pixel]) -> out: Seq[f64] {
     $row -> map green_value -> $out
 }
 
-node blue_matrix_row(row: Seq[Pixel]) -> out: Seq[Real] {
+node blue_matrix_row(row: Seq[Pixel]) -> out: Seq[f64] {
     $row -> map blue_value -> $out
 }
 
-node luma_matrix_row(row: Seq[Pixel]) -> out: Seq[Real] {
+node luma_matrix_row(row: Seq[Pixel]) -> out: Seq[f64] {
     $row -> map luma_value -> $out
 }
 
-extern node red_matrix(image: Image) -> out: Seq[Seq[Real]] {
+extern node red_matrix(image: Image) -> out: Seq[Seq[f64]] {
     $image -> pixel_rows -> map red_matrix_row -> $out
 }
 
-extern node green_matrix(image: Image) -> out: Seq[Seq[Real]] {
+extern node green_matrix(image: Image) -> out: Seq[Seq[f64]] {
     $image -> pixel_rows -> map green_matrix_row -> $out
 }
 
-extern node blue_matrix(image: Image) -> out: Seq[Seq[Real]] {
+extern node blue_matrix(image: Image) -> out: Seq[Seq[f64]] {
     $image -> pixel_rows -> map blue_matrix_row -> $out
 }
 
-extern node luma_matrix(image: Image) -> out: Seq[Seq[Real]] {
+extern node luma_matrix(image: Image) -> out: Seq[Seq[f64]] {
     $image -> pixel_rows -> map luma_matrix_row -> $out
 }
 
@@ -305,7 +305,7 @@ node blue_channel_row(row: Seq[Pixel]) -> out: Seq[Pixel] {
     $row -> map blue_channel_pixel -> $out
 }
 
-node sepia_channel(inputs: (Real, (Real, (Real, (Real, (Real, Real)))))) -> out: Real {
+node sepia_channel(inputs: (f64, (f64, (f64, (f64, (f64, f64)))))) -> out: f64 {
     $inputs                  -> first         -> $red
     $inputs                  -> second        -> first  -> $green
     $inputs                  -> second        -> second -> first  -> $blue
@@ -502,31 +502,31 @@ extern node load_ppm(path: Bytes) -> image: Faultable[Image] {
     $path -> read_file -> decode_ppm -> $image
 }
 
-extern node save_bmp(inputs: (Bytes, Image)) -> status: Faultable[Int] {
+extern node save_bmp(inputs: (Bytes, Image)) -> status: Faultable[i64] {
     $inputs           -> first      -> $path
     $inputs           -> second     -> encode_bmp -> $encoded
     ($path, $encoded) -> write_file -> $status
 }
 
-extern node save_jpeg(inputs: (Bytes, Image)) -> status: Faultable[Int] {
+extern node save_jpeg(inputs: (Bytes, Image)) -> status: Faultable[i64] {
     $inputs           -> first      -> $path
     $inputs           -> second     -> encode_jpeg -> $encoded
     ($path, $encoded) -> write_file -> $status
 }
 
-extern node save_pgm(inputs: (Bytes, Image)) -> status: Faultable[Int] {
+extern node save_pgm(inputs: (Bytes, Image)) -> status: Faultable[i64] {
     $inputs           -> first      -> $path
     $inputs           -> second     -> encode_pgm -> $encoded
     ($path, $encoded) -> write_file -> $status
 }
 
-extern node save_png(inputs: (Bytes, Image)) -> status: Faultable[Int] {
+extern node save_png(inputs: (Bytes, Image)) -> status: Faultable[i64] {
     $inputs           -> first      -> $path
     $inputs           -> second     -> encode_png -> $encoded
     ($path, $encoded) -> write_file -> $status
 }
 
-extern node save_ppm(inputs: (Bytes, Image)) -> status: Faultable[Int] {
+extern node save_ppm(inputs: (Bytes, Image)) -> status: Faultable[i64] {
     $inputs           -> first      -> $path
     $inputs           -> second     -> encode_ppm -> $encoded
     ($path, $encoded) -> write_file -> $status

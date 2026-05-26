@@ -154,7 +154,7 @@ mod tests {
         let source = r#"import std.bytes { missing }
 import std.cli { Args }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     0 -> $exit_code
 }
 "#;

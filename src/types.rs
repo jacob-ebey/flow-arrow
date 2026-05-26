@@ -4,8 +4,8 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Type {
     Unit,
-    Int,
-    Real,
+    I64,
+    F64,
     Bool,
     Bytes,
     Args,
@@ -77,21 +77,11 @@ impl Type {
 pub(crate) fn primitive_types() -> HashMap<String, Type> {
     HashMap::from([
         ("Unit".to_string(), Type::Unit),
-        ("Int".to_string(), Type::Int),
-        ("Real".to_string(), Type::Real),
+        ("i64".to_string(), Type::I64),
+        ("f64".to_string(), Type::F64),
         ("Bool".to_string(), Type::Bool),
         ("Bytes".to_string(), Type::Bytes),
         ("Fault".to_string(), Type::Fault),
-        ("i1".to_string(), Type::Bool),
-        ("i8".to_string(), Type::Int),
-        ("i16".to_string(), Type::Int),
-        ("i32".to_string(), Type::Int),
-        ("i64".to_string(), Type::Int),
-        ("f16".to_string(), Type::Real),
-        ("float".to_string(), Type::Real),
-        ("double".to_string(), Type::Real),
-        ("ptr".to_string(), Type::Bytes),
-        ("void".to_string(), Type::Unit),
     ])
 }
 
@@ -144,7 +134,6 @@ pub(crate) fn sequence_item_type(left: &Type, right: &Type) -> Result<Type, Stri
         {
             Ok(Type::Faultable(inner.clone()))
         }
-        (Type::Int, Type::Real) | (Type::Real, Type::Int) => Ok(Type::Real),
         _ => Err(format!("expected `{left}`, found `{right}`")),
     }
 }
@@ -432,12 +421,11 @@ impl TypeParser {
 
         Ok(match name.as_str() {
             "Unit" => Type::Unit,
-            "Int" => Type::Int,
-            "Real" => Type::Real,
+            "i64" => Type::I64,
+            "f64" => Type::F64,
             "Bool" => Type::Bool,
             "Bytes" => Type::Bytes,
             "Fault" => Type::Fault,
-            "Number" => Type::OneOf(vec![Type::Int, Type::Real]),
             "http.ServerConfig" => Type::HttpServerConfig,
             "http.Listener" => Type::HttpListener,
             "http.Request" => Type::HttpRequest,
@@ -445,11 +433,6 @@ impl TypeParser {
             "sqlite.Connection" => Type::SqliteConnection,
             "sqlite.Row" => Type::SqliteRow,
             "sqlite.Value" => Type::SqliteValue,
-            "i1" => Type::Bool,
-            "i8" | "i16" | "i32" | "i64" => Type::Int,
-            "f16" | "float" | "double" => Type::Real,
-            "ptr" => Type::Bytes,
-            "void" => Type::Unit,
             _ => Type::Var(name),
         })
     }
@@ -526,8 +509,8 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::Unit => write!(f, "()"),
-            Type::Int => write!(f, "Int"),
-            Type::Real => write!(f, "Real"),
+            Type::I64 => write!(f, "i64"),
+            Type::F64 => write!(f, "f64"),
             Type::Bool => write!(f, "Bool"),
             Type::Bytes => write!(f, "Bytes"),
             Type::Args => write!(f, "Args"),

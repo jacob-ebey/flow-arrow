@@ -675,7 +675,7 @@ impl<'a> Checker<'a> {
             ),
             Stage::Repeat { count, node } => {
                 let count = self.type_endpoint(resolved, count, env)?;
-                self.expect_type("repeat count", &count.ty, &Type::Int)?;
+                self.expect_type("repeat count", &count.ty, &Type::I64)?;
                 (
                     format!("repeat {node}"),
                     self.apply_repeat(callable, node, input)?,
@@ -740,8 +740,8 @@ impl<'a> Checker<'a> {
                 TypedEndpointKind::Variable(name.clone()),
             ),
             Endpoint::Name(name) => return Err(format!("expected value, found node `{name}`")),
-            Endpoint::Int(value) => (Type::Int, TypedEndpointKind::Int(*value)),
-            Endpoint::Real(value) => (Type::Real, TypedEndpointKind::Real(*value)),
+            Endpoint::Int(value) => (Type::I64, TypedEndpointKind::Int(*value)),
+            Endpoint::Real(value) => (Type::F64, TypedEndpointKind::Real(*value)),
             Endpoint::Bool(value) => (Type::Bool, TypedEndpointKind::Bool(*value)),
             Endpoint::String(value) => (Type::Bytes, TypedEndpointKind::String(value.clone())),
             Endpoint::Unit => (Type::Unit, TypedEndpointKind::Unit),
@@ -981,11 +981,11 @@ impl<'a> Checker<'a> {
             .first()
             .ok_or_else(|| "`main` has no signature".to_string())?;
         self.expect_type("program main input", &main_signature.input, &Type::Args)?;
-        if main_signature.output != Type::Int
-            && main_signature.output != Type::Faultable(Box::new(Type::Int))
+        if main_signature.output != Type::I64
+            && main_signature.output != Type::Faultable(Box::new(Type::I64))
         {
             return Err(format!(
-                "program main output expected `Int` or `Faultable[Int]`, found `{}`",
+                "program main output expected `i64` or `Faultable[i64]`, found `{}`",
                 main_signature.output
             ));
         }
@@ -1513,10 +1513,10 @@ impl<'a> Checker<'a> {
                 self.validate_declared_type(item)
             }
             Type::OneOf(items) => {
-                for item in items {
-                    self.validate_declared_type(item)?;
-                }
-                Ok(())
+                let label = Type::OneOf(items.clone());
+                Err(format!(
+                    "union type `{label}` is not runtime-represented yet"
+                ))
             }
             Type::Tuple(items) => {
                 for item in items {
@@ -1668,7 +1668,7 @@ impl<'a> Checker<'a> {
                 }
                 Stage::Repeat { count, node } => {
                     let count_type = self.endpoint_type(count, env)?;
-                    self.expect_type("repeat count", &count_type, &Type::Int)?;
+                    self.expect_type("repeat count", &count_type, &Type::I64)?;
                     value_type = self.apply_repeat(callable, node, &value_type)?;
                 }
                 Stage::Reduce { op, identity } => {
@@ -1698,8 +1698,8 @@ impl<'a> Checker<'a> {
                 .cloned()
                 .ok_or_else(|| format!("unknown value `{name}`")),
             Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
-            Endpoint::Int(_) => Ok(Type::Int),
-            Endpoint::Real(_) => Ok(Type::Real),
+            Endpoint::Int(_) => Ok(Type::I64),
+            Endpoint::Real(_) => Ok(Type::F64),
             Endpoint::Bool(_) => Ok(Type::Bool),
             Endpoint::String(_) => Ok(Type::Bytes),
             Endpoint::Unit => Ok(Type::Unit),
@@ -1841,7 +1841,7 @@ impl<'a> Checker<'a> {
                 }
                 Stage::Repeat { count, node } => {
                     let count_type = self.endpoint_type(count, env)?;
-                    self.expect_type("repeat count", &count_type, &Type::Int)?;
+                    self.expect_type("repeat count", &count_type, &Type::I64)?;
                     value_type = self.apply_repeat(&inline_callable, node, &value_type)?;
                 }
                 Stage::Reduce { op, identity } => {
@@ -2555,8 +2555,8 @@ fn stdlib_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, Strin
 fn stdlib_reduce_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, String> {
     if symbol.module == "std.math" && matches!(symbol.name, "add" | "min" | "max") {
         return Ok(vec![
-            numeric_signature(Type::Int, Type::Int),
-            numeric_signature(Type::Real, Type::Real),
+            numeric_signature(Type::I64, Type::I64),
+            numeric_signature(Type::F64, Type::F64),
         ]);
     }
     match (symbol.reduce_input, symbol.reduce_output) {
@@ -2570,10 +2570,8 @@ fn stdlib_reduce_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>
 
 fn numeric_binary_signatures() -> Vec<Signature> {
     vec![
-        numeric_signature(Type::Int, Type::Int),
-        numeric_signature(Type::Int, Type::Real),
-        numeric_signature(Type::Real, Type::Int),
-        numeric_signature(Type::Real, Type::Real),
+        numeric_signature(Type::I64, Type::I64),
+        numeric_signature(Type::F64, Type::F64),
     ]
 }
 
@@ -2590,27 +2588,21 @@ fn numeric_faultable_binary_signatures() -> Vec<Signature> {
 fn numeric_unary_signatures() -> Vec<Signature> {
     vec![
         Signature {
-            input: Type::Int,
-            output: Type::Int,
+            input: Type::I64,
+            output: Type::I64,
         },
         Signature {
-            input: Type::Real,
-            output: Type::Real,
+            input: Type::F64,
+            output: Type::F64,
         },
     ]
 }
 
 fn numeric_real_unary_signatures() -> Vec<Signature> {
-    vec![
-        Signature {
-            input: Type::Int,
-            output: Type::Real,
-        },
-        Signature {
-            input: Type::Real,
-            output: Type::Real,
-        },
-    ]
+    vec![Signature {
+        input: Type::F64,
+        output: Type::F64,
+    }]
 }
 
 fn numeric_faultable_real_unary_signatures() -> Vec<Signature> {
@@ -2625,19 +2617,14 @@ fn numeric_faultable_real_unary_signatures() -> Vec<Signature> {
 
 fn numeric_comparison_signatures() -> Vec<Signature> {
     vec![
-        comparison_signature(Type::Int, Type::Int),
-        comparison_signature(Type::Int, Type::Real),
-        comparison_signature(Type::Real, Type::Int),
-        comparison_signature(Type::Real, Type::Real),
+        comparison_signature(Type::I64, Type::I64),
+        comparison_signature(Type::F64, Type::F64),
     ]
 }
 
 fn numeric_signature(left: Type, right: Type) -> Signature {
-    let output = if left == Type::Int && right == Type::Int {
-        Type::Int
-    } else {
-        Type::Real
-    };
+    debug_assert_eq!(left, right, "numeric signatures must not mix types");
+    let output = left.clone();
     Signature {
         input: Type::Tuple(vec![left, right]),
         output,

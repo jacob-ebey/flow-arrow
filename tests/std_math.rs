@@ -7,7 +7,7 @@ fn std_math_nodes_run() {
         import std.fault { expect }
         import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, min, max }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             (2, 3) -> add -> $five_a
             ($five_a, 5) -> eq -> $add_ok
             (8, 3) -> sub -> $five_b
@@ -22,7 +22,7 @@ fn std_math_nodes_run() {
             ($minus_five, -5) -> eq -> $neg_ok
             -8 -> abs -> $eight
             ($eight, 8) -> eq -> $abs_ok
-            81 -> sqrt -> expect -> $nine
+            81.0 -> sqrt -> expect -> $nine
             ($nine, 9.0) -> eq -> $sqrt_ok
             (2, 3) -> lt -> $lt_ok
             (3, 2) -> gt -> $gt_ok
@@ -64,12 +64,12 @@ fn std_math_real_functions_and_usage_faults_run() {
         import std.cli { Args }
         import std.math { cos, eq, exp, sin }
 
-        program main(args: Args) -> exit_code: Int {
-            0 -> sin -> $sin_zero
+        program main(args: Args) -> exit_code: i64 {
+            0.0 -> sin -> $sin_zero
             ($sin_zero, 0.0) -> eq -> $sin_ok
-            0 -> cos -> $cos_zero
+            0.0 -> cos -> $cos_zero
             ($cos_zero, 1.0) -> eq -> $cos_ok
-            0 -> exp -> $exp_zero
+            0.0 -> exp -> $exp_zero
             ($exp_zero, 1.0) -> eq -> $exp_ok
             ($sin_ok, $cos_ok, false) -> select -> $s1
             ($s1, $exp_ok, false) -> select -> $all_ok
@@ -94,7 +94,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.cli { Args }
                 import std.math { div }
 
-                program main(args: Args) -> exit_code: Faultable[Int] {
+                program main(args: Args) -> exit_code: Faultable[i64] {
                     (1, 0) -> div -> $exit_code
                 }
             "#,
@@ -106,7 +106,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.cli { Args }
                 import std.math { rem }
 
-                program main(args: Args) -> exit_code: Faultable[Int] {
+                program main(args: Args) -> exit_code: Faultable[i64] {
                     (1, 0) -> rem -> $exit_code
                 }
             "#,
@@ -120,7 +120,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.int { parse_int }
                 import std.math { add }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     "9223372036854775807" -> parse_int -> expect -> $max
                     ($max, 1) -> add -> $exit_code
                 }
@@ -135,7 +135,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.int { parse_int }
                 import std.math { neg }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     "-9223372036854775808" -> parse_int -> expect -> neg -> $exit_code
                 }
             "#,
@@ -149,7 +149,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.int { parse_int }
                 import std.math { abs }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     "-9223372036854775808" -> parse_int -> expect -> abs -> $exit_code
                 }
             "#,
@@ -163,7 +163,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.real { format_real }
                 import std.io { write_stdout }
 
-                program main(args: Args) -> exit_code: Faultable[Int] {
+                program main(args: Args) -> exit_code: Faultable[i64] {
                     -1.0 -> sqrt -> format_real -> write_stdout -> $exit_code
                 }
             "#,
@@ -191,7 +191,7 @@ fn std_math_invalid_inputs_are_recoverable_with_fault_map() {
         import std.math { div, sqrt }
         import std.seq { length }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             [(1, 0), (6, 2), (8, 0)] -> fault map div { ok -> $quotients, fault -> $div_faults }
             [-1.0, 4.0] -> fault map sqrt { ok -> $roots, fault -> $sqrt_faults }
 

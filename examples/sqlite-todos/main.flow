@@ -13,7 +13,7 @@ import std.io { write_stdout }
 import std.sqlite as sqlite
 import std.tuple { first }
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     () -> sqlite.open_memory -> expect -> $conn0
 
     ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", []) -> sqlite.exec -> expect -> first -> $conn1

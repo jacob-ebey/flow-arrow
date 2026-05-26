@@ -20,9 +20,9 @@ sqlite.Value
 open            : Bytes -> Faultable[sqlite.Connection]
 open_readonly   : Bytes -> Faultable[sqlite.Connection]
 open_memory     : () -> Faultable[sqlite.Connection]
-close           : sqlite.Connection -> Faultable[Int]
+close           : sqlite.Connection -> Faultable[i64]
 
-busy_timeout    : (sqlite.Connection, Int) -> Faultable[sqlite.Connection]
+busy_timeout    : (sqlite.Connection, i64) -> Faultable[sqlite.Connection]
 foreign_keys    : (sqlite.Connection, Bool) -> Faultable[sqlite.Connection]
 
 begin           : sqlite.Connection -> Faultable[sqlite.Connection]
@@ -31,24 +31,24 @@ commit          : sqlite.Connection -> Faultable[sqlite.Connection]
 rollback        : sqlite.Connection -> Faultable[sqlite.Connection]
 
 null            : () -> sqlite.Value
-int             : Int -> sqlite.Value
-real            : Real -> sqlite.Value
+int             : i64 -> sqlite.Value
+real            : f64 -> sqlite.Value
 text            : Bytes -> sqlite.Value
 blob            : Bytes -> sqlite.Value
 
-exec            : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, Int)]
+exec            : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, i64)]
 query           : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, Stream[sqlite.Row])]
 query_all       : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(sqlite.Connection, Seq[sqlite.Row])]
 
-column_count    : sqlite.Row -> Int
-column_name     : (sqlite.Row, Int) -> Faultable[Bytes]
-value_at        : (sqlite.Row, Int) -> Faultable[sqlite.Value]
+column_count    : sqlite.Row -> i64
+column_name     : (sqlite.Row, i64) -> Faultable[Bytes]
+value_at        : (sqlite.Row, i64) -> Faultable[sqlite.Value]
 value_named     : (sqlite.Row, Bytes) -> Faultable[sqlite.Value]
 
 kind            : sqlite.Value -> Bytes
 is_null         : sqlite.Value -> Bool
-as_int          : sqlite.Value -> Faultable[Int]
-as_real         : sqlite.Value -> Faultable[Real]
+as_int          : sqlite.Value -> Faultable[i64]
+as_real         : sqlite.Value -> Faultable[f64]
 as_text         : sqlite.Value -> Faultable[Bytes]
 as_blob         : sqlite.Value -> Faultable[Bytes]
 ```
@@ -85,7 +85,7 @@ import std.sqlite as sqlite
 import std.stream as stream
 import std.tuple { first, second }
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     () -> sqlite.open_memory -> $conn0
 
     ($conn0, "CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", []) -> sqlite.exec -> first -> $conn1

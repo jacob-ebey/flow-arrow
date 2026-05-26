@@ -7,7 +7,7 @@ fn std_io_nodes_run() {
         import std.io { read_stdin, write_stdout, write_stderr }
         import std.math { add }
 
-        program main(args: Args) -> exit_code: Int {
+        program main(args: Args) -> exit_code: i64 {
             () -> read_stdin -> $input
             $input -> write_stdout -> $stdout_status
             "err\n" -> write_stderr -> $stderr_status

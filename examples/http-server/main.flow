@@ -12,17 +12,17 @@
 # std.http surface used by this example:
 #
 #   http.default_config     : () -> http.ServerConfig
-#   http.with_tcp_listener  : (http.ServerConfig, Bytes, Int) -> http.ServerConfig
+#   http.with_tcp_listener  : (http.ServerConfig, Bytes, i64) -> http.ServerConfig
 #   http.with_http2         : (http.ServerConfig, Bool) -> http.ServerConfig
 #   http.with_http3         : (http.ServerConfig, Bool) -> http.ServerConfig
 #   http.listen            : http.ServerConfig -> http.Listener
 #   http.requests          : http.Listener -> Stream[http.Request]
-#   http.serve             : (http.Listener, Stream[http.Response]) -> Int
+#   http.serve             : (http.Listener, Stream[http.Response]) -> i64
 #
 #   http.route             : (http.Request, Bytes, Bytes) -> Bool
 #   http.body              : http.Request -> Bytes
 #   http.response          : http.Request -> http.Response
-#   http.with_status       : (http.Response, Int) -> http.Response
+#   http.with_status       : (http.Response, i64) -> http.Response
 #   http.with_header       : (http.Response, Bytes, Bytes) -> http.Response
 #   http.text              : (http.Response, Bytes) -> http.Response
 #   http.json              : (http.Response, Bytes) -> http.Response
@@ -49,7 +49,7 @@ import std.cli { Args }
 import std.bytes { concat_bytes }
 import std.http as http
 
-program main(args: Args) -> exit_code: Faultable[Int] {
+program main(args: Args) -> exit_code: Faultable[i64] {
     ()                          -> http.default_config    -> $config0
     ($config0, "0.0.0.0", 8080) -> http.with_tcp_listener -> $config1
     ($config1, true)            -> http.with_http2        -> $config2

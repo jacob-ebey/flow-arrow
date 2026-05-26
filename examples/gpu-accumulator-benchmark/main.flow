@@ -18,7 +18,7 @@ import std.int { format_int }
 import std.io { write_stdout }
 import std.real { format_real }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     50000 -> run_gpu_accumulator -> $score
 
     $score -> format_real -> $score_bytes

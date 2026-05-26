@@ -164,7 +164,7 @@ impl<'a> LlvmText<'a> {
                         );
                     }
                     TypedStageKind::Repeat { count, node, .. } => {
-                        let count = self.emit_endpoint(out, count, &env, Some(&Ty::Int))?;
+                        let count = self.emit_endpoint(out, count, &env, Some(&Ty::I64))?;
                         value = self.emit_repeat(out, node, value, count)?;
                     }
                     TypedStageKind::Reduce { op, identity, .. } => {
@@ -363,7 +363,7 @@ impl<'a> LlvmText<'a> {
                             value = self.emit_scan(out, op, value, identity)?;
                         }
                         TypedStageKind::Repeat { count, node, .. } => {
-                            let count = self.emit_endpoint(out, count, env, Some(&Ty::Int))?;
+                            let count = self.emit_endpoint(out, count, env, Some(&Ty::I64))?;
                             value = self.emit_repeat(out, node, value, count)?;
                         }
                         TypedStageKind::Match { arms } => {
@@ -470,13 +470,13 @@ impl<'a> LlvmText<'a> {
             "min" | "max" => {
                 let cmp = self.next_temp();
                 let predicate = match (name, left_ty) {
-                    ("min", Ty::Real) => "olt",
-                    ("max", Ty::Real) => "ogt",
+                    ("min", Ty::F64) => "olt",
+                    ("max", Ty::F64) => "ogt",
                     ("min", _) => "slt",
                     ("max", _) => "sgt",
                     _ => unreachable!(),
                 };
-                let cmp_inst = if matches!(left_ty, Ty::Real) {
+                let cmp_inst = if matches!(left_ty, Ty::F64) {
                     "fcmp"
                 } else {
                     "icmp"
@@ -609,7 +609,7 @@ impl<'a> LlvmText<'a> {
     ) -> Result<TextValue, String> {
         let output_ty = self.codegen.call_output_type(name, &input.ty)?;
         let symbol = format!("@flow_repeat_{}", sanitize_symbol(name));
-        self.declare(&symbol, &output_ty, &[input.ty.clone(), Ty::Int]);
+        self.declare(&symbol, &output_ty, &[input.ty.clone(), Ty::I64]);
         let temp = self.next_temp();
         out.push_str(&format!(
             "  {temp} = call {} {symbol}({} {}, i64 {}) ; repeat {name}\n",
@@ -815,16 +815,16 @@ fn tuple_items(ty: &Ty) -> Result<&[Ty], String> {
 
 fn numeric_instruction(name: &str, ty: &Ty) -> Option<&'static str> {
     match (name, ty) {
-        ("add", Ty::Int) => Some("add"),
-        ("add", Ty::Real) => Some("fadd"),
-        ("sub", Ty::Int) => Some("sub"),
-        ("sub", Ty::Real) => Some("fsub"),
-        ("mul", Ty::Int) => Some("mul"),
-        ("mul", Ty::Real) => Some("fmul"),
-        ("div", Ty::Int) => Some("sdiv"),
-        ("div", Ty::Real) => Some("fdiv"),
-        ("rem", Ty::Int) => Some("srem"),
-        ("min" | "max", Ty::Int | Ty::Real) => Some("select"),
+        ("add", Ty::I64) => Some("add"),
+        ("add", Ty::F64) => Some("fadd"),
+        ("sub", Ty::I64) => Some("sub"),
+        ("sub", Ty::F64) => Some("fsub"),
+        ("mul", Ty::I64) => Some("mul"),
+        ("mul", Ty::F64) => Some("fmul"),
+        ("div", Ty::I64) => Some("sdiv"),
+        ("div", Ty::F64) => Some("fdiv"),
+        ("rem", Ty::I64) => Some("srem"),
+        ("min" | "max", Ty::I64 | Ty::F64) => Some("select"),
         _ => None,
     }
 }
@@ -832,8 +832,8 @@ fn numeric_instruction(name: &str, ty: &Ty) -> Option<&'static str> {
 fn llvm_ty(ty: &Ty) -> String {
     match ty {
         Ty::Unit => "{ i8 }".to_string(),
-        Ty::Int => "i64".to_string(),
-        Ty::Real => "double".to_string(),
+        Ty::I64 => "i64".to_string(),
+        Ty::F64 => "double".to_string(),
         Ty::Bool => "i1".to_string(),
         Ty::Bytes | Ty::Args | Ty::Fault => "{ i64, ptr }".to_string(),
         Ty::HttpServerConfig
@@ -871,8 +871,8 @@ fn llvm_ty(ty: &Ty) -> String {
 
 fn default_value(ty: &Ty) -> String {
     match ty {
-        Ty::Int => "0".to_string(),
-        Ty::Real => "0.000000e+00".to_string(),
+        Ty::I64 => "0".to_string(),
+        Ty::F64 => "0.000000e+00".to_string(),
         Ty::Bool => "0".to_string(),
         Ty::HttpServerConfig
         | Ty::HttpListener

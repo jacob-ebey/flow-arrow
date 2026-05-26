@@ -81,31 +81,31 @@ static double fa_checked_sqrt(double value) {
   return sqrt(value);
 }
 
-static FaFaultable_Int fa_faultable_i64_div(int64_t left, int64_t right) {
-  if (right == 0) return FaFaultable_Int_fault(fa_fault_cstr("div: division by zero"));
-  if (left == INT64_MIN && right == -1) return FaFaultable_Int_fault(fa_fault_cstr("div: integer overflow"));
-  return FaFaultable_Int_ok(left / right);
+static FaFaultable_i64 fa_faultable_i64_div(int64_t left, int64_t right) {
+  if (right == 0) return FaFaultable_i64_fault(fa_fault_cstr("div: division by zero"));
+  if (left == INT64_MIN && right == -1) return FaFaultable_i64_fault(fa_fault_cstr("div: integer overflow"));
+  return FaFaultable_i64_ok(left / right);
 }
 
-static FaFaultable_Int fa_faultable_i64_rem(int64_t left, int64_t right) {
-  if (right == 0) return FaFaultable_Int_fault(fa_fault_cstr("rem: remainder by zero"));
-  if (left == INT64_MIN && right == -1) return FaFaultable_Int_fault(fa_fault_cstr("rem: integer overflow"));
-  return FaFaultable_Int_ok(left % right);
+static FaFaultable_i64 fa_faultable_i64_rem(int64_t left, int64_t right) {
+  if (right == 0) return FaFaultable_i64_fault(fa_fault_cstr("rem: remainder by zero"));
+  if (left == INT64_MIN && right == -1) return FaFaultable_i64_fault(fa_fault_cstr("rem: integer overflow"));
+  return FaFaultable_i64_ok(left % right);
 }
 
-static FaFaultable_Real fa_faultable_f64_div(double left, double right) {
-  if (right == 0.0) return FaFaultable_Real_fault(fa_fault_cstr("div: division by zero"));
-  return FaFaultable_Real_ok(left / right);
+static FaFaultable_f64 fa_faultable_f64_div(double left, double right) {
+  if (right == 0.0) return FaFaultable_f64_fault(fa_fault_cstr("div: division by zero"));
+  return FaFaultable_f64_ok(left / right);
 }
 
-static FaFaultable_Real fa_faultable_f64_rem(double left, double right) {
-  if (right == 0.0) return FaFaultable_Real_fault(fa_fault_cstr("rem: remainder by zero"));
-  return FaFaultable_Real_ok(fmod(left, right));
+static FaFaultable_f64 fa_faultable_f64_rem(double left, double right) {
+  if (right == 0.0) return FaFaultable_f64_fault(fa_fault_cstr("rem: remainder by zero"));
+  return FaFaultable_f64_ok(fmod(left, right));
 }
 
-static FaFaultable_Real fa_faultable_sqrt(double value) {
-  if (value < 0.0) return FaFaultable_Real_fault(fa_fault_cstr("sqrt: negative input"));
-  return FaFaultable_Real_ok(sqrt(value));
+static FaFaultable_f64 fa_faultable_sqrt(double value) {
+  if (value < 0.0) return FaFaultable_f64_fault(fa_fault_cstr("sqrt: negative input"));
+  return FaFaultable_f64_ok(sqrt(value));
 }
 
 static int fa_preview_len(size_t len) {
@@ -396,15 +396,15 @@ static FaSeq_Tuple_Bytes_Bytes FaSeq_Tuple_Bytes_Bytes_new(size_t count) {
   return seq;
 }
 
-static FaSeq_Int FaSeq_Int_new(size_t count) {
-  FaSeq_Int seq;
+static FaSeq_i64 FaSeq_i64_new(size_t count) {
+  FaSeq_i64 seq;
   seq.count = count;
   seq.items = (int64_t *)fa_calloc(count ? count : 1, sizeof(int64_t));
   return seq;
 }
 
-static FaSeq_Real FaSeq_Real_new(size_t count) {
-  FaSeq_Real seq;
+static FaSeq_f64 FaSeq_f64_new(size_t count) {
+  FaSeq_f64 seq;
   seq.count = count;
   seq.items = (double *)fa_calloc(count ? count : 1, sizeof(double));
   return seq;
@@ -417,29 +417,29 @@ static FaSeq_Fault FaSeq_Fault_new(size_t count) {
   return seq;
 }
 
-static FaFaultable_Int FaFaultable_Int_ok(int64_t value) {
-  FaFaultable_Int out;
+static FaFaultable_i64 FaFaultable_i64_ok(int64_t value) {
+  FaFaultable_i64 out;
   out.is_fault = false;
   out.value = value;
   return out;
 }
 
-static FaFaultable_Int FaFaultable_Int_fault(FaFault fault) {
-  FaFaultable_Int out;
+static FaFaultable_i64 FaFaultable_i64_fault(FaFault fault) {
+  FaFaultable_i64 out;
   out.is_fault = true;
   out.fault = fault;
   return out;
 }
 
-static FaFaultable_Real FaFaultable_Real_ok(double value) {
-  FaFaultable_Real out;
+static FaFaultable_f64 FaFaultable_f64_ok(double value) {
+  FaFaultable_f64 out;
   out.is_fault = false;
   out.value = value;
   return out;
 }
 
-static FaFaultable_Real FaFaultable_Real_fault(FaFault fault) {
-  FaFaultable_Real out;
+static FaFaultable_f64 FaFaultable_f64_fault(FaFault fault) {
+  FaFaultable_f64 out;
   out.is_fault = true;
   out.fault = fault;
   return out;
@@ -501,15 +501,15 @@ static FaFaultable_Stream_Bytes FaFaultable_Stream_Bytes_fault(FaFault fault) {
   return out;
 }
 
-static FaFaultable_Seq_Real FaFaultable_Seq_Real_ok(FaSeq_Real value) {
-  FaFaultable_Seq_Real out;
+static FaFaultable_Seq_f64 FaFaultable_Seq_f64_ok(FaSeq_f64 value) {
+  FaFaultable_Seq_f64 out;
   out.is_fault = false;
   out.value = value;
   return out;
 }
 
-static FaFaultable_Seq_Real FaFaultable_Seq_Real_fault(FaFault fault) {
-  FaFaultable_Seq_Real out;
+static FaFaultable_Seq_f64 FaFaultable_Seq_f64_fault(FaFault fault) {
+  FaFaultable_Seq_f64 out;
   out.is_fault = true;
   out.fault = fault;
   return out;

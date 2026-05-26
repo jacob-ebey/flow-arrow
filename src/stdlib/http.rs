@@ -26,7 +26,7 @@ pub const DEFAULT_CONFIG: StdSymbol = io_node(MODULE, "default_config", "()", "h
 pub const WITH_TCP_LISTENER: StdSymbol = io_node(
     MODULE,
     "with_tcp_listener",
-    "(http.ServerConfig,Bytes,Int)",
+    "(http.ServerConfig,Bytes,i64)",
     "http.ServerConfig",
 );
 pub const WITH_TLS: StdSymbol = io_node(
@@ -59,7 +59,7 @@ pub const SERVE: StdSymbol = io_node(
     MODULE,
     "serve",
     "(http.Listener,Stream[http.Response])",
-    "Faultable[Int]",
+    "Faultable[i64]",
 );
 
 pub const ROUTE: StdSymbol = node(MODULE, "route", "(http.Request,Bytes,Bytes)", "Bool");
@@ -68,7 +68,7 @@ pub const RESPONSE_NODE: StdSymbol = node(MODULE, "response", "http.Request", "h
 pub const WITH_STATUS: StdSymbol = node(
     MODULE,
     "with_status",
-    "(http.Response,Int)",
+    "(http.Response,i64)",
     "http.Response",
 );
 pub const WITH_HEADER: StdSymbol = node(

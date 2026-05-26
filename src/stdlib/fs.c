@@ -47,23 +47,23 @@ static FaFaultable_Bytes fa_read_file(FaBytes path) {
   return FaFaultable_Bytes_ok(fa_bytes_owned(buf, len));
 }
 
-static FaFaultable_Int fa_write_file(FaBytes path, FaBytes contents) {
+static FaFaultable_i64 fa_write_file(FaBytes path, FaBytes contents) {
   if (memchr(path.bytes, '\0', path.len)) {
-    return FaFaultable_Int_fault(fa_fault_cstr("write_file: path contains NUL byte"));
+    return FaFaultable_i64_fault(fa_fault_cstr("write_file: path contains NUL byte"));
   }
   char *path_c = fa_copy_bytes(path.bytes, path.len);
   FILE *file = fopen(path_c, "wb");
   fa_free(path_c);
-  if (!file) return FaFaultable_Int_fault(fa_io_fault(path, "write_file"));
+  if (!file) return FaFaultable_i64_fault(fa_io_fault(path, "write_file"));
 
   if (contents.len > 0) fwrite(contents.bytes, 1, contents.len, file);
   if (ferror(file)) {
     FaFault fault = fa_io_fault(path, "write_file");
     fclose(file);
-    return FaFaultable_Int_fault(fault);
+    return FaFaultable_i64_fault(fault);
   }
-  if (fclose(file) != 0) return FaFaultable_Int_fault(fa_io_fault(path, "write_file"));
-  return FaFaultable_Int_ok(0);
+  if (fclose(file) != 0) return FaFaultable_i64_fault(fa_io_fault(path, "write_file"));
+  return FaFaultable_i64_ok(0);
 }
 
 static bool fa_path_stat(FaBytes path, struct stat *st) {
@@ -89,17 +89,17 @@ static bool fa_path_is_dir(FaBytes path) {
   return fa_path_stat(path, &st) && S_ISDIR(st.st_mode);
 }
 
-static FaFaultable_Int fa_path_file_size(FaBytes path) {
+static FaFaultable_i64 fa_path_file_size(FaBytes path) {
   if (memchr(path.bytes, '\0', path.len)) {
-    return FaFaultable_Int_fault(fa_fault_cstr("file_size: path contains NUL byte"));
+    return FaFaultable_i64_fault(fa_fault_cstr("file_size: path contains NUL byte"));
   }
   char *path_c = fa_copy_bytes(path.bytes, path.len);
   struct stat st;
   int result = stat(path_c, &st);
   fa_free(path_c);
-  if (result != 0) return FaFaultable_Int_fault(fa_io_fault(path, "file_size"));
-  if (!S_ISREG(st.st_mode)) return FaFaultable_Int_fault(fa_fault_cstr("file_size: path is not a regular file"));
-  return FaFaultable_Int_ok((int64_t)st.st_size);
+  if (result != 0) return FaFaultable_i64_fault(fa_io_fault(path, "file_size"));
+  if (!S_ISREG(st.st_mode)) return FaFaultable_i64_fault(fa_fault_cstr("file_size: path is not a regular file"));
+  return FaFaultable_i64_ok((int64_t)st.st_size);
 }
 
 static int fa_compare_bytes_items(const void *left, const void *right) {
@@ -409,11 +409,11 @@ static FaBytes fa_stream_path_value(FaStream *stream) {
   return state ? state->path : fa_bytes_literal("", 0);
 }
 
-static FaFaultable_Int fa_stream_size(FaStream stream) {
-  if (!fa_stream_file_handle(&stream)) return FaFaultable_Int_fault(fa_fault_cstr("size: stream is closed"));
+static FaFaultable_i64 fa_stream_size(FaStream stream) {
+  if (!fa_stream_file_handle(&stream)) return FaFaultable_i64_fault(fa_fault_cstr("size: stream is closed"));
   struct stat st;
-  if (fstat(fa_stream_fd_value(&stream), &st) != 0) return FaFaultable_Int_fault(fa_io_fault(fa_stream_path_value(&stream), "size"));
-  return FaFaultable_Int_ok((int64_t)st.st_size);
+  if (fstat(fa_stream_fd_value(&stream), &st) != 0) return FaFaultable_i64_fault(fa_io_fault(fa_stream_path_value(&stream), "size"));
+  return FaFaultable_i64_ok((int64_t)st.st_size);
 }
 
 static FaFaultable_Bytes fa_stream_read_at(FaStream stream, int64_t offset, int64_t len) {
@@ -442,17 +442,17 @@ static FaFaultable_Bytes fa_stream_read_at(FaStream stream, int64_t offset, int6
   return FaFaultable_Bytes_ok(fa_bytes_owned(buffer, (size_t)len));
 }
 
-static FaFaultable_Int fa_copy_stream_to_file(FaStream stream, FaBytes output_path) {
+static FaFaultable_i64 fa_copy_stream_to_file(FaStream stream, FaBytes output_path) {
   FILE *input = fa_stream_file_handle(&stream);
-  if (!input) return FaFaultable_Int_fault(fa_fault_cstr("copy_to_file: stream is closed"));
+  if (!input) return FaFaultable_i64_fault(fa_fault_cstr("copy_to_file: stream is closed"));
   if (memchr(output_path.bytes, '\0', output_path.len)) {
-    return FaFaultable_Int_fault(fa_fault_cstr("copy_to_file: output path contains NUL byte"));
+    return FaFaultable_i64_fault(fa_fault_cstr("copy_to_file: output path contains NUL byte"));
   }
 
   char *path_c = fa_copy_bytes(output_path.bytes, output_path.len);
   FILE *output = fopen(path_c, "wb");
   fa_free(path_c);
-  if (!output) return FaFaultable_Int_fault(fa_io_fault(output_path, "copy_to_file"));
+  if (!output) return FaFaultable_i64_fault(fa_io_fault(output_path, "copy_to_file"));
 
   char *buffer = (char *)malloc(FA_STREAM_BUFFER_SIZE);
   if (!buffer) fa_die_alloc();
@@ -464,7 +464,7 @@ static FaFaultable_Int fa_copy_stream_to_file(FaStream stream, FaBytes output_pa
         FaFault fault = fa_io_fault(output_path, "copy_to_file");
         free(buffer);
         fclose(output);
-        return FaFaultable_Int_fault(fault);
+        return FaFaultable_i64_fault(fault);
       }
     }
     if (read < FA_STREAM_BUFFER_SIZE) {
@@ -472,32 +472,32 @@ static FaFaultable_Int fa_copy_stream_to_file(FaStream stream, FaBytes output_pa
         FaFault fault = fa_io_fault(fa_stream_path_value(&stream), "copy_to_file");
         free(buffer);
         fclose(output);
-        return FaFaultable_Int_fault(fault);
+        return FaFaultable_i64_fault(fault);
       }
       break;
     }
   }
   free(buffer);
   if (fclose(output) != 0) {
-    return FaFaultable_Int_fault(fa_io_fault(output_path, "copy_to_file"));
+    return FaFaultable_i64_fault(fa_io_fault(output_path, "copy_to_file"));
   }
-  return FaFaultable_Int_ok(0);
+  return FaFaultable_i64_ok(0);
 }
 
-static FaFaultable_Int fa_close_stream(FaStream stream) {
+static FaFaultable_i64 fa_close_stream(FaStream stream) {
   FaFault fault;
   if (stream.close) {
-    if (fa_stream_close(&stream, &fault) != 0) return FaFaultable_Int_fault(fault);
-    return FaFaultable_Int_ok(0);
+    if (fa_stream_close(&stream, &fault) != 0) return FaFaultable_i64_fault(fault);
+    return FaFaultable_i64_ok(0);
   }
-  if (!stream.file) return FaFaultable_Int_fault(fa_fault_cstr("close: stream is already closed"));
+  if (!stream.file) return FaFaultable_i64_fault(fa_fault_cstr("close: stream is already closed"));
   if (fclose(stream.file) != 0) {
-    return FaFaultable_Int_fault(fa_io_fault(stream.path, "close"));
+    return FaFaultable_i64_fault(fa_io_fault(stream.path, "close"));
   }
-  return FaFaultable_Int_ok(0);
+  return FaFaultable_i64_ok(0);
 }
 
-static FaFaultable_Int fa_stream_size_ptr(FaStream *stream) {
+static FaFaultable_i64 fa_stream_size_ptr(FaStream *stream) {
   return fa_stream_size(*stream);
 }
 
@@ -505,10 +505,10 @@ static FaFaultable_Bytes fa_stream_read_at_ptr(FaStream *stream, int64_t offset,
   return fa_stream_read_at(*stream, offset, len);
 }
 
-static FaFaultable_Int fa_copy_stream_to_file_ptr(FaStream *stream, FaBytes output_path) {
+static FaFaultable_i64 fa_copy_stream_to_file_ptr(FaStream *stream, FaBytes output_path) {
   return fa_copy_stream_to_file(*stream, output_path);
 }
 
-static FaFaultable_Int fa_close_stream_ptr(FaStream *stream) {
+static FaFaultable_i64 fa_close_stream_ptr(FaStream *stream) {
   return fa_close_stream(*stream);
 }

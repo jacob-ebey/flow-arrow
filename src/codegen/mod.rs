@@ -549,8 +549,8 @@ impl TypeRegistry {
     fn c_type(&mut self, ty: &Ty) -> String {
         match ty {
             Ty::Unit => "FaUnit".to_string(),
-            Ty::Int => "int64_t".to_string(),
-            Ty::Real | Ty::OneOf(_) => "double".to_string(),
+            Ty::I64 => "int64_t".to_string(),
+            Ty::F64 => "double".to_string(),
             Ty::Bool => "bool".to_string(),
             Ty::Bytes => "FaBytes".to_string(),
             Ty::Args => "FaArgs".to_string(),
@@ -584,6 +584,7 @@ impl TypeRegistry {
             }
             Ty::Stream(_) => "FaStream".to_string(),
             Ty::Fault => "FaFault".to_string(),
+            Ty::OneOf(_) => "FaUnsupportedOneOf".to_string(),
             Ty::Var(_) => "FaUnit".to_string(),
             Ty::Seq(item) => {
                 self.c_type(item);
@@ -766,16 +767,16 @@ impl TypeRegistry {
                     out.push_str("typedef struct { size_t count; FaBytes *names; FaSqliteValue *values; } FaSqliteRow;\n");
                 }
                 Ty::Unit
-                | Ty::Int
-                | Ty::Real
+                | Ty::I64
+                | Ty::F64
                 | Ty::Bool
                 | Ty::Bytes
                 | Ty::Args
                 | Ty::Stream(_)
                 | Ty::Fault
-                | Ty::OneOf(_)
                 | Ty::Var(_)
                 | Ty::EmptySeq => {}
+                Ty::OneOf(_) => {}
             }
         }
         out.push('\n');
@@ -848,11 +849,11 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "flag_present" => Ok(Ty::Bool),
         "flag_value" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "read_stdin" => Ok(Ty::Bytes),
-        "write_stdout" | "write_stderr" => Ok(Ty::Int),
+        "write_stdout" | "write_stderr" => Ok(Ty::I64),
         "read_file" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
-        "write_file" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "write_file" => Ok(Ty::Faultable(Box::new(Ty::I64))),
         "exists" | "is_file" | "is_dir" => Ok(Ty::Bool),
-        "file_size" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "file_size" => Ok(Ty::Faultable(Box::new(Ty::I64))),
         "join_path" | "basename" | "dirname" => Ok(Ty::Bytes),
         "list_dir" | "walk_files" => Ok(Ty::Faultable(Box::new(Ty::Seq(Box::new(Ty::Bytes))))),
         "read_files" => Ok(Ty::Faultable(Box::new(Ty::Seq(Box::new(Ty::Tuple(vec![
@@ -861,7 +862,7 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         ])))))),
         "open_file" => Ok(Ty::Faultable(Box::new(Ty::Stream(Box::new(Ty::Bytes))))),
         "read_at" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
-        "size" | "copy_to_file" | "close" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "size" | "copy_to_file" | "close" => Ok(Ty::Faultable(Box::new(Ty::I64))),
         "to_seq" => {
             let Ty::Stream(item) = input else {
                 return Err("to_seq expected stream input".to_string());
@@ -872,13 +873,13 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             let Ty::Stream(_) = input else {
                 return Err("drain expected stream input".to_string());
             };
-            Ok(Ty::Faultable(Box::new(Ty::Int)))
+            Ok(Ty::Faultable(Box::new(Ty::I64)))
         }
         "default_config" => Ok(Ty::HttpServerConfig),
         "with_tcp_listener" | "with_tls" | "with_http2" | "with_http3" => Ok(Ty::HttpServerConfig),
         "listen" => Ok(Ty::Faultable(Box::new(Ty::HttpListener))),
         "requests" => Ok(Ty::Stream(Box::new(Ty::HttpRequest))),
-        "serve" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "serve" => Ok(Ty::Faultable(Box::new(Ty::I64))),
         "route" => Ok(Ty::Bool),
         "body" => Ok(Ty::Bytes),
         "response" | "with_status" | "with_header" | "text" | "json" | "not_found" => {
@@ -893,13 +894,13 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         | "sqlite.begin_immediate"
         | "sqlite.commit"
         | "sqlite.rollback" => Ok(Ty::Faultable(Box::new(Ty::SqliteConnection))),
-        "sqlite.close" => Ok(Ty::Faultable(Box::new(Ty::Int))),
+        "sqlite.close" => Ok(Ty::Faultable(Box::new(Ty::I64))),
         "sqlite.null" | "sqlite.int" | "sqlite.real" | "sqlite.text" | "sqlite.blob" => {
             Ok(Ty::SqliteValue)
         }
         "sqlite.exec" => Ok(Ty::Faultable(Box::new(Ty::Tuple(vec![
             Ty::SqliteConnection,
-            Ty::Int,
+            Ty::I64,
         ])))),
         "sqlite.query" => Ok(Ty::Faultable(Box::new(Ty::Tuple(vec![
             Ty::SqliteConnection,
@@ -909,19 +910,19 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             Ty::SqliteConnection,
             Ty::Seq(Box::new(Ty::SqliteRow)),
         ])))),
-        "sqlite.column_count" => Ok(Ty::Int),
+        "sqlite.column_count" => Ok(Ty::I64),
         "sqlite.column_name" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "sqlite.value_at" | "sqlite.value_named" => Ok(Ty::Faultable(Box::new(Ty::SqliteValue))),
         "sqlite.kind" => Ok(Ty::Bytes),
         "sqlite.is_null" => Ok(Ty::Bool),
-        "sqlite.as_int" => Ok(Ty::Faultable(Box::new(Ty::Int))),
-        "sqlite.as_real" => Ok(Ty::Faultable(Box::new(Ty::Real))),
+        "sqlite.as_int" => Ok(Ty::Faultable(Box::new(Ty::I64))),
+        "sqlite.as_real" => Ok(Ty::Faultable(Box::new(Ty::F64))),
         "sqlite.as_text" | "sqlite.as_blob" => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
         "split_lines" | "split_on" => Ok(Ty::Seq(Box::new(Ty::Bytes))),
         "trim" | "join_bytes" | "codes_to_bytes" | "format_faults" | "ascii_lower"
         | "ascii_upper" => Ok(Ty::Bytes),
         "contains" | "starts_with" | "ends_with" => Ok(Ty::Bool),
-        "index_of" | "last_index_of" => Ok(Ty::Int),
+        "index_of" | "last_index_of" => Ok(Ty::I64),
         "concat_bytes" => match input {
             Ty::Seq(item) if matches!(item.as_ref(), Ty::Faultable(inner) if inner.as_ref() == &Ty::Bytes) => {
                 Ok(Ty::Faultable(Box::new(Ty::Bytes)))
@@ -929,10 +930,10 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             _ => Ok(Ty::Bytes),
         },
         "replace" => Ok(Ty::Bytes),
-        "slice" if matches!(input, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int, Ty::Int])) => {
+        "slice" if matches!(input, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64, Ty::I64])) => {
             Ok(Ty::Bytes)
         }
-        "take" | "drop" if matches!(input, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::Int])) => {
+        "take" | "drop" if matches!(input, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Bytes, Ty::I64])) => {
             Ok(Ty::Bytes)
         }
         "repeat_bytes" => Ok(Ty::Bytes),
@@ -943,12 +944,12 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "encode_bmp" | "encode_jpeg" | "encode_pgm" | "encode_png" | "encode_ppm" => {
             Ok(Ty::Faultable(Box::new(Ty::Bytes)))
         }
-        "bytes_to_codes" | "range_step" => Ok(Ty::Seq(Box::new(Ty::Int))),
+        "bytes_to_codes" | "range_step" => Ok(Ty::Seq(Box::new(Ty::I64))),
         "byte_length" | "length" | "inner_length" | "bit_and" | "bit_or" | "bit_xor"
-        | "bit_shl" | "bit_shr" => Ok(Ty::Int),
-        "parse_int" => Ok(Ty::Faultable(Box::new(Ty::Int))),
-        "parse_real" => Ok(Ty::Faultable(Box::new(Ty::Real))),
-        "from_int" => Ok(Ty::Real),
+        | "bit_shl" | "bit_shr" => Ok(Ty::I64),
+        "parse_int" => Ok(Ty::Faultable(Box::new(Ty::I64))),
+        "parse_real" => Ok(Ty::Faultable(Box::new(Ty::F64))),
+        "from_int" => Ok(Ty::F64),
         "format_int" | "format_real" => match input {
             Ty::Faultable(_) => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
             _ => Ok(Ty::Bytes),
@@ -956,8 +957,8 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "add" | "sub" | "mul" | "min" | "max" => numeric_binary_output(input),
         "div" | "rem" => Ok(Ty::Faultable(Box::new(numeric_binary_output(input)?))),
         "neg" | "abs" => Ok(input.clone()),
-        "sqrt" => Ok(Ty::Faultable(Box::new(Ty::Real))),
-        "exp" | "sin" | "cos" => Ok(Ty::Real),
+        "sqrt" => Ok(Ty::Faultable(Box::new(Ty::F64))),
+        "exp" | "sin" | "cos" => Ok(Ty::F64),
         "eq" | "lt" | "gt" | "le" | "ge" | "not_empty" | "is_empty" | "and" | "or" | "xor"
         | "not" | "all" | "any" | "has_faults" => Ok(Ty::Bool),
         "collect" => {
@@ -1089,8 +1090,8 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             let Ty::Tuple(items) = input else {
                 return Err(format!("{name} expected tuple input"));
             };
-            let [seq @ Ty::Seq(_), Ty::Int] = items.as_slice() else {
-                return Err(format!("{name} expected (Seq[V],Int) input"));
+            let [seq @ Ty::Seq(_), Ty::I64] = items.as_slice() else {
+                return Err(format!("{name} expected (Seq[V],i64) input"));
             };
             Ok(seq.clone())
         }
@@ -1098,8 +1099,8 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             let Ty::Tuple(items) = input else {
                 return Err("fill expected tuple input".to_string());
             };
-            let [item, Ty::Int] = items.as_slice() else {
-                return Err("fill expected (V,Int) input".to_string());
+            let [item, Ty::I64] = items.as_slice() else {
+                return Err("fill expected (V,i64) input".to_string());
             };
             Ok(Ty::Seq(Box::new(item.clone())))
         }
@@ -1107,8 +1108,8 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             let Ty::Tuple(items) = input else {
                 return Err("slice expected tuple input".to_string());
             };
-            let [seq @ Ty::Seq(_), Ty::Int, Ty::Int] = items.as_slice() else {
-                return Err("slice expected (Seq[V],Int,Int) input".to_string());
+            let [seq @ Ty::Seq(_), Ty::I64, Ty::I64] = items.as_slice() else {
+                return Err("slice expected (Seq[V],i64,i64) input".to_string());
             };
             Ok(seq.clone())
         }
@@ -1122,8 +1123,8 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             let Ty::Tuple(items) = input else {
                 return Err("get expected tuple input".to_string());
             };
-            let [Ty::Seq(item), Ty::Int] = items.as_slice() else {
-                return Err("get expected (Seq[V],Int) input".to_string());
+            let [Ty::Seq(item), Ty::I64] = items.as_slice() else {
+                return Err("get expected (Seq[V],i64) input".to_string());
             };
             Ok(item.as_ref().clone())
         }
@@ -1131,8 +1132,8 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             let Ty::Tuple(items) = input else {
                 return Err("get_or expected tuple input".to_string());
             };
-            let [Ty::Seq(item), Ty::Int, _] = items.as_slice() else {
-                return Err("get_or expected (Seq[V],Int,V) input".to_string());
+            let [Ty::Seq(item), Ty::I64, _] = items.as_slice() else {
+                return Err("get_or expected (Seq[V],i64,V) input".to_string());
             };
             Ok(item.as_ref().clone())
         }
@@ -1140,8 +1141,8 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             let Ty::Tuple(items) = input else {
                 return Err("at expected tuple input".to_string());
             };
-            let [Ty::Seq(item), Ty::Int] = items.as_slice() else {
-                return Err("at expected (Seq[V],Int) input".to_string());
+            let [Ty::Seq(item), Ty::I64] = items.as_slice() else {
+                return Err("at expected (Seq[V],i64) input".to_string());
             };
             Ok(Ty::Faultable(item.clone()))
         }
@@ -1151,15 +1152,15 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
 
 fn cv_image_ty() -> Ty {
     Ty::Tuple(vec![
-        Ty::Tuple(vec![Ty::Int, Ty::Int]),
+        Ty::Tuple(vec![Ty::I64, Ty::I64]),
         Ty::Seq(Box::new(cv_pixel_seq_ty())),
     ])
 }
 
 fn cv_pixel_seq_ty() -> Ty {
     Ty::Seq(Box::new(Ty::Tuple(vec![
-        Ty::Real,
-        Ty::Tuple(vec![Ty::Real, Ty::Real]),
+        Ty::F64,
+        Ty::Tuple(vec![Ty::F64, Ty::F64]),
     ])))
 }
 
@@ -1435,29 +1436,29 @@ fn is_predefined_type_name(name: &str) -> bool {
         "FaSeq_Bytes"
             | "FaTuple_Bytes_Bytes"
             | "FaSeq_Tuple_Bytes_Bytes"
-            | "FaSeq_Int"
+            | "FaSeq_i64"
             | "FaSeq_Fault"
-            | "FaFaultable_Int"
-            | "FaFaultable_Real"
+            | "FaFaultable_i64"
+            | "FaFaultable_f64"
             | "FaFaultable_Bytes"
             | "FaFaultable_Seq_Bytes"
             | "FaFaultable_Seq_Tuple_Bytes_Bytes"
             | "FaFaultable_Stream_Bytes"
-            | "FaSeq_Real"
-            | "FaFaultable_Seq_Real"
+            | "FaSeq_f64"
+            | "FaFaultable_Seq_f64"
     )
 }
 
 fn is_cv_type_name(name: &str) -> bool {
     matches!(
         name,
-        "FaTuple_Real_Real"
-            | "FaTuple_Real_Tuple_Real_Real"
-            | "FaSeq_Tuple_Real_Tuple_Real_Real"
-            | "FaSeq_Seq_Tuple_Real_Tuple_Real_Real"
-            | "FaTuple_Int_Int"
-            | "FaTuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real"
-            | "FaFaultable_Tuple_Tuple_Int_Int_Seq_Seq_Tuple_Real_Tuple_Real_Real"
+        "FaTuple_f64_f64"
+            | "FaTuple_f64_Tuple_f64_f64"
+            | "FaSeq_Tuple_f64_Tuple_f64_f64"
+            | "FaSeq_Seq_Tuple_f64_Tuple_f64_f64"
+            | "FaTuple_i64_i64"
+            | "FaTuple_Tuple_i64_Int_Seq_Seq_Tuple_f64_Tuple_f64_f64"
+            | "FaFaultable_Tuple_Tuple_i64_Int_Seq_Seq_Tuple_f64_Tuple_f64_f64"
     )
 }
 
@@ -1476,52 +1477,48 @@ fn numeric_binary_output(input: &Ty) -> Result<Ty, String> {
     let [left, right] = items.as_slice() else {
         return Err("numeric binary op expected two inputs".to_string());
     };
-    if left == &Ty::Int && right == &Ty::Int {
-        Ok(Ty::Int)
-    } else {
-        Ok(Ty::Real)
+    if left != right {
+        return Err(format!(
+            "numeric binary op requires matching operand types, found `{left}` and `{right}`"
+        ));
+    }
+    match left {
+        Ty::I64 | Ty::F64 => Ok(left.clone()),
+        other => Err(format!(
+            "numeric binary op expected i64 or f64, found `{other}`"
+        )),
     }
 }
 
 fn add_expr(left: &str, right: &str, ty: &Ty) -> String {
-    if ty == &Ty::Int {
+    if ty == &Ty::I64 {
         format!("fa_checked_i64_add({left}, {right})")
     } else {
-        format!("((double){left} + (double){right})")
+        format!("({left} + {right})")
     }
 }
 
 fn numeric_binary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
     let left = format!("{input}.f0");
     let right = format!("{input}.f1");
-    let cast_left = if output_ty == &Ty::Int {
-        left.clone()
-    } else {
-        format!("(double){left}")
-    };
-    let cast_right = if output_ty == &Ty::Int {
-        right.clone()
-    } else {
-        format!("(double){right}")
-    };
     match name {
-        "add" if output_ty == &Ty::Int => format!("fa_checked_i64_add({left}, {right})"),
-        "add" => format!("({cast_left} + {cast_right})"),
-        "sub" if output_ty == &Ty::Int => format!("fa_checked_i64_sub({left}, {right})"),
-        "sub" => format!("({cast_left} - {cast_right})"),
-        "mul" if output_ty == &Ty::Int => format!("fa_checked_i64_mul({left}, {right})"),
-        "mul" => format!("({cast_left} * {cast_right})"),
-        "div" if output_ty == &Ty::Int => format!("fa_checked_i64_div({left}, {right})"),
-        "div" => format!("fa_checked_f64_div({cast_left}, {cast_right})"),
+        "add" if output_ty == &Ty::I64 => format!("fa_checked_i64_add({left}, {right})"),
+        "add" => format!("({left} + {right})"),
+        "sub" if output_ty == &Ty::I64 => format!("fa_checked_i64_sub({left}, {right})"),
+        "sub" => format!("({left} - {right})"),
+        "mul" if output_ty == &Ty::I64 => format!("fa_checked_i64_mul({left}, {right})"),
+        "mul" => format!("({left} * {right})"),
+        "div" if output_ty == &Ty::I64 => format!("fa_checked_i64_div({left}, {right})"),
+        "div" => format!("fa_checked_f64_div({left}, {right})"),
         "rem" => {
-            if output_ty == &Ty::Int {
+            if output_ty == &Ty::I64 {
                 format!("fa_checked_i64_rem({left}, {right})")
             } else {
-                format!("fa_checked_f64_rem({cast_left}, {cast_right})")
+                format!("fa_checked_f64_rem({left}, {right})")
             }
         }
-        "min" => format!("({cast_left} < {cast_right} ? {cast_left} : {cast_right})"),
-        "max" => format!("({cast_left} > {cast_right} ? {cast_left} : {cast_right})"),
+        "min" => format!("({left} < {right} ? {left} : {right})"),
+        "max" => format!("({left} > {right} ? {left} : {right})"),
         _ => unreachable!(),
     }
 }
@@ -1533,24 +1530,24 @@ fn numeric_faultable_binary_expr(name: &str, input: &str, output_ty: &Ty) -> Str
     let left = format!("{input}.f0");
     let right = format!("{input}.f1");
     match (name, inner.as_ref()) {
-        ("div", Ty::Int) => format!("fa_faultable_i64_div({left}, {right})"),
-        ("div", Ty::Real) => format!("fa_faultable_f64_div((double){left}, (double){right})"),
-        ("rem", Ty::Int) => format!("fa_faultable_i64_rem({left}, {right})"),
-        ("rem", Ty::Real) => format!("fa_faultable_f64_rem((double){left}, (double){right})"),
+        ("div", Ty::I64) => format!("fa_faultable_i64_div({left}, {right})"),
+        ("div", Ty::F64) => format!("fa_faultable_f64_div({left}, {right})"),
+        ("rem", Ty::I64) => format!("fa_faultable_i64_rem({left}, {right})"),
+        ("rem", Ty::F64) => format!("fa_faultable_f64_rem({left}, {right})"),
         _ => unreachable!(),
     }
 }
 
 fn numeric_unary_expr(name: &str, input: &str, output_ty: &Ty) -> String {
     match name {
-        "neg" if output_ty == &Ty::Int => format!("fa_checked_i64_neg({input})"),
+        "neg" if output_ty == &Ty::I64 => format!("fa_checked_i64_neg({input})"),
         "neg" => format!("(-({input}))"),
-        "abs" if output_ty == &Ty::Int => format!("fa_checked_i64_abs({input})"),
+        "abs" if output_ty == &Ty::I64 => format!("fa_checked_i64_abs({input})"),
         "abs" => format!("fabs({input})"),
-        "sqrt" => format!("fa_checked_sqrt((double){input})"),
-        "exp" => format!("exp((double){input})"),
-        "sin" => format!("sin((double){input})"),
-        "cos" => format!("cos((double){input})"),
+        "sqrt" => format!("fa_checked_sqrt({input})"),
+        "exp" => format!("exp({input})"),
+        "sin" => format!("sin({input})"),
+        "cos" => format!("cos({input})"),
         _ => unreachable!(),
     }
 }
@@ -1560,25 +1557,15 @@ fn numeric_faultable_unary_expr(name: &str, input: &str, output_ty: &Ty) -> Stri
         unreachable!("faultable numeric unary op expected faultable output")
     };
     match (name, inner.as_ref()) {
-        ("sqrt", Ty::Real) => format!("fa_faultable_sqrt((double){input})"),
+        ("sqrt", Ty::F64) => format!("fa_faultable_sqrt({input})"),
         _ => unreachable!(),
     }
 }
 
-fn min_max_expr(op: &str, left: &str, right: &str, ty: &Ty) -> String {
-    let cast_left = if ty == &Ty::Int {
-        left.to_string()
-    } else {
-        format!("(double){left}")
-    };
-    let cast_right = if ty == &Ty::Int {
-        right.to_string()
-    } else {
-        format!("(double){right}")
-    };
+fn min_max_expr(op: &str, left: &str, right: &str, _ty: &Ty) -> String {
     match op {
-        "min" => format!("({cast_left} < {cast_right} ? {cast_left} : {cast_right})"),
-        "max" => format!("({cast_left} > {cast_right} ? {cast_left} : {cast_right})"),
+        "min" => format!("({left} < {right} ? {left} : {right})"),
+        "max" => format!("({left} > {right} ? {left} : {right})"),
         _ => unreachable!(),
     }
 }
@@ -1601,7 +1588,7 @@ fn compare_expr(name: &str, input: &str, input_ty: &Ty) -> String {
         "ge" => ">=",
         _ => unreachable!(),
     };
-    if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::Int, Ty::Int])) {
+    if matches!(input_ty, Ty::Tuple(items) if matches!(items.as_slice(), [Ty::I64, Ty::I64])) {
         format!("({input}.f0 {op} {input}.f1)")
     } else {
         format!("((double){input}.f0 {op} (double){input}.f1)")
@@ -1971,7 +1958,7 @@ fn binding_target_is_discard(target: &BindingTarget) -> bool {
 
 fn wasm_exportable_input(ty: &Ty) -> bool {
     match ty {
-        Ty::Unit | Ty::Int | Ty::Real => true,
+        Ty::Unit | Ty::I64 | Ty::F64 => true,
         Ty::Tuple(items) => items.iter().all(wasm_exportable_scalar),
         _ => false,
     }
@@ -1982,7 +1969,7 @@ fn wasm_exportable_output(ty: &Ty) -> bool {
 }
 
 fn wasm_exportable_scalar(ty: &Ty) -> bool {
-    matches!(ty, Ty::Int | Ty::Real)
+    matches!(ty, Ty::I64 | Ty::F64)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2041,8 +2028,8 @@ fn collect_abi_type(registry: &mut TypeRegistry, ty: &Ty) {
         }
         Ty::SqliteRow => collect_abi_type(registry, &Ty::SqliteValue),
         Ty::Unit
-        | Ty::Int
-        | Ty::Real
+        | Ty::I64
+        | Ty::F64
         | Ty::Bool
         | Ty::Bytes
         | Ty::Args
@@ -2079,14 +2066,14 @@ fn native_c_header_source(registry: &mut TypeRegistry, prototypes: &[String]) ->
     out.push_str(
         "typedef struct { size_t count; FaTuple_Bytes_Bytes *items; } FaSeq_Tuple_Bytes_Bytes;\n",
     );
-    out.push_str("typedef struct { size_t count; int64_t *items; } FaSeq_Int;\n");
-    out.push_str("typedef struct { size_t count; double *items; } FaSeq_Real;\n");
+    out.push_str("typedef struct { size_t count; int64_t *items; } FaSeq_i64;\n");
+    out.push_str("typedef struct { size_t count; double *items; } FaSeq_f64;\n");
     out.push_str("typedef struct { size_t count; FaFault *items; } FaSeq_Fault;\n");
     out.push_str(
-        "typedef struct { bool is_fault; FaFault fault; int64_t value; } FaFaultable_Int;\n",
+        "typedef struct { bool is_fault; FaFault fault; int64_t value; } FaFaultable_i64;\n",
     );
     out.push_str(
-        "typedef struct { bool is_fault; FaFault fault; double value; } FaFaultable_Real;\n",
+        "typedef struct { bool is_fault; FaFault fault; double value; } FaFaultable_f64;\n",
     );
     out.push_str(
         "typedef struct { bool is_fault; FaFault fault; FaBytes value; } FaFaultable_Bytes;\n",
@@ -2094,7 +2081,7 @@ fn native_c_header_source(registry: &mut TypeRegistry, prototypes: &[String]) ->
     out.push_str("typedef struct { bool is_fault; FaFault fault; FaSeq_Bytes value; } FaFaultable_Seq_Bytes;\n");
     out.push_str("typedef struct { bool is_fault; FaFault fault; FaSeq_Tuple_Bytes_Bytes value; } FaFaultable_Seq_Tuple_Bytes_Bytes;\n");
     out.push_str("typedef struct { bool is_fault; FaFault fault; FaStream value; } FaFaultable_Stream_Bytes;\n");
-    out.push_str("typedef struct { bool is_fault; FaFault fault; FaSeq_Real value; } FaFaultable_Seq_Real;\n\n");
+    out.push_str("typedef struct { bool is_fault; FaFault fault; FaSeq_f64 value; } FaFaultable_Seq_f64;\n\n");
     out.push_str(&registry.emit_abi_typedefs());
     out.push_str("#ifdef __cplusplus\n");
     out.push_str("extern \"C\" {\n");
@@ -2113,8 +2100,8 @@ fn native_c_header_source(registry: &mut TypeRegistry, prototypes: &[String]) ->
 fn type_suffix(ty: &Ty) -> String {
     match ty {
         Ty::Unit => "Unit".to_string(),
-        Ty::Int => "Int".to_string(),
-        Ty::Real => "Real".to_string(),
+        Ty::I64 => "i64".to_string(),
+        Ty::F64 => "f64".to_string(),
         Ty::Bool => "Bool".to_string(),
         Ty::Bytes => "Bytes".to_string(),
         Ty::Args => "Args".to_string(),
@@ -2227,11 +2214,11 @@ mod tests {
     fn extern_visibility_module() -> Module {
         parser::parse(
             r#"
-                extern node exposed(value: Int) -> out: Int {
+                extern node exposed(value: i64) -> out: i64 {
                     $value -> hidden -> $out
                 }
 
-                node hidden(value: Int) -> out: Int {
+                node hidden(value: i64) -> out: i64 {
                     $value -> $out
                 }
             "#,
@@ -2275,7 +2262,7 @@ mod tests {
     fn native_c_exports_generate_compound_abi_header() {
         let module = parser::parse(
             r#"
-                extern node parts(value: Int) -> (original: Int, doubled: Int) {
+                extern node parts(value: i64) -> (original: i64, doubled: i64) {
                     $value       -> $original
                     ($value, 2)  -> mul -> $doubled
                 }
@@ -2296,18 +2283,18 @@ mod tests {
         assert!(
             emitted
                 .header
-                .contains("typedef struct { int64_t f0; int64_t f1; } FaTuple_Int_Int;")
+                .contains("typedef struct { int64_t f0; int64_t f1; } FaTuple_i64_i64;")
         );
         assert!(
             emitted
                 .header
-                .contains("FaTuple_Int_Int parts(int64_t v_value);")
+                .contains("FaTuple_i64_i64 parts(int64_t v_value);")
         );
         assert!(emitted.header.contains("FaBytes label(void);"));
         assert!(
             emitted
                 .source
-                .contains("FaTuple_Int_Int parts(int64_t v_value)")
+                .contains("FaTuple_i64_i64 parts(int64_t v_value)")
         );
         assert!(emitted.source.contains("FaBytes label(void)"));
     }
@@ -2318,7 +2305,7 @@ mod tests {
             r#"
                 import std.cli { Args }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     0 -> $exit_code
                 }
             "#,
@@ -2344,7 +2331,7 @@ mod tests {
                 import std.math { add }
                 import std.io { read_stdin, write_stdout }
 
-                program main(args: Args) -> exit_code: Faultable[Int] {
+                program main(args: Args) -> exit_code: Faultable[i64] {
                     () -> read_stdin -> split_lines -> filter not_empty -> map parse_real -> reduce add(identity: 0.0) -> $total
                     $total -> format_real -> write_stdout -> $exit_code
                 }
@@ -2354,7 +2341,7 @@ mod tests {
         let runtime_c = emit_runtime_c(&module).expect("runtime c");
 
         assert!(runtime_c.contains(
-            "typedef struct { bool is_fault; FaFault fault; double value; } FaFaultable_Real;"
+            "typedef struct { bool is_fault; FaFault fault; double value; } FaFaultable_f64;"
         ));
         assert!(runtime_c.contains("for (size_t"));
         assert!(!runtime_c.contains("FaValue"));
@@ -2369,7 +2356,7 @@ mod tests {
                 import std.cli { Args }
                 import std.math { abs }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     [-1, -2, -3] -> map abs -> $values
                     0 -> $exit_code
                 }
@@ -2389,13 +2376,13 @@ mod tests {
                 import std.math { add, max, mul }
 
                 struct JobSummary {
-                    total_score: Int,
-                    peak_score: Int,
-                    total_weight: Int,
-                    peak_weight: Int,
+                    total_score: i64,
+                    peak_score: i64,
+                    total_weight: i64,
+                    peak_weight: i64,
                 }
 
-                extern node score_batch(width: Int) -> summary: JobSummary {
+                extern node score_batch(width: i64) -> summary: JobSummary {
                     (1, $width, 1) -> range_step              -> $jobs
                     $jobs        -> map score_job           -> $scores
                     $jobs        -> map weight_job          -> $weights
@@ -2411,12 +2398,12 @@ mod tests {
                     } -> $summary
                 }
 
-                node score_job(n: Int) -> score: Int {
+                node score_job(n: i64) -> score: i64 {
                     ($n, $n)      -> mul -> $square
                     ($square, $n) -> add -> $score
                 }
 
-                node weight_job(n: Int) -> weight: Int {
+                node weight_job(n: i64) -> weight: i64 {
                     ($n, 2)       -> mul -> $doubled
                     ($doubled, 1) -> add -> $weight
                 }
@@ -2444,7 +2431,7 @@ mod tests {
                 import std.matrix { matmul, matvec, row_sums, sum as matrix_sum }
                 import std.vector { sum as vector_sum }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     [[1.0, 2.0], [3.0, 4.0]] -> $left
                     [[5.0, 6.0], [7.0, 8.0]] -> $right
                     [9.0, 10.0] -> $vector
@@ -2478,17 +2465,17 @@ mod tests {
                 import std.math { add }
 
                 struct Point {
-                    x: Int,
-                    y: Int,
+                    x: i64,
+                    y: i64,
                 }
 
-                node sum_point(point: Point) -> total: Int {
+                node sum_point(point: Point) -> total: i64 {
                     $point -> field x -> $x
                     $point -> field y -> $y
                     ($x, $y) -> add -> $total
                 }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     Point { x: 20, y: 22 } -> sum_point -> $exit_code
                 }
             "#,
@@ -2509,17 +2496,17 @@ mod tests {
                 import std.math { add }
 
                 struct Point {
-                    x: Int,
-                    y: Int,
+                    x: i64,
+                    y: i64,
                 }
 
-                node sum_point(point: Point) -> total: Int {
+                node sum_point(point: Point) -> total: i64 {
                     $point -> field x -> $x
                     $point -> field y -> $y
                     ($x, $y) -> add -> $total
                 }
 
-                program main(args: Args) -> exit_code: Int {
+                program main(args: Args) -> exit_code: i64 {
                     Point { x: 20, y: 22 } -> sum_point -> $exit_code
                 }
             "#,

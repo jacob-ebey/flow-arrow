@@ -11,7 +11,7 @@ graph-visible diagnostics on stderr with a non-zero exit code.
 
 ```text
 $ printf '[1, wat, 3]' | flowarrow run main.flow
-line 2: expected Real, got "wat"
+line 2: expected f64, got "wat"
 $ echo $?
 65
 
@@ -120,4 +120,4 @@ piling on stdlib primitives that wouldn't generalise.
   routing pattern over newline-delimited input instead of JSON framing.
 - [`../add-numbers-from-stdin`](../add-numbers-from-stdin) — the
   fault-unaware version that lets `parse_real` faults propagate as
-  `Faultable[Int]` through the program's exit code.
+  `Faultable[i64]` through the program's exit code.

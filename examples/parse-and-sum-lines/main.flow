@@ -21,7 +21,7 @@ import std.real { parse_real, format_real }
 import std.math { add, max }
 import std.predicates { not_empty }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     ()         -> read_stdin       -> $input
     $input     -> split_lines      -> $raw_lines
     $raw_lines -> filter not_empty -> $lines

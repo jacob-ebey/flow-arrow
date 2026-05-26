@@ -247,7 +247,7 @@ import std.cli {{ Args }}
 import std.math {{ add as scalar_add, eq }}
 import std.vector {{ dot, squared_distance, squared_norm }}
 
-node kernel(left: Seq[Real], right: Seq[Real], score: Real) -> (out_left: Seq[Real], out_right: Seq[Real], out_score: Real) {{
+node kernel(left: Seq[f64], right: Seq[f64], score: f64) -> (out_left: Seq[f64], out_right: Seq[f64], out_score: f64) {{
     ($left, $right) -> dot -> $dot
     ($left, $right) -> squared_distance -> $distance_squared
     $left -> squared_norm -> $norm_squared
@@ -258,11 +258,11 @@ node kernel(left: Seq[Real], right: Seq[Real], score: Real) -> (out_left: Seq[Re
     $right -> $out_right
 }}
 
-node final_score(left: Seq[Real], right: Seq[Real], score: Real) -> out: Real {{
+node final_score(left: Seq[f64], right: Seq[f64], score: f64) -> out: f64 {{
     $score -> $out
 }}
 
-program main(args: Args) -> exit_code: Int {{
+program main(args: Args) -> exit_code: i64 {{
     {} -> $left
     {} -> $right
     ($left, $right, 0.0) -> repeat<{iterations}> kernel -> final_score -> $score

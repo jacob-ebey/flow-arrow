@@ -7,7 +7,7 @@ The process entry point receives CLI data as ordinary program input:
 ```flow
 import std.cli { Args }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     ...
 }
 ```
@@ -61,7 +61,7 @@ Returns a flag's value as bytes.
 ```flow
 import std.cli { Args, argv, flag_present }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     $args -> argv -> $positional
     ($args, "--verbose") -> flag_present -> $verbose
     0 -> id -> $exit_code

@@ -8,15 +8,15 @@ import std.io { write_stdout }
 import std.int { format_int }
 import std.math { add }
 
-node increment(x: Int) -> y: Int {
+node increment(x: i64) -> y: i64 {
     ($x, 1) -> add -> $y
 }
 
-node twice<step: node(Int) -> Int>(x: Int) -> y: Int {
+node twice<step: node(i64) -> i64>(x: i64) -> y: i64 {
     $x -> step -> step -> $y
 }
 
-program main(args: Args) -> exit_code: Int {
+program main(args: Args) -> exit_code: i64 {
     40                    -> twice<increment> -> $answer
     $answer               -> format_int       -> $answer_bytes
     [$answer_bytes, "\n"] -> concat_bytes     -> $output
