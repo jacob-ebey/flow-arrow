@@ -2347,7 +2347,7 @@ mod tests {
                 }
 
                 import std.fault { expect }
-                import std.math { mul }
+                import std.math { mul_i64 as mul }
             "#,
         )
         .expect("parse");
@@ -2404,7 +2404,7 @@ mod tests {
                 import std.bytes { split_lines }
                 import std.predicates { not_empty }
                 import std.real { parse_real, format_real }
-                import std.math { add }
+                import std.math { add_f64 as add }
                 import std.io { read_stdin, write_stdout }
 
                 program main(args: Args) -> exit_code: Faultable[i64] {
@@ -2430,7 +2430,7 @@ mod tests {
         let module = checked_module(
             r#"
                 import std.cli { Args }
-                import std.math { abs }
+                import std.math { abs_i64 as abs }
 
                 program main(args: Args) -> exit_code: i64 {
                     [-1, -2, -3] -> map abs -> $values
@@ -2450,7 +2450,7 @@ mod tests {
         let module = parser::parse(
             r#"
                 import std.fault { expect }
-                import std.math { add, max, mul }
+                import std.math { add_i64 as add, max_i64 as max, mul_i64 as mul }
 
                 struct JobSummary {
                     total_score: i64,
@@ -2504,7 +2504,7 @@ mod tests {
         let module = checked_module(
             r#"
                 import std.cli { Args }
-                import std.math { add, eq }
+                import std.math { add_f64 as add, eq_f64 as eq }
                 import std.matrix { matmul, matvec, row_sums, sum as matrix_sum }
                 import std.vector { sum as vector_sum }
 
@@ -2540,7 +2540,7 @@ mod tests {
             r#"
                 import std.cli { Args }
                 import std.fault { expect }
-                import std.math { add }
+                import std.math { add_i64 as add }
 
                 struct Point {
                     x: i64,
@@ -2572,7 +2572,7 @@ mod tests {
             r#"
                 import std.cli { Args }
                 import std.fault { expect }
-                import std.math { add }
+                import std.math { add_i64 as add }
 
                 struct Point {
                     x: i64,

@@ -13,7 +13,7 @@ fn local_flow_imports_typecheck_and_run() {
         &helper_path,
         r#"
             import std.fault { expect }
-            import std.math { add }
+            import std.math { add_i64 as add }
 
             extern node plus_one(value: i64) -> out: i64 {
                 ($value, 1) -> add -> expect -> $out

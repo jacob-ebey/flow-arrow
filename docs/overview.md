@@ -55,7 +55,7 @@ Illegal:
 
 ```flow
 $x -> square -> $y
-$z -> sqrt -> $y       # illegal: y already defined
+$z -> sqrt_f64 -> $y   # illegal: y already defined
 ```
 
 There is no reassignment.
@@ -113,7 +113,7 @@ struct Point {
 node sum_point(point: Point) -> total: i64 {
     $point -> field x -> $x
     $point -> field y -> $y
-    ($x, $y) -> add -> $total
+    ($x, $y) -> add_i64 -> expect -> $total
 }
 ```
 
@@ -155,7 +155,7 @@ Named ports are useful when order would be unclear.
 node hypot(x: f64, y: f64) -> r: f64 {
     $x -> square -> $xx
     $y -> square -> $yy
-    ($xx, $yy) -> add -> sqrt -> $r
+    ($xx, $yy) -> add_f64 -> sqrt_f64 -> expect -> $r
 }
 ```
 
@@ -163,7 +163,7 @@ The compiler sees:
 
 ```text
 x ─> square ─> xx ─┐
-                   ├─> add ─> sqrt ─> r
+                   ├─> add_f64 ─> sqrt_f64 ─> r
 y ─> square ─> yy ─┘
 ```
 
@@ -188,7 +188,7 @@ because ordinary branching hides scheduling choices.
 Instead, it has pure data selection:
 
 ```flow
-$x -> neg -> expect -> $nx
+$x -> neg_i64 -> expect -> $nx
 $x -> is_positive -> $p
 ($p, $x, $nx) -> select -> $absx
 ```
@@ -259,7 +259,7 @@ Reductions require an associative operation and identity.
 node dot(xs: Vec[N, f64], ys: Vec[N, f64]) -> s: f64 {
     ($xs, $ys) -> zip
              -> map multiply_pair
-             -> reduce add(identity: 0.0)
+             -> reduce add_f64(identity: 0.0)
              -> $s
 }
 ```
@@ -281,7 +281,7 @@ because subtraction is not associative.
 Prefix operations are allowed only for associative operators:
 
 ```flow
-$xs -> scan add(identity: 0.0) -> $prefix_sums
+$xs -> scan add_f64(identity: 0.0) -> $prefix_sums
 ```
 
 The compiler emits a parallel prefix tree.
@@ -298,7 +298,7 @@ graph stays static; only the *width* of parallel regions varies.
 ```flow
 $n -> range -> $idxs                    # $idxs : Seq[i64], length = $n
 $idxs -> map compute_pixel -> $pixels
-$pixels -> reduce add(identity: 0) -> $total
+$pixels -> reduce add_i64(identity: 0) -> $total
 ```
 
 `range_between` and `range_step` produce sequences from `(start, stop)`
@@ -552,10 +552,10 @@ $input -> split_lines -> $lines
 Qualified imports require the alias:
 
 ```flow
-($x, $y) -> math.add -> $sum
+($x, $y) -> math.add_i64 -> expect -> $sum
 ```
 
-The `math.add` reference is still a statically resolved computation
+The `math.add_i64` reference is still a statically resolved computation
 node. It is not dynamic dispatch; the compiler resolves the alias and
 target before building the dependency DAG.
 

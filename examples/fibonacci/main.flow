@@ -18,7 +18,7 @@ import std.cli { Args }
 import std.fault { expect }
 import std.io { read_stdin, write_stdout }
 import std.int { parse_int, format_int }
-import std.math { add }
+import std.math { add_i64 as add }
 
 program main(args: Args) -> exit_code: Faultable[i64] {
     ()              -> read_stdin   -> parse_int  -> $depth

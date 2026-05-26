@@ -30,7 +30,7 @@ Rows are the outer sequence and columns are positions inside each row.
 Binary row and matrix operations use `std.seq.zip`, so mismatched row
 counts or row lengths propagate the same runtime fault as `zip`.
 `transpose` checks that every row has the same length. Division and
-normalization inherit `std.math.div` division-by-zero behavior.
+normalization inherit `std.math.div_f64` division-by-zero behavior.
 
 Example:
 

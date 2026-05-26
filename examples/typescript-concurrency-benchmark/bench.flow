@@ -3,7 +3,7 @@
 # This is based on ../concurrency/main.flow, but exported as a library node so
 # the benchmark can import both TypeScript builds and call the same API.
 import std.fault { expect }
-import std.math { add, max, mul }
+import std.math { add_i64 as add, max_i64 as max, mul_i64 as mul }
 
 struct JobSummary {
     total_score: i64,

@@ -409,6 +409,12 @@ impl<'a> ScalarKernelBuilder<'a> {
             "sin" => unary(input, GpuUnaryOp::Sin),
             "cos" => unary(input, GpuUnaryOp::Cos),
             "not" => unary(input, GpuUnaryOp::Not),
+            "from_int" | "from_int_f32" => match input {
+                GpuExpr::Int(_) => Ok(input),
+                _ => Err(format!(
+                    "GPU scalar kernel expected integer input for `{name}`"
+                )),
+            },
             "select" => {
                 let GpuExpr::Tuple(mut items) = input else {
                     return Err("GPU select expected tuple input".to_string());

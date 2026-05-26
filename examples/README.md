@@ -12,7 +12,7 @@ import std.io { read_stdin, write_stdout }
 import std.http as http
 import std.real { parse_real, format_real, from_int }
 import std.int { parse_int, format_int }
-import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, min, max }
+import std.math { add_i64, add_f64, sub_i64, sub_f64, mul_i64, mul_f64, div_i64, div_f64 }
 import std.predicates { not_empty, is_empty, and, or, xor, not, all, any }
 import std.fault { Fault, has_faults, format_faults, collect, expect }
 import std.seq { head, tail, length }
@@ -54,23 +54,17 @@ walk_files        : Bytes -> Faultable[Seq[Bytes]]
 read_files        : Seq[Bytes] -> Faultable[Seq[(Bytes,Bytes)]]
 
 # Arithmetic
-add               : (i64, i64) -> Faultable[i64] | (f64, f64) -> f64 # associative
-sub               : (i64, i64) -> Faultable[i64] | (f64, f64) -> f64
-mul               : (i64, i64) -> Faultable[i64] | (f64, f64) -> f64
-div               : (i64, i64) -> Faultable[i64] | (f64, f64) -> Faultable[f64]
-rem               : (i64, i64) -> Faultable[i64] | (f64, f64) -> Faultable[f64]
-neg               : i64 -> Faultable[i64] | f64 -> f64
-abs               : i64 -> Faultable[i64] | f64 -> f64
-sqrt              : f64 -> Faultable[f64]
-min               : (i64, i64) -> i64 | (f64, f64) -> f64
-max               : (i64, i64) -> i64 | (f64, f64) -> f64
+add_i32/add_i64   : integer add -> Faultable[i32/i64] # associative
+add_f32/add_f64   : floating add -> f32/f64           # associative
+sub_*/mul_*       : typed arithmetic variants
+div_*/rem_*       : typed Faultable division/remainder variants
+neg_*/abs_*       : typed unary variants
+sqrt_f32/f64      : f32/f64 -> Faultable[f32/f64]
+min_*/max_*       : typed min/max variants
 
 # Comparisons
-eq                : (i64, i64) -> Bool | (f64, f64) -> Bool
-lt                : (i64, i64) -> Bool | (f64, f64) -> Bool
-gt                : (i64, i64) -> Bool | (f64, f64) -> Bool
-le                : (i64, i64) -> Bool | (f64, f64) -> Bool
-ge                : (i64, i64) -> Bool | (f64, f64) -> Bool
+eq_*/lt_*/gt_*    : typed comparisons for i32, i64, f32, f64
+le_*/ge_*         : typed comparisons for i32, i64, f32, f64
 
 # Boolean logic
 and               : (Bool, Bool) -> Bool

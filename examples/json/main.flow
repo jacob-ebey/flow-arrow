@@ -45,7 +45,7 @@ import std.int {
     bit_shr,
 }
 import std.seq { group_by_id, zip, shift_right }
-import std.math { add, eq, ge, le }
+import std.math { add_i64 as add, eq_i64 as eq, ge_i64 as ge, le_i64 as le }
 import std.predicates { not, and, or }
 
 program main(args: Args) -> exit_code: i64 {

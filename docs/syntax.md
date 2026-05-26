@@ -225,7 +225,7 @@ import "./format.flow" as format
 
 Selective imports (`{ ... }`) introduce bare names into the current
 module. `as` imports introduce a namespace alias; imported declarations
-are referenced through that alias, such as `math.add` or `format.render`.
+are referenced through that alias, such as `math.add_i64` or `format.render`.
 Name collisions are compile-time errors unless one side is explicitly
 renamed with `as`.
 
@@ -344,7 +344,7 @@ struct_literal ::= IDENT "{"
 ```
 
 - `variable_ref` — a value name. Variables are always written with `$`.
-- `node_ref` — a node name, including imported aliases such as `math.add`.
+- `node_ref` — a node name, including imported aliases such as `math.add_i64`.
   A node reference may include static node arguments, such as
   `twice<increment>`.
 - `tuple` — a join of multiple values (§5.1).

@@ -8,7 +8,7 @@ use std::process::Command;
 fn std_vector_source_nodes_run() {
     let source = r#"
         import std.cli { Args }
-        import std.math { eq }
+        import std.math { eq_f64 as eq }
         import std.vector {
             sum,
             mean,
@@ -107,7 +107,7 @@ fn std_vector_source_nodes_run() {
 fn std_vector_f32_source_nodes_run() {
     let source = r#"
         import std.cli { Args }
-        import std.math { eq }
+        import std.math { eq_f32 as eq }
         import std.real { from_int_f32 }
         import std.vector {
             add_f32 as vector_add_f32,
@@ -161,7 +161,7 @@ fn std_vector_f32_source_nodes_run() {
 fn source_backed_stdlib_alias_imports_are_rewritten() {
     let source = r#"
         import std.cli { Args }
-        import std.math { eq }
+        import std.math { eq_f64 as eq }
         import std.vector as vector
 
         program main(args: Args) -> exit_code: i64 {
@@ -183,7 +183,7 @@ fn source_backed_stdlib_alias_imports_are_rewritten() {
 fn std_matrix_source_nodes_run() {
     let source = r#"
         import std.cli { Args }
-        import std.math { eq }
+        import std.math { eq_i64, eq_f64 as eq }
         import std.vector { equals as vector_equals }
         import std.matrix {
             rows,
@@ -222,10 +222,10 @@ fn std_matrix_source_nodes_run() {
             [[6.0, 5.0, 4.0], [3.0, 2.0, 1.0]] -> $b
 
             $a -> rows -> $row_count
-            ($row_count, 2) -> eq -> $rows_ok
+            ($row_count, 2) -> eq_i64 -> $rows_ok
 
             $a -> cols -> $col_count
-            ($col_count, 3) -> eq -> $cols_ok
+            ($col_count, 3) -> eq_i64 -> $cols_ok
 
             $a -> flatten -> $flat
             ($flat, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]) -> vector_equals -> $flat_ok

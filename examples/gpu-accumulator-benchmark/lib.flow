@@ -2,7 +2,7 @@
 #
 # Pure export-oriented version used by JavaScript/WebGPU browser validation.
 import std.fault { expect }
-import std.math { add, rem }
+import std.math { add_i64, add_f32, rem_i64 as rem }
 import std.real { from_int_f32 }
 import std.vector { dot_f32, squared_distance_f32, squared_norm_f32 }
 
@@ -16,14 +16,14 @@ extern node run_gpu_accumulator(iterations: i64) -> score: f32 {
 
 node left_value(index: i64) -> value: f32 {
     ($index, 11)  -> rem          -> expect -> $wrapped
-    ($wrapped, 1) -> add          -> expect -> $offset
+    ($wrapped, 1) -> add_i64      -> expect -> $offset
     $offset       -> from_int_f32 -> $value
 }
 
 node right_value(index: i64) -> value: f32 {
-    ($index, 3)    -> add          -> expect -> $shifted
+    ($index, 3)    -> add_i64      -> expect -> $shifted
     ($shifted, 11) -> rem          -> expect -> $wrapped
-    ($wrapped, 1)  -> add          -> expect -> $offset
+    ($wrapped, 1)  -> add_i64      -> expect -> $offset
     $offset        -> from_int_f32 -> $value
 }
 
@@ -31,9 +31,9 @@ node score_kernel(left: Seq[f32], right: Seq[f32], score: f32) -> (out_left: Seq
     ($left, $right)           -> dot_f32              -> $dot
     ($left, $right)           -> squared_distance_f32 -> $distance_squared
     $left                     -> squared_norm_f32     -> $norm_squared
-    ($dot, $distance_squared) -> add                  -> $partial
-    ($partial, $norm_squared) -> add                  -> $delta
-    ($score, $delta)          -> add                  -> $out_score
+    ($dot, $distance_squared) -> add_f32              -> $partial
+    ($partial, $norm_squared) -> add_f32              -> $delta
+    ($score, $delta)          -> add_f32              -> $out_score
     $left                     -> $out_left
     $right                    -> $out_right
 }

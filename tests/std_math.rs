@@ -5,7 +5,24 @@ fn std_math_nodes_run() {
     let source = r#"
         import std.cli { Args }
         import std.fault { expect }
-        import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, min, max }
+        import std.math {
+            add_i64 as add,
+            sub_i64 as sub,
+            mul_i64 as mul,
+            div_i64 as div,
+            rem_i64 as rem,
+            neg_i64 as neg,
+            abs_i64 as abs,
+            sqrt_f64 as sqrt,
+            eq_i64 as eq,
+            eq_f64,
+            lt_i64 as lt,
+            gt_i64 as gt,
+            le_i64 as le,
+            ge_i64 as ge,
+            min_i64 as min,
+            max_i64 as max,
+        }
 
         program main(args: Args) -> exit_code: i64 {
             (2, 3) -> add -> expect -> $five_a
@@ -23,7 +40,7 @@ fn std_math_nodes_run() {
             -8 -> abs -> expect -> $eight
             ($eight, 8) -> eq -> $abs_ok
             81.0 -> sqrt -> expect -> $nine
-            ($nine, 9.0) -> eq -> $sqrt_ok
+            ($nine, 9.0) -> eq_f64 -> $sqrt_ok
             (2, 3) -> lt -> $lt_ok
             (3, 2) -> gt -> $gt_ok
             (3, 3) -> le -> $le_ok
@@ -59,10 +76,27 @@ fn std_math_nodes_run() {
 }
 
 #[test]
+fn std_math_rejects_removed_generic_numeric_exports() {
+    let source = r#"
+        import std.cli { Args }
+        import std.math { add }
+
+        program main(args: Args) -> exit_code: i64 {
+            0 -> $exit_code
+        }
+    "#;
+
+    let path = support::source_path("math-removed-generic-add");
+    std::fs::write(&path, source).expect("write source");
+    let error = flowarrow::typecheck_file(&path).expect_err("typecheck should fail");
+    assert!(error.contains("module `std.math` does not export `add`"));
+}
+
+#[test]
 fn std_math_real_functions_and_usage_faults_run() {
     let source = r#"
         import std.cli { Args }
-        import std.math { cos, eq, exp, sin }
+        import std.math { cos_f64 as cos, eq_f64 as eq, exp_f64 as exp, sin_f64 as sin }
 
         program main(args: Args) -> exit_code: i64 {
             0.0 -> sin -> $sin_zero
@@ -92,7 +126,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
             "math-div-zero",
             r#"
                 import std.cli { Args }
-                import std.math { div }
+                import std.math { div_i64 as div }
 
                 program main(args: Args) -> exit_code: Faultable[i64] {
                     (1, 0) -> div -> $exit_code
@@ -104,7 +138,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
             "math-rem-zero",
             r#"
                 import std.cli { Args }
-                import std.math { rem }
+                import std.math { rem_i64 as rem }
 
                 program main(args: Args) -> exit_code: Faultable[i64] {
                     (1, 0) -> rem -> $exit_code
@@ -118,7 +152,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.cli { Args }
                 import std.fault { expect }
                 import std.int { parse_int }
-                import std.math { add }
+                import std.math { add_i64 as add }
 
                 program main(args: Args) -> exit_code: i64 {
                     "9223372036854775807" -> parse_int -> expect -> $max
@@ -133,7 +167,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.cli { Args }
                 import std.fault { expect }
                 import std.int { parse_int }
-                import std.math { add }
+                import std.math { add_i64 as add }
 
                 program main(args: Args) -> exit_code: Faultable[i64] {
                     "9223372036854775807" -> parse_int -> expect -> $max
@@ -148,7 +182,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.cli { Args }
                 import std.fault { expect }
                 import std.int { parse_int }
-                import std.math { neg }
+                import std.math { neg_i64 as neg }
 
                 program main(args: Args) -> exit_code: i64 {
                     "-9223372036854775808" -> parse_int -> expect -> neg -> expect -> $exit_code
@@ -162,7 +196,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.cli { Args }
                 import std.fault { expect }
                 import std.int { parse_int }
-                import std.math { abs }
+                import std.math { abs_i64 as abs }
 
                 program main(args: Args) -> exit_code: i64 {
                     "-9223372036854775808" -> parse_int -> expect -> abs -> expect -> $exit_code
@@ -174,7 +208,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
             "math-sqrt-negative",
             r#"
                 import std.cli { Args }
-                import std.math { sqrt }
+                import std.math { sqrt_f64 as sqrt }
                 import std.real { format_real }
                 import std.io { write_stdout }
 
@@ -203,7 +237,7 @@ fn std_math_invalid_inputs_are_recoverable_with_fault_map() {
         import std.fault { expect, format_faults, has_faults }
         import std.int { format_int, parse_int }
         import std.io { write_stderr, write_stdout }
-        import std.math { abs, add, div, sqrt }
+        import std.math { abs_i64 as abs, add_i64 as add, div_i64 as div, sqrt_f64 as sqrt }
         import std.seq { length }
 
         program main(args: Args) -> exit_code: i64 {

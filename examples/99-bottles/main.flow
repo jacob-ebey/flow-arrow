@@ -22,7 +22,7 @@ import std.cli { Args }
 import std.fault { expect }
 import std.io { write_stdout }
 import std.int { format_int }
-import std.math { sub, eq }
+import std.math { sub_i64 as sub, eq_i64 as eq }
 
 program main(args: Args) -> exit_code: i64 {
     (99, 0, -1)    -> range_step                        -> $indices

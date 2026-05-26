@@ -55,7 +55,7 @@ import std.cli { Args }
 import std.fault { has_faults, format_faults, expect }
 import std.io { read_stdin, write_stdout, write_stderr }
 import std.int { format_int }
-import std.math { add, max }
+import std.math { add_i64, add_f64, max_i64 as max }
 import std.predicates { not_empty }
 import std.real { parse_real, format_real }
 
@@ -71,10 +71,10 @@ program main(args: Args) -> exit_code: i64 {
     $tokens            -> filter not_empty -> $nonempty
     $nonempty          -> fault map parse_real { ok -> $numbers, fault -> $faults }
 
-    $numbers       -> map one                   -> $ones
-    $ones          -> reduce add(identity: 0)   -> expect -> $count
-    $numbers       -> reduce add(identity: 0.0) -> $sum
-    ($count, $sum) -> render_summary            -> $success_output
+    $numbers       -> map one                       -> $ones
+    $ones          -> reduce add_i64(identity: 0)   -> expect -> $count
+    $numbers       -> reduce add_f64(identity: 0.0) -> $sum
+    ($count, $sum) -> render_summary                -> $success_output
 
     $faults                               -> has_faults    -> $invalid_input
     $faults                               -> format_faults -> $fault_output

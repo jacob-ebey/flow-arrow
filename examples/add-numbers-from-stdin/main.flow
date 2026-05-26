@@ -26,7 +26,7 @@ import std.bytes { split_lines, concat_bytes }
 import std.cli { Args }
 import std.io { read_stdin, write_stdout }
 import std.real { parse_real, format_real }
-import std.math { add }
+import std.math { add_f64 as add }
 import std.predicates { not_empty }
 
 program main(args: Args) -> exit_code: Faultable[i64] {

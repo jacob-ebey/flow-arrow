@@ -7,7 +7,7 @@ graph structure it would compile for user-defined nodes.
 
 | Export | Input | Output | Description |
 | --- | --- | --- | --- |
-| `sum` | `Seq[f64]` | `f64` | Reduces vector items with `std.math.add` |
+| `sum` | `Seq[f64]` | `f64` | Reduces vector items with `std.math.add_f64` |
 | `mean` | `Seq[f64]` | `f64` | Divides `sum(values)` by `std.seq.length(values)` |
 | `neg` | `Seq[f64]` | `Seq[f64]` | Elementwise numeric negation |
 | `abs` | `Seq[f64]` | `Seq[f64]` | Elementwise absolute value |
@@ -31,7 +31,7 @@ graph structure it would compile for user-defined nodes.
 | `cosine_similarity` | `(Seq[f64],Seq[f64])` | `f64` | Dot product divided by both norms |
 | `squared_distance` | `(Seq[f64],Seq[f64])` | `f64` | Sum of squared pairwise differences |
 | `distance` | `(Seq[f64],Seq[f64])` | `f64` | Square root of `squared_distance` |
-| `sum_f32` | `Seq[f32]` | `f32` | Reduces vector items with `std.math.add` |
+| `sum_f32` | `Seq[f32]` | `f32` | Reduces vector items with `std.math.add_f32` |
 | `mean_f32` | `Seq[f32]` | `f32` | Divides `sum_f32(values)` by `std.seq.length(values)` |
 | `neg_f32` | `Seq[f32]` | `Seq[f32]` | Elementwise numeric negation |
 | `abs_f32` | `Seq[f32]` | `Seq[f32]` | Elementwise absolute value |
@@ -64,14 +64,14 @@ Binary vector operations use `std.seq.zip`, so mismatched lengths
 propagate the same runtime fault as `zip`. Scalar operations use
 `std.seq.broadcast_left` or `std.seq.broadcast_right`. `mean`,
 `normalize`, `cosine_similarity`, and division nodes inherit
-`std.math.div` division-by-zero behavior. `norm` and `distance` use
-`std.math.sqrt`.
+`std.math.div_f64` division-by-zero behavior. `norm` and `distance` use
+`std.math.sqrt_f64`.
 
 Example:
 
 ```flow
 import std.cli { Args }
-import std.math { eq }
+import std.math { eq_f64 as eq }
 import std.vector { add as vector_add, distance, dot, equals, norm, sum }
 
 program main(args: Args) -> exit_code: i64 {

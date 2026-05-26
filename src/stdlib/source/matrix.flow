@@ -31,6 +31,28 @@ import std.vector {
     l1_norm as vector_l1_norm,
     norm as vector_norm,
     normalize as vector_normalize,
+    sum_f32 as vector_sum_f32,
+    mean_f32 as vector_mean_f32,
+    neg_f32 as vector_neg_f32,
+    abs_f32 as vector_abs_f32,
+    add_f32 as vector_add_f32,
+    sub_f32 as vector_sub_f32,
+    mul_f32 as vector_mul_f32,
+    div_f32 as vector_div_f32,
+    add_scalar_f32 as vector_add_scalar_f32,
+    sub_scalar_f32 as vector_sub_scalar_f32,
+    scalar_sub_f32 as vector_scalar_sub_f32,
+    mul_scalar_f32 as vector_mul_scalar_f32,
+    scalar_mul_f32 as vector_scalar_mul_f32,
+    div_scalar_f32 as vector_div_scalar_f32,
+    scalar_div_f32 as vector_scalar_div_f32,
+    equals_f32 as vector_equals_f32,
+    dot_f32 as vector_dot_f32,
+    squared_norm_f32 as vector_squared_norm_f32,
+    l1_norm_f32 as vector_l1_norm_f32,
+    norm_f32 as vector_norm_f32,
+    normalize_f32 as vector_normalize_f32,
+    softmax_f32 as vector_softmax_f32,
 }
 
 extern node rows(matrix: Seq[Seq[f64]]) -> count: i64 {
@@ -274,4 +296,243 @@ extern node outer(inputs: (Seq[f64], Seq[f64])) -> out: Seq[Seq[f64]] {
 extern node gram(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
     $matrix                -> transpose -> $transposed
     ($matrix, $transposed) -> matmul    -> $out
+}
+
+extern node flatten_f32(matrix: Seq[Seq[f32]]) -> values: Seq[f32] {
+    $matrix -> seq_flatten -> $values
+}
+
+extern node transpose_f32(matrix: Seq[Seq[f32]]) -> out: Seq[Seq[f32]] {
+    $matrix -> seq_transpose -> $out
+}
+
+extern node neg_f32(matrix: Seq[Seq[f32]]) -> out: Seq[Seq[f32]] {
+    $matrix -> map vector_neg_f32 -> $out
+}
+
+extern node abs_f32(matrix: Seq[Seq[f32]]) -> out: Seq[Seq[f32]] {
+    $matrix -> map vector_abs_f32 -> $out
+}
+
+node add_rows_f32(pair: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
+    $pair -> vector_add_f32 -> $out
+}
+
+node sub_rows_f32(pair: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
+    $pair -> vector_sub_f32 -> $out
+}
+
+node mul_rows_f32(pair: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
+    $pair -> vector_mul_f32 -> $out
+}
+
+node div_rows_f32(pair: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
+    $pair -> vector_div_f32 -> $out
+}
+
+node equal_rows_f32(pair: (Seq[f32], Seq[f32])) -> out: Bool {
+    $pair -> vector_equals_f32 -> $out
+}
+
+extern node add_f32(inputs: (Seq[Seq[f32]], Seq[Seq[f32]])) -> out: Seq[Seq[f32]] {
+    $inputs -> zip -> map add_rows_f32 -> $out
+}
+
+extern node sub_f32(inputs: (Seq[Seq[f32]], Seq[Seq[f32]])) -> out: Seq[Seq[f32]] {
+    $inputs -> zip -> map sub_rows_f32 -> $out
+}
+
+extern node mul_f32(inputs: (Seq[Seq[f32]], Seq[Seq[f32]])) -> out: Seq[Seq[f32]] {
+    $inputs -> zip -> map mul_rows_f32 -> $out
+}
+
+extern node div_f32(inputs: (Seq[Seq[f32]], Seq[Seq[f32]])) -> out: Seq[Seq[f32]] {
+    $inputs -> zip -> map div_rows_f32 -> $out
+}
+
+extern node equals_f32(inputs: (Seq[Seq[f32]], Seq[Seq[f32]])) -> out: Bool {
+    $inputs -> zip -> map equal_rows_f32 -> all -> $out
+}
+
+node add_scalar_row_f32(pair: (Seq[f32], f32)) -> out: Seq[f32] {
+    $pair -> vector_add_scalar_f32 -> $out
+}
+
+node sub_scalar_row_f32(pair: (Seq[f32], f32)) -> out: Seq[f32] {
+    $pair -> vector_sub_scalar_f32 -> $out
+}
+
+node scalar_sub_row_f32(pair: (f32, Seq[f32])) -> out: Seq[f32] {
+    $pair -> vector_scalar_sub_f32 -> $out
+}
+
+node mul_scalar_row_f32(pair: (Seq[f32], f32)) -> out: Seq[f32] {
+    $pair -> vector_mul_scalar_f32 -> $out
+}
+
+node scalar_mul_row_f32(pair: (f32, Seq[f32])) -> out: Seq[f32] {
+    $pair -> vector_scalar_mul_f32 -> $out
+}
+
+node div_scalar_row_f32(pair: (Seq[f32], f32)) -> out: Seq[f32] {
+    $pair -> vector_div_scalar_f32 -> $out
+}
+
+node scalar_div_row_f32(pair: (f32, Seq[f32])) -> out: Seq[f32] {
+    $pair -> vector_scalar_div_f32 -> $out
+}
+
+extern node add_scalar_f32(inputs: (Seq[Seq[f32]], f32)) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_right -> map add_scalar_row_f32 -> $out
+}
+
+extern node sub_scalar_f32(inputs: (Seq[Seq[f32]], f32)) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_right -> map sub_scalar_row_f32 -> $out
+}
+
+extern node scalar_sub_f32(inputs: (f32, Seq[Seq[f32]])) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_left -> map scalar_sub_row_f32 -> $out
+}
+
+extern node mul_scalar_f32(inputs: (Seq[Seq[f32]], f32)) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_right -> map mul_scalar_row_f32 -> $out
+}
+
+extern node scalar_mul_f32(inputs: (f32, Seq[Seq[f32]])) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_left -> map scalar_mul_row_f32 -> $out
+}
+
+extern node div_scalar_f32(inputs: (Seq[Seq[f32]], f32)) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_right -> map div_scalar_row_f32 -> $out
+}
+
+extern node scalar_div_f32(inputs: (f32, Seq[Seq[f32]])) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_left -> map scalar_div_row_f32 -> $out
+}
+
+extern node add_row_f32(inputs: (Seq[Seq[f32]], Seq[f32])) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_right -> map add_rows_f32 -> $out
+}
+
+extern node sub_row_f32(inputs: (Seq[Seq[f32]], Seq[f32])) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_right -> map sub_rows_f32 -> $out
+}
+
+extern node mul_row_f32(inputs: (Seq[Seq[f32]], Seq[f32])) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_right -> map mul_rows_f32 -> $out
+}
+
+extern node div_row_f32(inputs: (Seq[Seq[f32]], Seq[f32])) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_right -> map div_rows_f32 -> $out
+}
+
+extern node sum_f32(matrix: Seq[Seq[f32]]) -> total: f32 {
+    $matrix -> map vector_sum_f32 -> vector_sum_f32 -> $total
+}
+
+extern node mean_f32(matrix: Seq[Seq[f32]]) -> average: f32 {
+    $matrix -> flatten_f32 -> vector_mean_f32 -> $average
+}
+
+extern node row_sums_f32(matrix: Seq[Seq[f32]]) -> out: Seq[f32] {
+    $matrix -> map vector_sum_f32 -> $out
+}
+
+extern node column_sums_f32(matrix: Seq[Seq[f32]]) -> out: Seq[f32] {
+    $matrix -> transpose_f32 -> map vector_sum_f32 -> $out
+}
+
+extern node row_means_f32(matrix: Seq[Seq[f32]]) -> out: Seq[f32] {
+    $matrix -> map vector_mean_f32 -> $out
+}
+
+extern node column_means_f32(matrix: Seq[Seq[f32]]) -> out: Seq[f32] {
+    $matrix -> transpose_f32 -> map vector_mean_f32 -> $out
+}
+
+extern node row_norms_f32(matrix: Seq[Seq[f32]]) -> out: Seq[f32] {
+    $matrix -> map vector_norm_f32 -> $out
+}
+
+extern node column_norms_f32(matrix: Seq[Seq[f32]]) -> out: Seq[f32] {
+    $matrix -> transpose_f32 -> map vector_norm_f32 -> $out
+}
+
+node row_squared_norm_f32(row: Seq[f32]) -> total: f32 {
+    $row -> vector_squared_norm_f32 -> $total
+}
+
+node row_l1_norm_f32(row: Seq[f32]) -> total: f32 {
+    $row -> vector_l1_norm_f32 -> $total
+}
+
+extern node squared_norm_f32(matrix: Seq[Seq[f32]]) -> total: f32 {
+    $matrix -> map row_squared_norm_f32 -> vector_sum_f32 -> $total
+}
+
+extern node l1_norm_f32(matrix: Seq[Seq[f32]]) -> total: f32 {
+    $matrix -> map row_l1_norm_f32 -> vector_sum_f32 -> $total
+}
+
+extern node norm_f32(matrix: Seq[Seq[f32]]) -> total: f32 {
+    $matrix -> flatten_f32 -> vector_norm_f32 -> $total
+}
+
+extern node frobenius_norm_f32(matrix: Seq[Seq[f32]]) -> total: f32 {
+    $matrix -> norm_f32 -> $total
+}
+
+extern node normalize_rows_f32(matrix: Seq[Seq[f32]]) -> out: Seq[Seq[f32]] {
+    $matrix -> map vector_normalize_f32 -> $out
+}
+
+extern node row_softmax_f32(matrix: Seq[Seq[f32]]) -> out: Seq[Seq[f32]] {
+    $matrix -> map vector_softmax_f32 -> $out
+}
+
+extern node squared_distance_f32(inputs: (Seq[Seq[f32]], Seq[Seq[f32]])) -> total: f32 {
+    $inputs -> sub_f32 -> squared_norm_f32 -> $total
+}
+
+extern node distance_f32(inputs: (Seq[Seq[f32]], Seq[Seq[f32]])) -> total: f32 {
+    $inputs -> sub_f32 -> norm_f32 -> $total
+}
+
+node dot_row_f32(pair: (Seq[f32], Seq[f32])) -> out: f32 {
+    $pair -> vector_dot_f32 -> $out
+}
+
+extern node matvec_f32(inputs: (Seq[Seq[f32]], Seq[f32])) -> out: Seq[f32] {
+    $inputs -> broadcast_right -> map dot_row_f32 -> $out
+}
+
+extern node vecmat_f32(inputs: (Seq[f32], Seq[Seq[f32]])) -> out: Seq[f32] {
+    $inputs             -> first           -> $vector
+    $inputs             -> second          -> transpose_f32   -> $columns
+    ($columns, $vector) -> broadcast_right -> map dot_row_f32 -> $out
+}
+
+node row_matmul_f32(pair: (Seq[f32], Seq[Seq[f32]])) -> out: Seq[f32] {
+    $pair            -> first           -> $row
+    $pair            -> second          -> $columns
+    ($columns, $row) -> broadcast_right -> map dot_row_f32 -> $out
+}
+
+extern node matmul_f32(inputs: (Seq[Seq[f32]], Seq[Seq[f32]])) -> out: Seq[Seq[f32]] {
+    $inputs           -> first           -> $left
+    $inputs           -> second          -> transpose_f32      -> $columns
+    ($left, $columns) -> broadcast_right -> map row_matmul_f32 -> $out
+}
+
+node outer_row_f32(pair: (f32, Seq[f32])) -> out: Seq[f32] {
+    $pair -> vector_scalar_mul_f32 -> $out
+}
+
+extern node outer_f32(inputs: (Seq[f32], Seq[f32])) -> out: Seq[Seq[f32]] {
+    $inputs -> broadcast_right -> map outer_row_f32 -> $out
+}
+
+extern node gram_f32(matrix: Seq[Seq[f32]]) -> out: Seq[Seq[f32]] {
+    $matrix                -> transpose_f32 -> $transposed
+    ($matrix, $transposed) -> matmul_f32    -> $out
 }

@@ -52,7 +52,7 @@ intentionally staying in the `f32` numeric domain.
 ## Examples
 
 ```flow
-import std.math { div }
+import std.math { div_f64 }
 import std.real { parse_real, format_real, from_int }
 
 node parse_then_format(input: Bytes) -> output: Faultable[Bytes] {
@@ -62,6 +62,6 @@ node parse_then_format(input: Bytes) -> output: Faultable[Bytes] {
 
 node byte_to_unit(value: i64) -> out: f64 {
     $value -> from_int -> $real
-    ($real, 255.0) -> div -> $out
+    ($real, 255.0) -> div_f64 -> $out
 }
 ```

@@ -14,7 +14,7 @@ import std.cli { Args }
 import std.fault { expect }
 import std.int { format_int }
 import std.io { write_stdout }
-import std.math { add, max, mul }
+import std.math { add_i64 as add, max_i64 as max, mul_i64 as mul }
 
 struct JobSummary {
     total_score: i64,

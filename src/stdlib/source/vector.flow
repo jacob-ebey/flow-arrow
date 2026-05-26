@@ -1,17 +1,38 @@
 import std.math {
-    add as math_add,
-    sub as math_sub,
-    mul as math_mul,
-    div as math_div,
-    neg as math_neg,
-    abs as math_abs,
-    sqrt as math_sqrt,
-    eq as math_eq,
+    add_f64 as math_add,
+    sub_f64 as math_sub,
+    mul_f64 as math_mul,
+    div_f64 as math_div,
+    neg_f64 as math_neg,
+    abs_f64 as math_abs,
+    sqrt_f64 as math_sqrt,
+    exp_f64 as math_exp,
+    eq_f64 as math_eq,
+    min_f64 as math_min,
+    max_f64 as math_max,
+    add_f32 as math_add_f32,
+    sub_f32 as math_sub_f32,
+    mul_f32 as math_mul_f32,
+    div_f32 as math_div_f32,
+    neg_f32 as math_neg_f32,
+    abs_f32 as math_abs_f32,
+    sqrt_f32 as math_sqrt_f32,
+    exp_f32 as math_exp_f32,
+    eq_f32 as math_eq_f32,
+    min_f32 as math_min_f32,
+    max_f32 as math_max_f32,
 }
 import std.fault { expect }
 import std.predicates { all }
 import std.real { from_int, from_int_f32 }
-import std.seq { length, zip, broadcast_left, broadcast_right }
+import std.seq {
+    length,
+    head,
+    tail,
+    zip,
+    broadcast_left,
+    broadcast_right,
+}
 import std.tuple { first, second }
 
 extern node sum(values: Seq[f64]) -> total: f64 {
@@ -22,6 +43,16 @@ extern node mean(values: Seq[f64]) -> average: f64 {
     $values          -> sum      -> $total
     $values          -> length   -> from_int -> $count
     ($total, $count) -> math_div -> expect   -> $average
+}
+
+extern node min(values: Seq[f64]) -> out: f64 {
+    $values -> head -> expect                              -> $initial
+    $values -> tail -> reduce math_min(identity: $initial) -> $out
+}
+
+extern node max(values: Seq[f64]) -> out: f64 {
+    $values -> head -> expect                              -> $initial
+    $values -> tail -> reduce math_max(identity: $initial) -> $out
 }
 
 node add_pair(pair: (f64, f64)) -> out: f64 {
@@ -58,6 +89,14 @@ extern node neg(values: Seq[f64]) -> out: Seq[f64] {
 
 extern node abs(values: Seq[f64]) -> out: Seq[f64] {
     $values -> map abs_value -> $out
+}
+
+node exp_value(value: f64) -> out: f64 {
+    $value -> math_exp -> $out
+}
+
+extern node exp(values: Seq[f64]) -> out: Seq[f64] {
+    $values -> map exp_value -> $out
 }
 
 extern node add(inputs: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
@@ -137,6 +176,32 @@ extern node normalize(values: Seq[f64]) -> out: Seq[f64] {
     ($values, $magnitude) -> div_scalar -> $out
 }
 
+node relu_value(value: f64) -> out: f64 {
+    ($value, 0.0) -> math_max -> $out
+}
+
+extern node relu(values: Seq[f64]) -> out: Seq[f64] {
+    $values -> map relu_value -> $out
+}
+
+extern node sigmoid(values: Seq[f64]) -> out: Seq[f64] {
+    $values             -> neg        -> exp -> $neg_exp
+    ($neg_exp, 1.0)     -> add_scalar -> $denominator
+    (1.0, $denominator) -> scalar_div -> $out
+}
+
+extern node silu(values: Seq[f64]) -> out: Seq[f64] {
+    $values               -> sigmoid -> $activated
+    ($values, $activated) -> mul     -> $out
+}
+
+extern node softmax(values: Seq[f64]) -> out: Seq[f64] {
+    $values                     -> max        -> $offset
+    ($values, $offset)          -> sub_scalar -> exp -> $exp_values
+    $exp_values                 -> sum        -> $denominator
+    ($exp_values, $denominator) -> div_scalar -> $out
+}
+
 extern node cosine_similarity(inputs: (Seq[f64], Seq[f64])) -> out: f64 {
     $inputs                    -> dot      -> $numerator
     $inputs                    -> first    -> norm   -> $left_norm
@@ -154,42 +219,52 @@ extern node distance(inputs: (Seq[f64], Seq[f64])) -> total: f64 {
 }
 
 extern node sum_f32(values: Seq[f32]) -> total: f32 {
-    0       -> from_int_f32                     -> $zero
-    $values -> reduce math_add(identity: $zero) -> $total
+    0       -> from_int_f32                         -> $zero
+    $values -> reduce math_add_f32(identity: $zero) -> $total
 }
 
 extern node mean_f32(values: Seq[f32]) -> average: f32 {
-    $values          -> sum_f32  -> $total
-    $values          -> length   -> from_int_f32 -> $count
-    ($total, $count) -> math_div -> expect       -> $average
+    $values          -> sum_f32      -> $total
+    $values          -> length       -> from_int_f32 -> $count
+    ($total, $count) -> math_div_f32 -> expect       -> $average
+}
+
+extern node min_f32(values: Seq[f32]) -> out: f32 {
+    $values -> head -> expect                                  -> $initial
+    $values -> tail -> reduce math_min_f32(identity: $initial) -> $out
+}
+
+extern node max_f32(values: Seq[f32]) -> out: f32 {
+    $values -> head -> expect                                  -> $initial
+    $values -> tail -> reduce math_max_f32(identity: $initial) -> $out
 }
 
 node add_pair_f32(pair: (f32, f32)) -> out: f32 {
-    $pair -> math_add -> $out
+    $pair -> math_add_f32 -> $out
 }
 
 node sub_pair_f32(pair: (f32, f32)) -> out: f32 {
-    $pair -> math_sub -> $out
+    $pair -> math_sub_f32 -> $out
 }
 
 node mul_pair_f32(pair: (f32, f32)) -> out: f32 {
-    $pair -> math_mul -> $out
+    $pair -> math_mul_f32 -> $out
 }
 
 node div_pair_f32(pair: (f32, f32)) -> out: f32 {
-    $pair -> math_div -> expect -> $out
+    $pair -> math_div_f32 -> expect -> $out
 }
 
 node eq_pair_f32(pair: (f32, f32)) -> out: Bool {
-    $pair -> math_eq -> $out
+    $pair -> math_eq_f32 -> $out
 }
 
 node neg_value_f32(value: f32) -> out: f32 {
-    $value -> math_neg -> $out
+    $value -> math_neg_f32 -> $out
 }
 
 node abs_value_f32(value: f32) -> out: f32 {
-    $value -> math_abs -> $out
+    $value -> math_abs_f32 -> $out
 }
 
 extern node neg_f32(values: Seq[f32]) -> out: Seq[f32] {
@@ -198,6 +273,14 @@ extern node neg_f32(values: Seq[f32]) -> out: Seq[f32] {
 
 extern node abs_f32(values: Seq[f32]) -> out: Seq[f32] {
     $values -> map abs_value_f32 -> $out
+}
+
+node exp_value_f32(value: f32) -> out: f32 {
+    $value -> math_exp_f32 -> $out
+}
+
+extern node exp_f32(values: Seq[f32]) -> out: Seq[f32] {
+    $values -> map exp_value_f32 -> $out
 }
 
 extern node add_f32(inputs: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
@@ -249,16 +332,16 @@ extern node equals_f32(inputs: (Seq[f32], Seq[f32])) -> out: Bool {
 }
 
 node dot_pair_f32(pair: (f32, f32)) -> product: f32 {
-    $pair -> math_mul -> $product
+    $pair -> math_mul_f32 -> $product
 }
 
 extern node dot_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
     0       -> from_int_f32 -> $zero
-    $inputs -> zip          -> map dot_pair_f32 -> reduce math_add(identity: $zero) -> $total
+    $inputs -> zip          -> map dot_pair_f32 -> reduce math_add_f32(identity: $zero) -> $total
 }
 
 node square_f32(value: f32) -> out: f32 {
-    ($value, $value) -> math_mul -> $out
+    ($value, $value) -> math_mul_f32 -> $out
 }
 
 extern node squared_norm_f32(values: Seq[f32]) -> total: f32 {
@@ -270,7 +353,7 @@ extern node l1_norm_f32(values: Seq[f32]) -> total: f32 {
 }
 
 extern node norm_f32(values: Seq[f32]) -> total: f32 {
-    $values -> squared_norm_f32 -> math_sqrt -> expect -> $total
+    $values -> squared_norm_f32 -> math_sqrt_f32 -> expect -> $total
 }
 
 extern node normalize_f32(values: Seq[f32]) -> out: Seq[f32] {
@@ -278,12 +361,40 @@ extern node normalize_f32(values: Seq[f32]) -> out: Seq[f32] {
     ($values, $magnitude) -> div_scalar_f32 -> $out
 }
 
+node relu_value_f32(value: f32) -> out: f32 {
+    0               -> from_int_f32 -> $zero
+    ($value, $zero) -> math_max_f32 -> $out
+}
+
+extern node relu_f32(values: Seq[f32]) -> out: Seq[f32] {
+    $values -> map relu_value_f32 -> $out
+}
+
+extern node sigmoid_f32(values: Seq[f32]) -> out: Seq[f32] {
+    1                    -> from_int_f32   -> $one
+    $values              -> neg_f32        -> exp_f32 -> $neg_exp
+    ($neg_exp, $one)     -> add_scalar_f32 -> $denominator
+    ($one, $denominator) -> scalar_div_f32 -> $out
+}
+
+extern node silu_f32(values: Seq[f32]) -> out: Seq[f32] {
+    $values               -> sigmoid_f32 -> $activated
+    ($values, $activated) -> mul_f32     -> $out
+}
+
+extern node softmax_f32(values: Seq[f32]) -> out: Seq[f32] {
+    $values                     -> max_f32        -> $offset
+    ($values, $offset)          -> sub_scalar_f32 -> exp_f32 -> $exp_values
+    $exp_values                 -> sum_f32        -> $denominator
+    ($exp_values, $denominator) -> div_scalar_f32 -> $out
+}
+
 extern node cosine_similarity_f32(inputs: (Seq[f32], Seq[f32])) -> out: f32 {
-    $inputs                    -> dot_f32  -> $numerator
-    $inputs                    -> first    -> norm_f32 -> $left_norm
-    $inputs                    -> second   -> norm_f32 -> $right_norm
-    ($left_norm, $right_norm)  -> math_mul -> $denominator
-    ($numerator, $denominator) -> math_div -> expect   -> $out
+    $inputs                    -> dot_f32      -> $numerator
+    $inputs                    -> first        -> norm_f32 -> $left_norm
+    $inputs                    -> second       -> norm_f32 -> $right_norm
+    ($left_norm, $right_norm)  -> math_mul_f32 -> $denominator
+    ($numerator, $denominator) -> math_div_f32 -> expect   -> $out
 }
 
 extern node squared_distance_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
@@ -291,5 +402,5 @@ extern node squared_distance_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
 }
 
 extern node distance_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
-    $inputs -> squared_distance_f32 -> math_sqrt -> expect -> $total
+    $inputs -> squared_distance_f32 -> math_sqrt_f32 -> expect -> $total
 }

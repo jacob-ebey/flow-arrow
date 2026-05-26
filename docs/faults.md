@@ -77,21 +77,22 @@ formatted, routed to `write_stderr`, and used to derive the final
 Fixed-width `i64` arithmetic reports overflow as recoverable data:
 
 ```text
-add : (i64, i64) -> Faultable[i64]
-sub : (i64, i64) -> Faultable[i64]
-mul : (i64, i64) -> Faultable[i64]
-neg : i64        -> Faultable[i64]
-abs : i64        -> Faultable[i64]
+add_i64 : (i64, i64) -> Faultable[i64]
+sub_i64 : (i64, i64) -> Faultable[i64]
+mul_i64 : (i64, i64) -> Faultable[i64]
+neg_i64 : i64        -> Faultable[i64]
+abs_i64 : i64        -> Faultable[i64]
 ```
 
-`f64` `add`, `sub`, `mul`, `neg`, and `abs` remain plain `f64`
-operations. Division, remainder, and `sqrt` are faultable because they
-have invalid inputs such as zero divisors or negative square roots.
+`f64` `add_f64`, `sub_f64`, `mul_f64`, `neg_f64`, and `abs_f64` remain
+plain `f64` operations. Division, remainder, and `sqrt` are faultable because
+they have invalid inputs such as zero divisors or negative square roots.
 
-Integer `add`, `sub`, `mul`, `neg`, and `abs` return `Faultable[...]`
+Integer `add_i32`, `add_i64`, `sub_i32`, `sub_i64`, `mul_i32`, `mul_i64`,
+`neg_i32`, `neg_i64`, `abs_i32`, and `abs_i64` return `Faultable[...]`
 for fixed-width integer types because overflow is recoverable graph data.
-For example, `reduce add(identity: 0)` over `Seq[i64]` returns
-`Faultable[i64]`, and `scan add(identity: 0)` over `Seq[i64]` returns
+For example, `reduce add_i64(identity: 0)` over `Seq[i64]` returns
+`Faultable[i64]`, and `scan add_i64(identity: 0)` over `Seq[i64]` returns
 `Seq[Faultable[i64]]`. Use
 `std.fault.expect` only at a boundary where aborting on a fault is the
 intended policy. Use `fault map` or explicit `Faultable[...]` outputs when
@@ -103,7 +104,7 @@ the graph should recover and continue.
 
 ```flow
 $lines -> fault map parse_real { ok -> $numbers, fault -> $faults }
-$numbers -> reduce add(identity: 0.0) -> $total
+$numbers -> reduce add_f64(identity: 0.0) -> $total
 ```
 
 The design question this example now exercises is how `parse_real`

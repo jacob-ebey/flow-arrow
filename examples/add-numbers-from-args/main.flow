@@ -12,7 +12,7 @@ import std.bytes { concat_bytes }
 import std.cli { Args, argv }
 import std.io { write_stdout }
 import std.real { parse_real, format_real }
-import std.math { add }
+import std.math { add_f64 as add }
 
 program main(args: Args) -> exit_code: Faultable[i64] {
     $args                -> argv                      -> $raw_args

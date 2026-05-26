@@ -5,7 +5,7 @@ fn intrinsic_nodes_run() {
     let source = r#"
         import std.cli { Args }
         import std.fault { expect }
-        import std.math { add, eq }
+        import std.math { add_i64 as add, eq_i64 as eq }
 
         program main(args: Args) -> exit_code: i64 {
             (0, 5, 2) -> range_step -> $values

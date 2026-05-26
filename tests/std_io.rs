@@ -6,7 +6,7 @@ fn std_io_nodes_run() {
         import std.cli { Args }
         import std.fault { expect }
         import std.io { read_stdin, write_stdout, write_stderr }
-        import std.math { add }
+        import std.math { add_i64 as add }
 
         program main(args: Args) -> exit_code: i64 {
             () -> read_stdin -> $input

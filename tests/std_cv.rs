@@ -53,7 +53,7 @@ fn std_cv_jpeg_pipeline_decodes_grayscales_and_encodes() {
         r#"
         import std.cli {{ Args }}
         import std.cv {{ Pixel, load_jpeg, pixels }}
-        import std.math {{ abs, le, sub }}
+        import std.math {{ abs_f64 as abs, le_f64 as le, sub_f64 as sub }}
         import std.predicates {{ all, and }}
         import std.tuple {{ first, second }}
 
@@ -185,7 +185,7 @@ fn std_cv_generic_load_detects_png_bmp_ppm_and_pgm() {
             r#"
             import std.cli {{ Args }}
             import std.cv {{ height, load, pixels, width }}
-            import std.math {{ abs, eq, le, sub }}
+            import std.math {{ abs_f64 as abs, eq_i64 as eq, le_f64 as le, sub_f64 as sub }}
             import std.predicates {{ and }}
             import std.seq {{ head }}
             import std.tuple {{ first, second }}

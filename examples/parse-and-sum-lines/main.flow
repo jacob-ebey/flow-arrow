@@ -18,7 +18,7 @@ import std.cli { Args }
 import std.fault { has_faults, format_faults }
 import std.io { read_stdin, write_stdout, write_stderr }
 import std.real { parse_real, format_real }
-import std.math { add, max }
+import std.math { add_f64 as add, max_i64 as max }
 import std.predicates { not_empty }
 
 program main(args: Args) -> exit_code: i64 {

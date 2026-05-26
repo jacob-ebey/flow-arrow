@@ -30,7 +30,7 @@ import std.fs {
 }
 import std.int { format_int }
 import std.io { write_stdout }
-import std.math { add }
+import std.math { add_i64 as add }
 import std.predicates { any, not, not_empty, or }
 import std.seq {
     broadcast_right,

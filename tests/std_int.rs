@@ -7,7 +7,7 @@ fn std_int_nodes_run() {
         import std.cli { Args }
         import std.int { parse_int, format_int }
         import std.io { write_stdout }
-        import std.math { add }
+        import std.math { add_i64 as add }
 
         program main(args: Args) -> exit_code: Faultable[i64] {
             "41" -> parse_int -> $parsed
@@ -34,7 +34,7 @@ fn std_int_parse_edges_and_faults_run() {
         import std.cli { Args }
         import std.int { parse_int, format_int }
         import std.io { write_stdout }
-        import std.math { add }
+        import std.math { add_i64 as add }
 
         program main(args: Args) -> exit_code: Faultable[i64] {
             " -42 " -> parse_int -> $negative

@@ -3,7 +3,7 @@
 # Pure cdylib-friendly variant used to exercise static node parameters in
 # export-oriented targets.
 import std.fault { expect }
-import std.math { add }
+import std.math { add_i64 as add }
 
 node increment(x: i64) -> y: i64 {
     ($x, 1) -> add -> expect -> $y

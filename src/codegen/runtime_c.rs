@@ -620,7 +620,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                             let runtime_name = if symbol.module == "std.sqlite" {
                                 format!("sqlite.{}", symbol.name)
                             } else {
-                                symbol.name.to_string()
+                                symbol.runtime_name.to_string()
                             };
                             self.stdlib_names
                                 .insert(format!("{alias}.{}", symbol.name), runtime_name);
@@ -642,7 +642,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                                 let runtime_name = if symbol.module == "std.sqlite" {
                                     format!("sqlite.{}", symbol.name)
                                 } else {
-                                    symbol.name.to_string()
+                                    symbol.runtime_name.to_string()
                                 };
                                 self.stdlib_names.insert(
                                     item.alias.as_deref().unwrap_or(&item.name).to_string(),
@@ -4574,26 +4574,38 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             return Ok(vec![signature.clone()]);
         }
         let canonical = self.canonical_name(name);
-        let (module, symbol_name) = if let Some(symbol_name) = canonical.strip_prefix("sqlite.") {
-            ("std.sqlite", symbol_name)
+        let symbols = if let Some(symbol_name) = canonical.strip_prefix("sqlite.") {
+            vec![
+                stdlib::find_export("std.sqlite", symbol_name)
+                    .ok_or_else(|| format!("unknown node `{name}`"))?,
+            ]
         } else {
-            stdlib::all_symbols()
-                .find(|symbol| symbol.kind == stdlib::SymbolKind::Node && symbol.name == canonical)
-                .map(|symbol| (symbol.module, symbol.name))
-                .ok_or_else(|| format!("unknown node `{name}`"))?
+            let matches = stdlib::all_symbols()
+                .filter(|symbol| {
+                    symbol.kind == stdlib::SymbolKind::Node
+                        && (symbol.name == canonical || symbol.runtime_name == canonical)
+                })
+                .collect::<Vec<_>>();
+            if matches.is_empty() {
+                return Err(format!("unknown node `{name}`"));
+            }
+            matches
         };
-        let symbol = stdlib::find_export(module, symbol_name)
-            .ok_or_else(|| format!("unknown node `{name}`"))?;
-        let input = symbol
-            .input
-            .ok_or_else(|| format!("stdlib node `{name}` has no input type"))?;
-        let output = symbol
-            .output
-            .ok_or_else(|| format!("stdlib node `{name}` has no output type"))?;
-        Ok(vec![Signature {
-            input: self.parse_signature_type(input)?,
-            output: self.parse_signature_type(output)?,
-        }])
+        symbols
+            .into_iter()
+            .map(|symbol| {
+                let input = symbol
+                    .input
+                    .ok_or_else(|| format!("stdlib node `{name}` has no input type"))?;
+                let output = symbol
+                    .output
+                    .ok_or_else(|| format!("stdlib node `{name}` has no output type"))?;
+                Ok(Signature {
+                    input: self.parse_signature_type(input)?,
+                    output: self.parse_signature_type(output)?,
+                })
+            })
+            .collect()
     }
 
     pub(super) fn canonical_name(&self, name: &str) -> String {

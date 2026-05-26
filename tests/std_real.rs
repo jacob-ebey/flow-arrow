@@ -6,7 +6,7 @@ fn std_real_nodes_run() {
         import std.bytes { concat_bytes }
         import std.cli { Args }
         import std.io { write_stdout }
-        import std.math { add }
+        import std.math { add_f64 as add }
         import std.real { parse_real, format_real, from_int }
 
         program main(args: Args) -> exit_code: Faultable[i64] {

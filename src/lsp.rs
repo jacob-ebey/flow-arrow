@@ -2232,7 +2232,7 @@ mod tests {
     fn analysis_finds_local_definitions_and_variables() {
         let source = r#"
             import std.fault { expect }
-            import std.math { add }
+            import std.math { add_i64 as add }
 
             node inc(value: i64) -> out: i64 {
                 ($value, 1) -> add -> expect -> $out
@@ -2406,7 +2406,7 @@ program main(args: Args) -> exit_code: Faultable[i64] {
     #[test]
     fn lsp_summarizes_library_modules_for_destructured_repeat_bindings() {
         let source = r#"import std.fault { expect }
-import std.math { add }
+import std.math { add_i64 as add }
 
 extern node fib(depth: i64) -> result: i64 {
     (0, 1) -> repeat<$depth> fib_step -> ($result, $)

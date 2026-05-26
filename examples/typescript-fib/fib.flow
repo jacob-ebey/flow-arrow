@@ -1,6 +1,6 @@
 # Exports a pure Fibonacci node for the TypeScript and JavaScript targets.
 import std.fault { expect }
-import std.math { add }
+import std.math { add_i64 as add }
 
 extern node fib(depth: i64) -> result: i64 {
     (0, 1) -> repeat<$depth> fib_step -> ($result, $)

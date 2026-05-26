@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn compiles_typescript_source_in_memory() {
         let source = r#"
-            import std.math { add }
+            import std.math { add_i64 as add }
             import std.fault { expect }
 
             extern node increment(value: i64) -> out: i64 {
@@ -510,7 +510,7 @@ mod tests {
     fn typescript_worker_concurrency_is_opt_in() {
         let source = r#"
             import std.fault { expect }
-            import std.math { add, mul }
+            import std.math { add_i64 as add, mul_i64 as mul }
 
             extern node score_batch(width: i64) -> (scores: Seq[i64], weights: Seq[i64]) {
                 (1, $width, 1) -> range_step -> $jobs
@@ -589,7 +589,7 @@ mod tests {
     fn typescript_async_boundaries_use_promise_all_batches() {
         let source = r#"
             import std.fault { expect }
-            import std.math { add, gt, mul }
+            import std.math { add_i64 as add, gt_i64 as gt, mul_i64 as mul }
 
             extern node double_all(values: Seq[i64]) -> out: Seq[i64] {
                 $values -> map double -> $out
@@ -645,7 +645,7 @@ mod tests {
     #[test]
     fn typescript_gpu_lowering_uses_wasm_wgpu_runtime() {
         let source = r#"
-            import std.math { mul }
+            import std.math { mul_f32 as mul }
 
             extern node square_all(values: Seq[f32]) -> out: Seq[f32] {
                 $values -> map square -> $out
@@ -688,6 +688,63 @@ mod tests {
     }
 
     #[test]
+    fn gpu_lowering_optimizes_source_backed_stdlib_vector_graphs() {
+        let source = r#"
+            import std.vector { relu_f32, softmax_f32 }
+
+            extern node run(values: Seq[f32]) -> out: Seq[f32] {
+                $values -> relu_f32 -> softmax_f32 -> $out
+            }
+        "#;
+
+        let emitted = compile_typescript_source_with_options(
+            source,
+            TypeScriptCompileOptions {
+                mode: TypeScriptCompileMode::Library,
+                gpu: true,
+                ..TypeScriptCompileOptions::default()
+            },
+        )
+        .expect("typescript source-backed stdlib gpu");
+
+        assert!(emitted.contains("faGpuMapF32"));
+        assert!(emitted.contains("faGpuReduceF32"));
+        assert!(emitted.contains("array<f32>"));
+        assert!(emitted.contains("exp("));
+        assert!(!emitted.contains("array<f64>"));
+        assert!(!emitted.contains("faGpuMapF64"));
+        assert!(!emitted.contains("faGpuReduceF64"));
+    }
+
+    #[test]
+    fn gpu_lowering_optimizes_source_backed_stdlib_matrix_graphs() {
+        let source = r#"
+            import std.matrix { row_softmax_f32, matmul_f32 }
+
+            extern node run(input: Seq[Seq[f32]], weights: Seq[Seq[f32]]) -> out: Seq[Seq[f32]] {
+                ($input, $weights) -> matmul_f32 -> row_softmax_f32 -> $out
+            }
+        "#;
+
+        let emitted = compile_typescript_source_with_options(
+            source,
+            TypeScriptCompileOptions {
+                mode: TypeScriptCompileMode::Library,
+                gpu: true,
+                ..TypeScriptCompileOptions::default()
+            },
+        )
+        .expect("typescript source-backed matrix gpu");
+
+        assert!(emitted.contains("faGpuMapF32"));
+        assert!(emitted.contains("faGpuReduceF32"));
+        assert!(emitted.contains("array<f32>"));
+        assert!(!emitted.contains("array<f64>"));
+        assert!(!emitted.contains("faGpuMapF64"));
+        assert!(!emitted.contains("faGpuReduceF64"));
+    }
+
+    #[test]
     fn gpu_lowering_covers_concurrency_int_maps_and_reductions() {
         let source = include_str!("../examples/concurrency/main.flow");
 
@@ -720,14 +777,20 @@ mod tests {
     #[test]
     fn gpu_lowering_uses_first_class_i32_f32_and_f64_helpers() {
         let source = r#"
-            import std.math { max, min, mul }
+            import std.math {
+                max_f32 as math_max_f32,
+                max_f64 as math_max_f64,
+                min_i32 as math_min_i32,
+                mul_f32,
+                mul_f64,
+            }
 
             extern node id_all(values: Seq[i32]) -> out: Seq[i32] {
                 $values -> map id_i32 -> $out
             }
 
             extern node min_i32(values: Seq[i32], identity: i32) -> out: i32 {
-                $values -> reduce min(identity: $identity) -> $out
+                $values -> reduce math_min_i32(identity: $identity) -> $out
             }
 
             extern node square_all(values: Seq[f32]) -> out: Seq[f32] {
@@ -735,7 +798,7 @@ mod tests {
             }
 
             extern node max_f32(values: Seq[f32], identity: f32) -> out: f32 {
-                $values -> reduce max(identity: $identity) -> $out
+                $values -> reduce math_max_f32(identity: $identity) -> $out
             }
 
             extern node square_all_f64(values: Seq[f64]) -> out: Seq[f64] {
@@ -743,7 +806,7 @@ mod tests {
             }
 
             extern node max_f64(values: Seq[f64], identity: f64) -> out: f64 {
-                $values -> reduce max(identity: $identity) -> $out
+                $values -> reduce math_max_f64(identity: $identity) -> $out
             }
 
             node id_i32(value: i32) -> out: i32 {
@@ -751,11 +814,11 @@ mod tests {
             }
 
             node square_f32(value: f32) -> out: f32 {
-                ($value, $value) -> mul -> $out
+                ($value, $value) -> mul_f32 -> $out
             }
 
             node square_f64(value: f64) -> out: f64 {
-                ($value, $value) -> mul -> $out
+                ($value, $value) -> mul_f64 -> $out
             }
         "#;
 
@@ -793,7 +856,7 @@ mod tests {
     fn gpu_mode_does_not_reject_unfused_compute_regions() {
         let source = r#"
             import std.cli { Args }
-            import std.math { add }
+            import std.math { add_i64 as add }
             import std.fault { expect }
 
             node step(value: i64) -> out: i64 {
@@ -818,7 +881,7 @@ mod tests {
     fn gpu_repeat_vector_accumulator_does_not_lower_f64_to_f32() {
         let source = r#"
             import std.cli { Args }
-            import std.math { add as scalar_add, eq }
+            import std.math { add_f64 as scalar_add, eq_f64 as eq }
             import std.vector { dot, squared_distance, squared_norm }
 
             node kernel(left: Seq[f64], right: Seq[f64], score: f64) -> (out_left: Seq[f64], out_right: Seq[f64], out_score: f64) {
@@ -855,7 +918,7 @@ mod tests {
     #[test]
     fn javascript_gpu_repeat_vector_accumulator_does_not_lower_f64_to_f32() {
         let source = r#"
-            import std.math { add as scalar_add }
+            import std.math { add_f64 as scalar_add }
             import std.vector { dot, squared_distance, squared_norm }
 
             extern node run() -> score: f64 {
@@ -895,7 +958,7 @@ mod tests {
     #[test]
     fn gpu_repeat_vector_accumulator_uses_first_class_f32() {
         let source = r#"
-            import std.math { add }
+            import std.math { add_f32 as add }
             import std.vector { dot_f32, squared_distance_f32, squared_norm_f32 }
 
             extern node run(left: Seq[f32], right: Seq[f32], score: f32, iterations: i64) -> out: f32 {
@@ -950,7 +1013,7 @@ mod tests {
     fn javascript_gpu_accumulator_keeps_pure_initializers_synchronous() {
         let source = r#"
             import std.fault { expect }
-            import std.math { add, rem }
+            import std.math { add_i64, add_f64, rem_i64 as rem }
             import std.real { from_int }
             import std.vector { dot, squared_distance, squared_norm }
 
@@ -963,14 +1026,14 @@ mod tests {
 
             node left_value(index: i64) -> value: f64 {
                 ($index, 11)  -> rem      -> expect -> $wrapped
-                ($wrapped, 1) -> add      -> expect -> $offset
+                ($wrapped, 1) -> add_i64  -> expect -> $offset
                 $offset       -> from_int -> $value
             }
 
             node right_value(index: i64) -> value: f64 {
-                ($index, 3)    -> add      -> expect -> $shifted
+                ($index, 3)    -> add_i64  -> expect -> $shifted
                 ($shifted, 11) -> rem      -> expect -> $wrapped
-                ($wrapped, 1)  -> add      -> expect -> $offset
+                ($wrapped, 1)  -> add_i64  -> expect -> $offset
                 $offset        -> from_int -> $value
             }
 
@@ -978,9 +1041,9 @@ mod tests {
                 ($left, $right)           -> dot              -> $dot
                 ($left, $right)           -> squared_distance -> $distance_squared
                 $left                     -> squared_norm     -> $norm_squared
-                ($dot, $distance_squared) -> add              -> $partial
-                ($partial, $norm_squared) -> add              -> $delta
-                ($score, $delta)          -> add              -> $out_score
+                ($dot, $distance_squared) -> add_f64          -> $partial
+                ($partial, $norm_squared) -> add_f64          -> $delta
+                ($score, $delta)          -> add_f64          -> $out_score
                 $left                     -> $out_left
                 $right                    -> $out_right
             }
@@ -1024,7 +1087,7 @@ mod tests {
     fn typescript_range_map_f64_batches_use_packed_numeric_sequences() {
         let source = r#"
             import std.fault { expect }
-            import std.math { add, rem }
+            import std.math { add_i64, add_f64, rem_i64 as rem }
             import std.real { from_int }
 
             extern node build_vectors() -> (left: Seq[f64], right: Seq[f64]) {
@@ -1035,14 +1098,14 @@ mod tests {
 
             node left_value(index: i64) -> value: f64 {
                 ($index, 11)  -> rem      -> expect -> $wrapped
-                ($wrapped, 1) -> add      -> expect -> $offset
+                ($wrapped, 1) -> add_i64  -> expect -> $offset
                 $offset       -> from_int -> $value
             }
 
             node right_value(index: i64) -> value: f64 {
-                ($index, 3)    -> add      -> expect -> $shifted
+                ($index, 3)    -> add_i64  -> expect -> $shifted
                 ($shifted, 11) -> rem      -> expect -> $wrapped
-                ($wrapped, 1)  -> add      -> expect -> $offset
+                ($wrapped, 1)  -> add_i64  -> expect -> $offset
                 $offset        -> from_int -> $value
             }
         "#;
@@ -1063,7 +1126,7 @@ mod tests {
     fn gpu_repeat_matrix_accumulator_does_not_lower_f64_to_f32() {
         let source = r#"
             import std.cli { Args }
-            import std.math { add as scalar_add, eq }
+            import std.math { add_f64 as scalar_add, eq_f64 as eq }
             import std.vector { sum as vector_sum }
             import std.matrix { matmul, matvec, row_sums, sum as matrix_sum }
 
@@ -1109,7 +1172,7 @@ mod tests {
     #[test]
     fn compiles_llvm_ir_preview_in_memory() {
         let fib_source = r#"
-            import std.math { add }
+            import std.math { add_i64 as add }
             import std.fault { expect }
 
             extern node fib(depth: i64) -> result: i64 {
@@ -1129,7 +1192,7 @@ mod tests {
 
         let concurrency_source = r#"
             import std.fault { expect }
-            import std.math { add, max, mul }
+            import std.math { add_i64 as add, max_i64 as max, mul_i64 as mul }
 
             extern node score_batch(width: i64) -> (total_score: i64, peak_score: i64, total_weight: i64, peak_weight: i64) {
                 (1, $width, 1) -> range_step              -> $jobs
@@ -1209,7 +1272,7 @@ extern node demo(value: i64) -> out: i64 {
     fn parses_and_typechecks_match() {
         let source = r#"
             import std.cli { Args }
-            import std.math { eq }
+            import std.math { eq_i64 as eq }
 
             program main(args: Args) -> exit_code: i64 {
                 0 -> match {
@@ -1234,7 +1297,7 @@ extern node demo(value: i64) -> out: i64 {
     fn parses_and_typechecks_static_node_params() {
         let source = r#"
             import std.cli { Args }
-            import std.math { add }
+            import std.math { add_i64 as add }
             import std.fault { expect }
 
             node increment(x: i64) -> y: i64 {
@@ -1280,7 +1343,7 @@ extern node demo(value: i64) -> out: i64 {
     fn parses_and_typechecks_match_inline_value_targets() {
         let source = r#"
             import std.cli { Args }
-            import std.math { eq }
+            import std.math { eq_i64 as eq }
 
             program main(args: Args) -> exit_code: i64 {
                 0 -> match {
@@ -1297,7 +1360,7 @@ extern node demo(value: i64) -> out: i64 {
     fn parse_rejects_match_without_fallback() {
         let source = r#"
             import std.cli { Args }
-            import std.math { eq }
+            import std.math { eq_i64 as eq }
 
             program main(args: Args) -> exit_code: i64 {
                 0 -> match {
@@ -1317,7 +1380,7 @@ extern node demo(value: i64) -> out: i64 {
     fn parse_rejects_match_fallback_before_last_arm() {
         let source = r#"
             import std.cli { Args }
-            import std.math { eq }
+            import std.math { eq_i64 as eq }
 
             program main(args: Args) -> exit_code: i64 {
                 0 -> match {
@@ -1367,7 +1430,7 @@ extern node demo(value: i64) -> out: i64 {
     fn typecheck_rejects_match_arm_output_mismatch() {
         let source = r#"
             import std.cli { Args }
-            import std.math { eq }
+            import std.math { eq_i64 as eq }
 
             program main(args: Args) -> exit_code: i64 {
                 0 -> match {
@@ -1393,7 +1456,7 @@ extern node demo(value: i64) -> out: i64 {
     fn typecheck_rejects_match_inline_value_output_mismatch() {
         let source = r#"
             import std.cli { Args }
-            import std.math { eq }
+            import std.math { eq_i64 as eq }
 
             program main(args: Args) -> exit_code: i64 {
                 0 -> match {
@@ -1474,7 +1537,7 @@ extern node demo(value: i64) -> out: i64 {
     fn dollar_prefixed_values_do_not_collide_with_node_names() {
         let source = r#"
             import std.cli { Args }
-            import std.math { add }
+            import std.math { add_i64 as add }
             import std.fault { expect }
 
             program main(args: Args) -> exit_code: i64 {
@@ -1509,7 +1572,7 @@ extern node demo(value: i64) -> out: i64 {
             import std.fault { expect }
 
             program main(args: Args) -> exit_code: i64 {
-                (3, 1) -> math.sub -> expect -> $exit_code
+                (3, 1) -> math.sub_i64 -> expect -> $exit_code
             }
         "#;
         let module = parser::parse(source).expect("parse");
@@ -1608,7 +1671,7 @@ extern node demo(value: i64) -> out: i64 {
     fn typecheck_rejects_legacy_and_mixed_numeric_types() {
         let source = r#"
             import std.cli { Args }
-            import std.math { add }
+            import std.math { add_i64 as add }
 
             program main(args: Args) -> exit_code: i64 {
                 (1, 2.5) -> add -> $total
@@ -1617,7 +1680,7 @@ extern node demo(value: i64) -> out: i64 {
         "#;
         let module = parser::parse(source).expect("parse");
         let error = typecheck::check_module(&module).expect_err("typecheck should fail");
-        assert!(error.contains("`add` input type mismatch: expected `f64`, found `i64`"));
+        assert!(error.contains("`add` input type mismatch: expected `i64`, found `f64`"));
     }
 
     #[test]
@@ -1641,7 +1704,12 @@ extern node demo(value: i64) -> out: i64 {
     #[test]
     fn codegen_preserves_i32_and_f32_numeric_types() {
         let source = r#"
-            import std.math { abs, add, mul, sqrt }
+            import std.math {
+                abs_i32 as abs,
+                add_i32 as add,
+                mul_f32 as mul,
+                sqrt_f32 as sqrt,
+            }
 
             extern node add_i32(left: i32, right: i32) -> out: Faultable[i32] {
                 ($left, $right) -> add -> $out
@@ -1701,7 +1769,7 @@ extern node demo(value: i64) -> out: i64 {
         let source = r#"
             import std.cli { Args }
             import std.fault { expect }
-            import std.math { add }
+            import std.math { add_i64 as add }
 
             program main(args: Args) -> exit_code: i64 {
                 (1, 2) -> add -> expect -> $exit_code
@@ -1828,18 +1896,25 @@ extern node demo(value: i64) -> out: i64 {
             r#"
                 import std.cli { Args }
                 import std.fault { expect }
-                import std.math { sub, eq, max }
+                import std.math {
+                    sub_f64,
+                    sub_i64,
+                    eq_f64,
+                    eq_i64,
+                    max_f64,
+                    max_i64,
+                }
 
                 program main(args: Args) -> exit_code: i64 {
-                    (5.0, 2.5) -> sub -> $real_sub
-                    (2.0, 2.5) -> max -> $real_max
-                    ($real_sub, $real_max) -> eq -> $real_ok
+                    (5.0, 2.5) -> sub_f64 -> $real_sub
+                    (2.0, 2.5) -> max_f64 -> $real_max
+                    ($real_sub, $real_max) -> eq_f64 -> $real_ok
 
-                    (4, 7) -> max -> $int_max
-                    ($int_max, 7) -> eq -> $max_ok
+                    (4, 7) -> max_i64 -> $int_max
+                    ($int_max, 7) -> eq_i64 -> $max_ok
 
-                    (9, 4) -> sub -> expect -> $int_sub
-                    ($int_sub, 5) -> eq -> $sub_ok
+                    (9, 4) -> sub_i64 -> expect -> $int_sub
+                    ($int_sub, 5) -> eq_i64 -> $sub_ok
 
                     ($real_ok, $max_ok, false) -> select -> $first_ok
                     ($first_ok, $sub_ok, false) -> select -> $all_ok
@@ -2010,7 +2085,7 @@ extern node demo(value: i64) -> out: i64 {
             import std.io { read_stdin, write_stdout }
             import std.bytes { split_lines }
             import std.int { parse_int, format_int }
-            import std.math { add }
+            import std.math { add_i64 as add }
 
             program main(args: Args) -> exit_code: Faultable[i64] {
                 () -> read_stdin -> split_lines -> map parse_int -> $numbers
@@ -2116,7 +2191,16 @@ extern node demo(value: i64) -> out: i64 {
             r#"
                 import std.cli { Args }
                 import std.fault { expect }
-                import std.math { mul, div, rem, lt, gt, le, ge, eq }
+                import std.math {
+                    mul_i64 as mul,
+                    div_i64 as div,
+                    rem_i64 as rem,
+                    lt_i64 as lt,
+                    gt_i64 as gt,
+                    le_i64 as le,
+                    ge_i64 as ge,
+                    eq_i64 as eq,
+                }
 
                 program main(args: Args) -> exit_code: i64 {
                     # mul: 3 * 4 = 12
@@ -2300,7 +2384,7 @@ extern node demo(value: i64) -> out: i64 {
                 import std.cli { Args }
                 import std.fault { expect }
                 import std.int { parse_int }
-                import std.math { eq }
+                import std.math { eq_i64 as eq }
 
                 program main(args: Args) -> exit_code: i64 {
                     0 -> match {
@@ -2347,7 +2431,7 @@ extern node demo(value: i64) -> out: i64 {
             &path,
             r#"
                 import std.cli { Args }
-                import std.math { eq }
+                import std.math { eq_i64 as eq }
 
                 program main(args: Args) -> exit_code: i64 {
                     0 -> match {

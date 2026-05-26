@@ -2,15 +2,15 @@ import std.bytes { bytes_to_codes, byte_length }
 import std.fault { expect }
 import std.fs { read_file, write_file }
 import std.math {
-    abs as math_abs,
-    add as math_add,
-    div as math_div,
-    gt as math_gt,
-    max as math_max,
-    min as math_min,
-    mul as math_mul,
-    neg as math_neg,
-    sub as math_sub,
+    abs_f64 as math_abs,
+    add_f64 as math_add,
+    div_f64 as math_div,
+    gt_f64 as math_gt,
+    max_f64 as math_max,
+    min_f64 as math_min,
+    mul_f64 as math_mul,
+    neg_f64 as math_neg,
+    sub_f64 as math_sub,
 }
 import std.real { from_int }
 import std.seq { broadcast_right, flatten as seq_flatten, zip }

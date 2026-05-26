@@ -32,10 +32,11 @@ Every file ends with exactly one trailing newline.
 
 ```flow
 import std.cli { Args }
-import std.math { add }
+import std.fault { expect }
+import std.math { add_i64 as add }
 
 program main(args: Args) -> exit_code: i64 {
-    (1, 2) -> add -> $exit_code
+    (1, 2) -> add -> expect -> $exit_code
 }
 ```
 
@@ -56,7 +57,7 @@ declarations by one blank line.
 type Pair = (i64, f64)
 
 node add_pair(pair: Pair) -> out: i64 {
-    $pair -> add -> $out
+    $pair -> add_i64 -> $out
 }
 ```
 
@@ -146,7 +147,7 @@ resets the alignment group:
 ```flow
 $input -> split_lines -> $raw_lines
 
-$numbers -> reduce add(identity: 0.0) -> $total
+$numbers -> reduce add_f64(identity: 0.0) -> $total
 $total   -> format_real               -> $total_bytes
 ```
 
@@ -154,7 +155,7 @@ Tuple joins and sequence literals use tight delimiters with `, ` between
 items. Tuple binding targets use the same spacing:
 
 ```flow
-($left, $right) -> add -> $sum
+($left, $right) -> add_i64 -> $sum
 $pair -> ($left, $right)
 [$sum, "\n"] -> concat_bytes -> $output
 ```
@@ -166,8 +167,8 @@ Combinators are printed in their compact canonical form:
 ```flow
 $xs -> map parse_real -> $numbers
 $xs -> filter not_empty -> $nonempty
-$numbers -> reduce add(identity: 0.0) -> $total
-$numbers -> scan add(identity: 0.0) -> $prefixes
+$numbers -> reduce add_f64(identity: 0.0) -> $total
+$numbers -> scan add_f64(identity: 0.0) -> $prefixes
 $items -> repeat<$count> step -> $out
 $lines -> fault map parse_real { ok -> $numbers, fault -> $faults }
 ```
@@ -192,7 +193,7 @@ spaces before `#`.
 
 ```flow
 # Explain the edge group.
-($b, 123) -> eq -> $is_left_brace  # {
+($b, 123) -> eq_i64 -> $is_left_brace  # {
 ```
 
 Standalone block comments are preserved and re-indented. Formatting comments
