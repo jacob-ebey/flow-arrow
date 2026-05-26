@@ -946,12 +946,15 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "decode" | "decode_bmp" | "decode_jpeg" | "decode_png" | "decode_pnm" => {
             Ok(Ty::Faultable(Box::new(cv_image_ty())))
         }
+        "normalize" => Ok(cv_image_ty()),
         "encode_bmp" | "encode_jpeg" | "encode_pgm" | "encode_png" | "encode_ppm" => {
             Ok(Ty::Faultable(Box::new(Ty::Bytes)))
         }
         "bytes_to_codes" | "range_step" => Ok(Ty::Seq(Box::new(Ty::I64))),
         "byte_length" | "length" | "inner_length" | "bit_and" | "bit_or" | "bit_xor"
         | "bit_shl" | "bit_shr" => Ok(Ty::I64),
+        "length_f32" => Ok(Ty::F32),
+        "length_f64" => Ok(Ty::F64),
         "parse_int" => Ok(Ty::Faultable(Box::new(Ty::I64))),
         "parse_real" => Ok(Ty::Faultable(Box::new(Ty::F64))),
         "from_int" => Ok(Ty::F64),
@@ -1807,6 +1810,7 @@ fn count_endpoint_vars(endpoint: &TypedEndpoint, uses: &mut HashMap<String, usiz
         TypedEndpointKind::NodeRef { .. }
         | TypedEndpointKind::Int(_)
         | TypedEndpointKind::Real(_)
+        | TypedEndpointKind::RealF32(_)
         | TypedEndpointKind::Bool(_)
         | TypedEndpointKind::String(_)
         | TypedEndpointKind::Unit => {}
@@ -1867,6 +1871,7 @@ fn collect_endpoint_var_names(endpoint: &TypedEndpoint, names: &mut BTreeSet<Str
         TypedEndpointKind::NodeRef { .. }
         | TypedEndpointKind::Int(_)
         | TypedEndpointKind::Real(_)
+        | TypedEndpointKind::RealF32(_)
         | TypedEndpointKind::Bool(_)
         | TypedEndpointKind::String(_)
         | TypedEndpointKind::Unit => {}
@@ -1972,6 +1977,7 @@ fn is_zero(endpoint: &TypedEndpoint) -> bool {
     match &endpoint.kind {
         TypedEndpointKind::Int(value) => *value == 0,
         TypedEndpointKind::Real(value) => *value == 0.0,
+        TypedEndpointKind::RealF32(value) => *value == 0.0,
         _ => false,
     }
 }

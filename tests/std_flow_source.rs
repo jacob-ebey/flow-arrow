@@ -139,37 +139,79 @@ fn std_vector_source_nodes_run() {
 }
 
 #[test]
+fn f32_literals_run_without_conversion_nodes() {
+    let source = r#"
+        import std.cli { Args }
+        import std.io { write_stdout }
+        import std.math { add_f32 }
+        import std.real { format_real_f32 }
+
+        program main(args: Args) -> exit_code: i64 {
+            (1.0f32, 2.5f32) -> add_f32 -> format_real_f32 -> write_stdout -> $exit_code
+        }
+    "#;
+
+    let output = support::run_source("f32-literals", source, b"");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3.5");
+}
+
+#[test]
+fn source_backed_stdlib_does_not_use_conversion_nodes() {
+    let source_dir = std::path::Path::new("src/stdlib/source");
+    for entry in fs::read_dir(source_dir).expect("source stdlib dir") {
+        let path = entry.expect("source stdlib entry").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("flow") {
+            continue;
+        }
+        let source = fs::read_to_string(&path).expect("source stdlib file");
+        assert!(
+            !source.contains("from_"),
+            "{} must not use from_* conversion nodes internally",
+            path.display()
+        );
+    }
+}
+
+#[test]
 fn std_vector_f32_source_nodes_run() {
     let source = r#"
         import std.cli { Args }
         import std.fault { expect }
         import std.math { div_f32, eq_f32 as eq }
-        import std.real { from_int_f32 }
         import std.vector {
             add_f32 as vector_add_f32,
             equals_f32 as vector_equals_f32,
             dot_f32,
+            mean_square_f32,
+            rms_f32,
+            rms_norm_f32,
             relu_f32,
+            swiglu_f32,
             softmax_f32,
             squared_norm_f32,
             squared_distance_f32,
         }
 
         program main(args: Args) -> exit_code: i64 {
-            1  -> from_int_f32 -> $one
-            2  -> from_int_f32 -> $two
-            3  -> from_int_f32 -> $three
-            4  -> from_int_f32 -> $four
-            5  -> from_int_f32 -> $five
-            6  -> from_int_f32 -> $six
-            7  -> from_int_f32 -> $seven
-            9  -> from_int_f32 -> $nine
-            25 -> from_int_f32 -> $twenty_five
-            32 -> from_int_f32 -> $thirty_two
-            49 -> from_int_f32 -> $forty_nine
+            1.0f32  -> $one
+            2.0f32  -> $two
+            3.0f32  -> $three
+            4.0f32  -> $four
+            5.0f32  -> $five
+            6.0f32  -> $six
+            7.0f32  -> $seven
+            9.0f32  -> $nine
+            25.0f32 -> $twenty_five
+            32.0f32 -> $thirty_two
+            49.0f32 -> $forty_nine
             ($one, $two) -> div_f32 -> expect -> $half
-            0 -> from_int_f32 -> $zero
-            -1 -> from_int_f32 -> $minus_one
+            0.0f32  -> $zero
+            -1.0f32 -> $minus_one
 
             ([$one, $two, $three], [$four, $five, $six]) -> vector_add_f32 -> $added
             ($added, [$five, $seven, $nine]) -> vector_equals_f32 -> $add_ok
@@ -186,6 +228,18 @@ fn std_vector_f32_source_nodes_run() {
             [$two, $three, $six] -> squared_norm_f32 -> $norm_squared
             ($norm_squared, $forty_nine) -> eq -> $norm_ok
 
+            [$two, $two] -> mean_square_f32 -> $mean_square
+            ($mean_square, $four) -> eq -> $mean_square_ok
+
+            ([$two, $two], $zero) -> rms_f32 -> $rms
+            ($rms, $two) -> eq -> $rms_ok
+
+            ([$two, $two], [$one, $one], $zero) -> rms_norm_f32 -> $rms_normalized
+            ($rms_normalized, [$one, $one]) -> vector_equals_f32 -> $rms_norm_ok
+
+            ([$zero, $zero], [$four, $five]) -> swiglu_f32 -> $swiglu_values
+            ($swiglu_values, [$zero, $zero]) -> vector_equals_f32 -> $swiglu_ok
+
             ([$one, $two, $three], [$four, $six, $three]) -> squared_distance_f32 -> $distance_squared
             ($distance_squared, $twenty_five) -> eq -> $distance_ok
 
@@ -193,7 +247,11 @@ fn std_vector_f32_source_nodes_run() {
             ($s1, $norm_ok, false) -> select -> $s2
             ($s2, $distance_ok, false) -> select -> $s3
             ($s3, $relu_ok, false) -> select -> $s4
-            ($s4, $softmax_ok, false) -> select -> $all_ok
+            ($s4, $softmax_ok, false) -> select -> $s5
+            ($s5, $mean_square_ok, false) -> select -> $s6
+            ($s6, $rms_ok, false) -> select -> $s7
+            ($s7, $rms_norm_ok, false) -> select -> $s8
+            ($s8, $swiglu_ok, false) -> select -> $all_ok
             ($all_ok, 0, 1) -> select -> $exit_code
         }
     "#;
@@ -212,32 +270,36 @@ fn std_matrix_f32_source_nodes_run() {
         import std.cli { Args }
         import std.fault { expect }
         import std.math { div_f32, eq_f32 as eq }
-        import std.real { from_int_f32 }
         import std.vector { equals_f32 as vector_equals_f32 }
         import std.matrix {
             equals_f32 as matrix_equals_f32,
             add_f32 as matrix_add_f32,
+            row_mean_squares_f32,
+            row_rms_f32,
+            row_rms_norm_f32,
             row_softmax_f32,
+            row_swiglu_f32,
             matvec_f32,
             matmul_f32,
         }
 
         program main(args: Args) -> exit_code: i64 {
-            0  -> from_int_f32 -> $zero
-            1  -> from_int_f32 -> $one
-            2  -> from_int_f32 -> $two
-            3  -> from_int_f32 -> $three
-            4  -> from_int_f32 -> $four
-            5  -> from_int_f32 -> $five
-            6  -> from_int_f32 -> $six
-            7  -> from_int_f32 -> $seven
-            8  -> from_int_f32 -> $eight
-            10 -> from_int_f32 -> $ten
-            12 -> from_int_f32 -> $twelve
-            22 -> from_int_f32 -> $twenty_two
-            28 -> from_int_f32 -> $twenty_eight
-            49 -> from_int_f32 -> $forty_nine
-            64 -> from_int_f32 -> $sixty_four
+            0.0f32  -> $zero
+            1.0f32  -> $one
+            2.0f32  -> $two
+            3.0f32  -> $three
+            4.0f32  -> $four
+            5.0f32  -> $five
+            6.0f32  -> $six
+            7.0f32  -> $seven
+            8.0f32  -> $eight
+            10.0f32 -> $ten
+            12.0f32 -> $twelve
+            22.0f32 -> $twenty_two
+            25.0f32 -> $twenty_five
+            28.0f32 -> $twenty_eight
+            49.0f32 -> $forty_nine
+            64.0f32 -> $sixty_four
             ($one, $two) -> div_f32 -> expect -> $half
 
             [[$one, $two, $three], [$four, $five, $six]] -> $a
@@ -248,6 +310,18 @@ fn std_matrix_f32_source_nodes_run() {
             [[$zero, $zero], [$zero, $zero]] -> row_softmax_f32 -> $softmax_rows
             ($softmax_rows, [[$half, $half], [$half, $half]]) -> matrix_equals_f32 -> $row_softmax_ok
 
+            [[$two, $two], [$five, $five]] -> row_mean_squares_f32 -> $row_mean_squares
+            ($row_mean_squares, [$four, $twenty_five]) -> vector_equals_f32 -> $row_mean_squares_ok
+
+            ([[$two, $two], [$four, $four]], $zero) -> row_rms_f32 -> $row_rms
+            ($row_rms, [$two, $four]) -> vector_equals_f32 -> $row_rms_ok
+
+            ([[$two, $two], [$four, $four]], [$one, $one], $zero) -> row_rms_norm_f32 -> $row_rms_norm
+            ($row_rms_norm, [[$one, $one], [$one, $one]]) -> matrix_equals_f32 -> $row_rms_norm_ok
+
+            ([[$zero, $zero]], [[$four, $five]]) -> row_swiglu_f32 -> $row_swiglu
+            ($row_swiglu, [[$zero, $zero]]) -> matrix_equals_f32 -> $row_swiglu_ok
+
             ($a, [$one, $zero, $one]) -> matvec_f32 -> $mv
             ($mv, [$four, $ten]) -> vector_equals_f32 -> $matvec_ok
 
@@ -256,7 +330,11 @@ fn std_matrix_f32_source_nodes_run() {
 
             ($add_ok, $row_softmax_ok, false) -> select -> $s1
             ($s1, $matvec_ok, false) -> select -> $s2
-            ($s2, $matmul_ok, false) -> select -> $all_ok
+            ($s2, $matmul_ok, false) -> select -> $s3
+            ($s3, $row_mean_squares_ok, false) -> select -> $s4
+            ($s4, $row_rms_ok, false) -> select -> $s5
+            ($s5, $row_rms_norm_ok, false) -> select -> $s6
+            ($s6, $row_swiglu_ok, false) -> select -> $all_ok
             ($all_ok, 0, 1) -> select -> $exit_code
         }
     "#;
@@ -463,6 +541,92 @@ fn std_matrix_source_nodes_run() {
     assert!(runtime_llvm.contains("define"));
     assert!(main_llvm.contains("@flow_unboxed_main"));
     assert!(!build.build_dir.join(".cache/runtime.c").exists());
+}
+
+#[test]
+fn std_quant_core_types_and_q4_k_helpers_run() {
+    let source = r#"
+        import std.cli { Args }
+        import std.math { eq_i64 as eq }
+        import std.quant {
+            Q4KBlock,
+            Q4KMWeightMatrix,
+            q4_k_block,
+            q4_k_block_delta,
+            q4_k_block_min_delta,
+            q4_k_block_quants,
+            q4_k_block_scales,
+            q4_k_block_size,
+            q4_k_m_weight_blocks,
+            q4_k_m_weight_cols,
+            q4_k_m_weight_matrix,
+            q4_k_m_weight_rows,
+            q4_k_quant_bytes,
+            q4_k_scale_bytes,
+            q4_k_subblock_size,
+            q4_k_subblocks,
+            low_nibble,
+            high_nibble,
+        }
+
+        node keep_block(block: Q4KBlock) -> out: Q4KBlock {
+            $block -> $out
+        }
+
+        node keep_weight(matrix: Q4KMWeightMatrix) -> out: Q4KMWeightMatrix {
+            $matrix -> $out
+        }
+
+        program main(args: Args) -> exit_code: i64 {
+            1.0f32 -> $one
+            2.0f32 -> $two
+            ($one, $two, "abcdefghijkl", "quantized payload") -> q4_k_block -> keep_block -> $block
+            $block -> q4_k_block_scales -> $scales
+            $block -> q4_k_block_quants -> $quants
+            $block -> q4_k_block_delta -> $delta
+            $block -> q4_k_block_min_delta -> $min_delta
+
+            (2, 256, [$block]) -> q4_k_m_weight_matrix -> keep_weight -> $weights
+            $weights -> q4_k_m_weight_rows -> $rows
+            $weights -> q4_k_m_weight_cols -> $cols
+            $weights -> q4_k_m_weight_blocks -> $blocks
+
+            () -> q4_k_block_size -> $block_size
+            () -> q4_k_subblock_size -> $subblock_size
+            () -> q4_k_subblocks -> $subblocks
+            () -> q4_k_scale_bytes -> $scale_bytes
+            () -> q4_k_quant_bytes -> $quant_bytes
+            171 -> low_nibble -> $low
+            171 -> high_nibble -> $high
+
+            ($rows, 2) -> eq -> $rows_ok
+            ($cols, 256) -> eq -> $cols_ok
+            ($block_size, 256) -> eq -> $block_size_ok
+            ($subblock_size, 32) -> eq -> $subblock_size_ok
+            ($subblocks, 8) -> eq -> $subblocks_ok
+            ($scale_bytes, 12) -> eq -> $scale_bytes_ok
+            ($quant_bytes, 128) -> eq -> $quant_bytes_ok
+            ($low, 11) -> eq -> $low_ok
+            ($high, 10) -> eq -> $high_ok
+
+            ($rows_ok, $cols_ok, false) -> select -> $s1
+            ($s1, $block_size_ok, false) -> select -> $s2
+            ($s2, $subblock_size_ok, false) -> select -> $s3
+            ($s3, $subblocks_ok, false) -> select -> $s4
+            ($s4, $scale_bytes_ok, false) -> select -> $s5
+            ($s5, $quant_bytes_ok, false) -> select -> $s6
+            ($s6, $low_ok, false) -> select -> $s7
+            ($s7, $high_ok, false) -> select -> $all_ok
+            ($all_ok, 0, 1) -> select -> $exit_code
+        }
+    "#;
+
+    let output = support::run_source("quant-core-types", source, b"");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

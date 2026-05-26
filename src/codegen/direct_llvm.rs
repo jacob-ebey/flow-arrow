@@ -690,6 +690,14 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 value: self.context.f64_type().const_float(*value).into(),
                 ty: endpoint.ty.clone(),
             }),
+            TypedEndpointKind::RealF32(value) => Ok(LlvmValue {
+                value: self
+                    .context
+                    .f32_type()
+                    .const_float(f64::from(*value))
+                    .into(),
+                ty: endpoint.ty.clone(),
+            }),
             TypedEndpointKind::Bool(value) => Ok(LlvmValue {
                 value: self
                     .context

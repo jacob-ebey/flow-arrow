@@ -38,6 +38,7 @@ pub const DECODE_PNM: StdSymbol = node(
     "Bytes",
     "Faultable[((i64,i64),Seq[Seq[(f64,(f64,f64))]])]",
 );
+pub const NORMALIZE: StdSymbol = node(MODULE, "normalize", "Bytes", IMAGE);
 pub const ENCODE_BMP: StdSymbol = node(MODULE, "encode_bmp", IMAGE, "Faultable[Bytes]");
 pub const ENCODE_JPEG: StdSymbol = node(MODULE, "encode_jpeg", IMAGE, "Faultable[Bytes]");
 pub const ENCODE_PGM: StdSymbol = node(MODULE, "encode_pgm", IMAGE, "Faultable[Bytes]");

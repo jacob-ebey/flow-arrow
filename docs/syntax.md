@@ -66,11 +66,14 @@ header    source    c         js
 ```ebnf
 literal    ::= INT | REAL | BOOL | STRING
 INT        ::= "-"? digit+
-REAL       ::= "-"? digit+ "." digit+
+REAL       ::= "-"? digit+ "." digit+ ("f32" | "f64")?
 BOOL       ::= "true" | "false"
 STRING     ::= "\"" (any character except "\"" or "\\" | escape)* "\""
 escape     ::= "\\" ("\"" | "\\" | "n" | "t" | "r")
 ```
+
+Unsuffixed real literals and `f64`-suffixed real literals have type
+`f64`. `f32`-suffixed real literals, such as `0.0f32`, have type `f32`.
 
 ### 1.4 Punctuation and operators
 

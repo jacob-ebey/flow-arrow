@@ -1,10 +1,8 @@
-import std.bytes { bytes_to_codes, byte_length }
 import std.fault { expect }
 import std.fs { read_file, write_file }
 import std.math {
     abs_f64 as math_abs,
     add_f64 as math_add,
-    div_f64 as math_div,
     gt_f64 as math_gt,
     max_f64 as math_max,
     min_f64 as math_min,
@@ -12,7 +10,6 @@ import std.math {
     neg_f64 as math_neg,
     sub_f64 as math_sub,
 }
-import std.real { from_int }
 import std.seq { broadcast_right, flatten as seq_flatten, zip }
 import std.tuple { first, second }
 import std.cv.native {
@@ -26,6 +23,7 @@ import std.cv.native {
     encode_pgm as encode_pgm_native,
     encode_png as encode_png_native,
     encode_ppm as encode_ppm_native,
+    normalize as normalize_native,
 }
 
 type Size = (i64, i64)
@@ -68,11 +66,6 @@ node gray_value_to_srgb_pixel(value: f64) -> pixel: Pixel {
     ($channel, ($channel, $channel)) -> $pixel
 }
 
-node gray_code_to_srgb_pixel(code: i64) -> pixel: Pixel {
-    $code               -> from_int -> $real_code
-    ($real_code, 255.0) -> math_div -> expect -> gray_value_to_srgb_pixel -> $pixel
-}
-
 node srgb_pixel_to_luma(pixel: Pixel) -> luma: f64 {
     $pixel                           -> first    -> $red
     $pixel                           -> second   -> $green_blue
@@ -90,9 +83,7 @@ node srgb_pixel_to_gray_pixel(pixel: Pixel) -> out: Pixel {
 }
 
 extern node normalize(bytes: Bytes) -> image: Image {
-    $bytes                   -> byte_length    -> $width
-    $bytes                   -> bytes_to_codes -> map gray_code_to_srgb_pixel -> $values
-    (($width, 1), [$values]) -> $image
+    $bytes -> normalize_native -> $image
 }
 
 extern node grayscale(image: Image) -> out: Image {

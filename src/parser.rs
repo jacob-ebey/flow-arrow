@@ -604,6 +604,10 @@ impl Parser {
                 self.bump();
                 Ok(Endpoint::Real(value))
             }
+            Token::RealF32(value) => {
+                self.bump();
+                Ok(Endpoint::RealF32(value))
+            }
             Token::Bool(value) => {
                 self.bump();
                 Ok(Endpoint::Bool(value))

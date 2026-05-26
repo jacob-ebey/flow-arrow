@@ -25,6 +25,7 @@ Initial modules:
 | [`std.sqlite`](./sqlite.md) | SQLite database boundary I/O |
 | [`std.tuple`](./tuple.md) | Generic tuple projection helpers |
 | [`std.fault`](./fault.md) | Fault diagnostics and fault-status helpers |
+| [`std.quant`](./quant.md) | Quantized inference types and packed Q4_K helpers |
 | [`std.vector`](./vector.md) | Source-backed vector operations |
 | [`std.matrix`](./matrix.md) | Source-backed matrix operations |
 

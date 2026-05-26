@@ -7,6 +7,7 @@ pub enum Token {
     Discard,
     Int(i64),
     Real(f64),
+    RealF32(f32),
     Bool(bool),
     String(String),
     Arrow,
@@ -159,13 +160,28 @@ impl Lexer {
                 self.advance(self.chars[self.pos]);
             }
             let text: String = self.chars[start..self.pos].iter().collect();
-            let value = text.parse::<f64>().map_err(|error| {
-                SourceDiagnostic::new(
-                    format!("invalid real literal `{text}`: {error}"),
-                    SourceSpan::new(start_position, self.position),
-                )
-            })?;
-            self.push(Token::Real(value), start_position);
+            let suffix = self.lex_numeric_suffix();
+            let token = match suffix.as_deref() {
+                None | Some("f64") => Token::Real(text.parse::<f64>().map_err(|error| {
+                    SourceDiagnostic::new(
+                        format!("invalid real literal `{text}`: {error}"),
+                        SourceSpan::new(start_position, self.position),
+                    )
+                })?),
+                Some("f32") => Token::RealF32(text.parse::<f32>().map_err(|error| {
+                    SourceDiagnostic::new(
+                        format!("invalid f32 literal `{text}`: {error}"),
+                        SourceSpan::new(start_position, self.position),
+                    )
+                })?),
+                Some(suffix) => {
+                    return Err(SourceDiagnostic::new(
+                        format!("unsupported real literal suffix `{suffix}`"),
+                        SourceSpan::new(start_position, self.position),
+                    ));
+                }
+            };
+            self.push(token, start_position);
         } else {
             let value = text.parse::<i64>().map_err(|error| {
                 SourceDiagnostic::new(
@@ -176,6 +192,17 @@ impl Lexer {
             self.push(Token::Int(value), start_position);
         }
         Ok(())
+    }
+
+    fn lex_numeric_suffix(&mut self) -> Option<String> {
+        if !matches!(self.peek(), Some(ch) if ch.is_ascii_alphabetic()) {
+            return None;
+        }
+        let suffix_start = self.pos;
+        while matches!(self.peek(), Some(ch) if ch.is_ascii_alphanumeric() || ch == '_') {
+            self.advance(self.chars[self.pos]);
+        }
+        Some(self.chars[suffix_start..self.pos].iter().collect())
     }
 
     fn lex_string(&mut self) -> Result<(), SourceDiagnostic> {

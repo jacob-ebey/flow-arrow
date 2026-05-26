@@ -28,10 +28,14 @@ import std.vector {
     equals_f64 as vector_equals,
     dot_f64 as vector_dot,
     squared_norm_f64 as vector_squared_norm,
+    mean_square_f64 as vector_mean_square,
     l1_norm_f64 as vector_l1_norm,
     norm_f64 as vector_norm,
+    rms_f64 as vector_rms,
     normalize_f64 as vector_normalize,
+    rms_norm_f64 as vector_rms_norm,
     softmax_f64 as vector_softmax,
+    swiglu_f64 as vector_swiglu,
     sum_f32 as vector_sum_f32,
     mean_f32 as vector_mean_f32,
     neg_f32 as vector_neg_f32,
@@ -50,10 +54,14 @@ import std.vector {
     equals_f32 as vector_equals_f32,
     dot_f32 as vector_dot_f32,
     squared_norm_f32 as vector_squared_norm_f32,
+    mean_square_f32 as vector_mean_square_f32,
     l1_norm_f32 as vector_l1_norm_f32,
     norm_f32 as vector_norm_f32,
+    rms_f32 as vector_rms_f32,
     normalize_f32 as vector_normalize_f32,
+    rms_norm_f32 as vector_rms_norm_f32,
     softmax_f32 as vector_softmax_f32,
+    swiglu_f32 as vector_swiglu_f32,
 }
 
 extern node rows_f64(matrix: Seq[Seq[f64]]) -> count: i64 {
@@ -220,8 +228,30 @@ extern node row_norms_f64(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
     $matrix -> map vector_norm -> $out
 }
 
+extern node row_mean_squares_f64(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
+    $matrix -> map vector_mean_square -> $out
+}
+
+node row_rms_with_epsilon(pair: (Seq[f64], f64)) -> out: f64 {
+    $pair -> vector_rms -> $out
+}
+
+extern node row_rms_f64(inputs: (Seq[Seq[f64]], f64)) -> out: Seq[f64] {
+    $inputs -> broadcast_right -> map row_rms_with_epsilon -> $out
+}
+
 extern node column_norms_f64(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
     $matrix -> transpose_f64 -> map vector_norm -> $out
+}
+
+extern node column_mean_squares_f64(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
+    $matrix -> transpose_f64 -> map vector_mean_square -> $out
+}
+
+extern node column_rms_f64(inputs: (Seq[Seq[f64]], f64)) -> out: Seq[f64] {
+    $inputs                 -> ($matrix, $epsilon)
+    $matrix                 -> transpose_f64 -> $transposed
+    ($transposed, $epsilon) -> row_rms_f64   -> $out
 }
 
 node row_squared_norm(row: Seq[f64]) -> total: f64 {
@@ -252,8 +282,27 @@ extern node normalize_rows_f64(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
     $matrix -> map vector_normalize -> $out
 }
 
+node rms_norm_row(pair: (Seq[f64], (Seq[f64], f64))) -> out: Seq[f64] {
+    $pair                      -> ($row, ($weights, $epsilon))
+    ($row, $weights, $epsilon) -> vector_rms_norm -> $out
+}
+
+extern node row_rms_norm_f64(inputs: (Seq[Seq[f64]], Seq[f64], f64)) -> out: Seq[Seq[f64]] {
+    $inputs              -> ($matrix, $weights, $epsilon)
+    ($weights, $epsilon) -> $params
+    ($matrix, $params)   -> broadcast_right -> map rms_norm_row -> $out
+}
+
 extern node row_softmax_f64(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
     $matrix -> map vector_softmax -> $out
+}
+
+node swiglu_rows(pair: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
+    $pair -> vector_swiglu -> $out
+}
+
+extern node row_swiglu_f64(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
+    $inputs -> zip -> map swiglu_rows -> $out
 }
 
 extern node squared_distance_f64(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> total: f64 {
@@ -467,8 +516,30 @@ extern node row_norms_f32(matrix: Seq[Seq[f32]]) -> out: Seq[f32] {
     $matrix -> map vector_norm_f32 -> $out
 }
 
+extern node row_mean_squares_f32(matrix: Seq[Seq[f32]]) -> out: Seq[f32] {
+    $matrix -> map vector_mean_square_f32 -> $out
+}
+
+node row_rms_with_epsilon_f32(pair: (Seq[f32], f32)) -> out: f32 {
+    $pair -> vector_rms_f32 -> $out
+}
+
+extern node row_rms_f32(inputs: (Seq[Seq[f32]], f32)) -> out: Seq[f32] {
+    $inputs -> broadcast_right -> map row_rms_with_epsilon_f32 -> $out
+}
+
 extern node column_norms_f32(matrix: Seq[Seq[f32]]) -> out: Seq[f32] {
     $matrix -> transpose_f32 -> map vector_norm_f32 -> $out
+}
+
+extern node column_mean_squares_f32(matrix: Seq[Seq[f32]]) -> out: Seq[f32] {
+    $matrix -> transpose_f32 -> map vector_mean_square_f32 -> $out
+}
+
+extern node column_rms_f32(inputs: (Seq[Seq[f32]], f32)) -> out: Seq[f32] {
+    $inputs                 -> ($matrix, $epsilon)
+    $matrix                 -> transpose_f32 -> $transposed
+    ($transposed, $epsilon) -> row_rms_f32   -> $out
 }
 
 node row_squared_norm_f32(row: Seq[f32]) -> total: f32 {
@@ -499,8 +570,27 @@ extern node normalize_rows_f32(matrix: Seq[Seq[f32]]) -> out: Seq[Seq[f32]] {
     $matrix -> map vector_normalize_f32 -> $out
 }
 
+node rms_norm_row_f32(pair: (Seq[f32], (Seq[f32], f32))) -> out: Seq[f32] {
+    $pair                      -> ($row, ($weights, $epsilon))
+    ($row, $weights, $epsilon) -> vector_rms_norm_f32 -> $out
+}
+
+extern node row_rms_norm_f32(inputs: (Seq[Seq[f32]], Seq[f32], f32)) -> out: Seq[Seq[f32]] {
+    $inputs              -> ($matrix, $weights, $epsilon)
+    ($weights, $epsilon) -> $params
+    ($matrix, $params)   -> broadcast_right -> map rms_norm_row_f32 -> $out
+}
+
 extern node row_softmax_f32(matrix: Seq[Seq[f32]]) -> out: Seq[Seq[f32]] {
     $matrix -> map vector_softmax_f32 -> $out
+}
+
+node swiglu_rows_f32(pair: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
+    $pair -> vector_swiglu_f32 -> $out
+}
+
+extern node row_swiglu_f32(inputs: (Seq[Seq[f32]], Seq[Seq[f32]])) -> out: Seq[Seq[f32]] {
+    $inputs -> zip -> map swiglu_rows_f32 -> $out
 }
 
 extern node squared_distance_f32(inputs: (Seq[Seq[f32]], Seq[Seq[f32]])) -> total: f32 {

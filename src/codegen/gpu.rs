@@ -309,6 +309,7 @@ impl<'a> ScalarKernelBuilder<'a> {
                 .ok_or_else(|| format!("GPU scalar kernel value `{name}` is not bound")),
             TypedEndpointKind::Int(value) => Ok(GpuExpr::Int(*value)),
             TypedEndpointKind::Real(value) => Ok(GpuExpr::Real(*value)),
+            TypedEndpointKind::RealF32(value) => Ok(GpuExpr::Real(f64::from(*value))),
             TypedEndpointKind::Bool(value) => Ok(GpuExpr::Bool(*value)),
             TypedEndpointKind::Tuple(items) => Ok(GpuExpr::Tuple(
                 items

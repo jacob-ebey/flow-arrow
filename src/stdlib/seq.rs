@@ -3,6 +3,8 @@ use super::*;
 const MODULE: &str = "std.seq";
 
 pub const LENGTH: StdSymbol = node(MODULE, "length", "Seq[Var]", "i64");
+pub const LENGTH_F32: StdSymbol = node(MODULE, "length_f32", "Seq[Var]", "f32");
+pub const LENGTH_F64: StdSymbol = node(MODULE, "length_f64", "Seq[Var]", "f64");
 pub const IS_EMPTY: StdSymbol = node(MODULE, "is_empty", "Seq[Var]", "Bool");
 pub const GROUP_BY_ID: StdSymbol = node(
     MODULE,

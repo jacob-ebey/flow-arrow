@@ -24,9 +24,9 @@ import std.math {
 }
 import std.fault { expect }
 import std.predicates { all }
-import std.real { from_int, from_int_f32 }
 import std.seq {
-    length,
+    length_f32,
+    length_f64,
     head,
     tail,
     zip,
@@ -40,9 +40,9 @@ extern node sum_f64(values: Seq[f64]) -> total: f64 {
 }
 
 extern node mean_f64(values: Seq[f64]) -> average: f64 {
-    $values          -> sum_f64  -> $total
-    $values          -> length   -> from_int -> $count
-    ($total, $count) -> math_div -> expect   -> $average
+    $values          -> sum_f64    -> $total
+    $values          -> length_f64 -> $count
+    ($total, $count) -> math_div   -> expect -> $average
 }
 
 extern node min_f64(values: Seq[f64]) -> out: f64 {
@@ -163,6 +163,12 @@ extern node squared_norm_f64(values: Seq[f64]) -> total: f64 {
     $values -> map square -> sum_f64 -> $total
 }
 
+extern node mean_square_f64(values: Seq[f64]) -> average: f64 {
+    $values          -> squared_norm_f64 -> $total
+    $values          -> length_f64       -> $count
+    ($total, $count) -> math_div         -> expect -> $average
+}
+
 extern node l1_norm_f64(values: Seq[f64]) -> total: f64 {
     $values -> abs_f64 -> sum_f64 -> $total
 }
@@ -171,9 +177,22 @@ extern node norm_f64(values: Seq[f64]) -> total: f64 {
     $values -> squared_norm_f64 -> math_sqrt -> expect -> $total
 }
 
+extern node rms_f64(inputs: (Seq[f64], f64)) -> out: f64 {
+    $inputs                  -> ($values, $epsilon)
+    $values                  -> mean_square_f64 -> $mean_square
+    ($mean_square, $epsilon) -> math_add        -> math_sqrt -> expect -> $out
+}
+
 extern node normalize_f64(values: Seq[f64]) -> out: Seq[f64] {
     $values               -> norm_f64       -> $magnitude
     ($values, $magnitude) -> div_scalar_f64 -> $out
+}
+
+extern node rms_norm_f64(inputs: (Seq[f64], Seq[f64], f64)) -> out: Seq[f64] {
+    $inputs                 -> ($values, $weights, $epsilon)
+    ($values, $epsilon)     -> rms_f64        -> $rms
+    ($values, $rms)         -> div_scalar_f64 -> $normalized
+    ($normalized, $weights) -> mul_f64        -> $out
 }
 
 node relu_value(value: f64) -> out: f64 {
@@ -193,6 +212,12 @@ extern node sigmoid_f64(values: Seq[f64]) -> out: Seq[f64] {
 extern node silu_f64(values: Seq[f64]) -> out: Seq[f64] {
     $values               -> sigmoid_f64 -> $activated
     ($values, $activated) -> mul_f64     -> $out
+}
+
+extern node swiglu_f64(inputs: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
+    $inputs      -> first   -> silu_f64 -> $gate
+    $inputs      -> second  -> $up
+    ($gate, $up) -> mul_f64 -> $out
 }
 
 extern node softmax_f64(values: Seq[f64]) -> out: Seq[f64] {
@@ -219,14 +244,14 @@ extern node distance_f64(inputs: (Seq[f64], Seq[f64])) -> total: f64 {
 }
 
 extern node sum_f32(values: Seq[f32]) -> total: f32 {
-    0       -> from_int_f32                         -> $zero
+    0.0f32  -> $zero
     $values -> reduce math_add_f32(identity: $zero) -> $total
 }
 
 extern node mean_f32(values: Seq[f32]) -> average: f32 {
     $values          -> sum_f32      -> $total
-    $values          -> length       -> from_int_f32 -> $count
-    ($total, $count) -> math_div_f32 -> expect       -> $average
+    $values          -> length_f32   -> $count
+    ($total, $count) -> math_div_f32 -> expect -> $average
 }
 
 extern node min_f32(values: Seq[f32]) -> out: f32 {
@@ -336,8 +361,8 @@ node dot_pair_f32(pair: (f32, f32)) -> product: f32 {
 }
 
 extern node dot_f32(inputs: (Seq[f32], Seq[f32])) -> total: f32 {
-    0       -> from_int_f32 -> $zero
-    $inputs -> zip          -> map dot_pair_f32 -> reduce math_add_f32(identity: $zero) -> $total
+    0.0f32  -> $zero
+    $inputs -> zip -> map dot_pair_f32 -> reduce math_add_f32(identity: $zero) -> $total
 }
 
 node square_f32(value: f32) -> out: f32 {
@@ -348,6 +373,12 @@ extern node squared_norm_f32(values: Seq[f32]) -> total: f32 {
     $values -> map square_f32 -> sum_f32 -> $total
 }
 
+extern node mean_square_f32(values: Seq[f32]) -> average: f32 {
+    $values          -> squared_norm_f32 -> $total
+    $values          -> length_f32       -> $count
+    ($total, $count) -> math_div_f32     -> expect -> $average
+}
+
 extern node l1_norm_f32(values: Seq[f32]) -> total: f32 {
     $values -> abs_f32 -> sum_f32 -> $total
 }
@@ -356,13 +387,26 @@ extern node norm_f32(values: Seq[f32]) -> total: f32 {
     $values -> squared_norm_f32 -> math_sqrt_f32 -> expect -> $total
 }
 
+extern node rms_f32(inputs: (Seq[f32], f32)) -> out: f32 {
+    $inputs                  -> ($values, $epsilon)
+    $values                  -> mean_square_f32 -> $mean_square
+    ($mean_square, $epsilon) -> math_add_f32    -> math_sqrt_f32 -> expect -> $out
+}
+
 extern node normalize_f32(values: Seq[f32]) -> out: Seq[f32] {
     $values               -> norm_f32       -> $magnitude
     ($values, $magnitude) -> div_scalar_f32 -> $out
 }
 
+extern node rms_norm_f32(inputs: (Seq[f32], Seq[f32], f32)) -> out: Seq[f32] {
+    $inputs                 -> ($values, $weights, $epsilon)
+    ($values, $epsilon)     -> rms_f32        -> $rms
+    ($values, $rms)         -> div_scalar_f32 -> $normalized
+    ($normalized, $weights) -> mul_f32        -> $out
+}
+
 node relu_value_f32(value: f32) -> out: f32 {
-    0               -> from_int_f32 -> $zero
+    0.0f32          -> $zero
     ($value, $zero) -> math_max_f32 -> $out
 }
 
@@ -371,7 +415,7 @@ extern node relu_f32(values: Seq[f32]) -> out: Seq[f32] {
 }
 
 extern node sigmoid_f32(values: Seq[f32]) -> out: Seq[f32] {
-    1                    -> from_int_f32   -> $one
+    1.0f32               -> $one
     $values              -> neg_f32        -> exp_f32 -> $neg_exp
     ($neg_exp, $one)     -> add_scalar_f32 -> $denominator
     ($one, $denominator) -> scalar_div_f32 -> $out
@@ -380,6 +424,12 @@ extern node sigmoid_f32(values: Seq[f32]) -> out: Seq[f32] {
 extern node silu_f32(values: Seq[f32]) -> out: Seq[f32] {
     $values               -> sigmoid_f32 -> $activated
     ($values, $activated) -> mul_f32     -> $out
+}
+
+extern node swiglu_f32(inputs: (Seq[f32], Seq[f32])) -> out: Seq[f32] {
+    $inputs      -> first   -> silu_f32 -> $gate
+    $inputs      -> second  -> $up
+    ($gate, $up) -> mul_f32 -> $out
 }
 
 extern node softmax_f32(values: Seq[f32]) -> out: Seq[f32] {

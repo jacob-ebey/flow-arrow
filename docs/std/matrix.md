@@ -17,11 +17,13 @@ each row.
 | `add_row_f32`, `add_row_f64`, `sub_row_f32`, `sub_row_f64`, `mul_row_f32`, `mul_row_f64`, `div_row_f32`, `div_row_f64` | `(Seq[Seq[T]],Seq[T])` | `Seq[Seq[T]]` | Broadcast a row vector across rows |
 | `equals_f32`, `equals_f64` | `(Seq[Seq[T]],Seq[Seq[T]])` | `Bool` | Rowwise equality followed by `all` |
 | `sum_f32`, `sum_f64`, `mean_f32`, `mean_f64` | `Seq[Seq[T]]` | `T` | Matrix-wide reductions |
-| `row_sums_f32`, `row_sums_f64`, `row_means_f32`, `row_means_f64`, `row_norms_f32`, `row_norms_f64` | `Seq[Seq[T]]` | `Seq[T]` | Per-row reductions |
-| `column_sums_f32`, `column_sums_f64`, `column_means_f32`, `column_means_f64`, `column_norms_f32`, `column_norms_f64` | `Seq[Seq[T]]` | `Seq[T]` | Per-column reductions via transpose |
+| `row_sums_f32`, `row_sums_f64`, `row_means_f32`, `row_means_f64`, `row_norms_f32`, `row_norms_f64`, `row_mean_squares_f32`, `row_mean_squares_f64`, `row_rms_f32`, `row_rms_f64` | `Seq[Seq[T]]` or `(Seq[Seq[T]],T)` for RMS | `Seq[T]` | Per-row reductions |
+| `column_sums_f32`, `column_sums_f64`, `column_means_f32`, `column_means_f64`, `column_norms_f32`, `column_norms_f64`, `column_mean_squares_f32`, `column_mean_squares_f64`, `column_rms_f32`, `column_rms_f64` | `Seq[Seq[T]]` or `(Seq[Seq[T]],T)` for RMS | `Seq[T]` | Per-column reductions via transpose |
 | `squared_norm_f32`, `squared_norm_f64`, `l1_norm_f32`, `l1_norm_f64`, `norm_f32`, `norm_f64`, `frobenius_norm_f32`, `frobenius_norm_f64` | `Seq[Seq[T]]` | `T` | Matrix norms |
 | `normalize_rows_f32`, `normalize_rows_f64` | `Seq[Seq[T]]` | `Seq[Seq[T]]` | Normalize each row by its Euclidean norm |
+| `row_rms_norm_f32`, `row_rms_norm_f64` | `(Seq[Seq[T]],Seq[T],T)` | `Seq[Seq[T]]` | RMS-normalize each row and multiply by weights |
 | `row_softmax_f32`, `row_softmax_f64` | `Seq[Seq[T]]` | `Seq[Seq[T]]` | Softmax each row independently |
+| `row_swiglu_f32`, `row_swiglu_f64` | `(Seq[Seq[T]],Seq[Seq[T]])` | `Seq[Seq[T]]` | Row-wise `silu(gate) * up` activation |
 | `squared_distance_f32`, `squared_distance_f64`, `distance_f32`, `distance_f64` | `(Seq[Seq[T]],Seq[Seq[T]])` | `T` | Frobenius distance |
 | `matvec_f32`, `matvec_f64` | `(Seq[Seq[T]],Seq[T])` | `Seq[T]` | Matrix-vector multiplication |
 | `vecmat_f32`, `vecmat_f64` | `(Seq[T],Seq[Seq[T]])` | `Seq[T]` | Vector-matrix multiplication |

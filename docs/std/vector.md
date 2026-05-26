@@ -28,12 +28,16 @@ graph structure it would compile for user-defined nodes.
 | `equals_f64` | `(Seq[f64],Seq[f64])` | `Bool` | Pairwise equality followed by `std.predicates.all` |
 | `dot_f64` | `(Seq[f64],Seq[f64])` | `f64` | Pairwise multiplication followed by `sum_f64` |
 | `squared_norm_f64` | `Seq[f64]` | `f64` | Sum of squared values |
+| `mean_square_f64` | `Seq[f64]` | `f64` | Mean of squared values |
 | `l1_norm_f64` | `Seq[f64]` | `f64` | Sum of absolute values |
 | `norm_f64` | `Seq[f64]` | `f64` | Square root of `squared_norm_f64` |
+| `rms_f64` | `(Seq[f64],f64)` | `f64` | Root mean square with epsilon |
 | `normalize_f64` | `Seq[f64]` | `Seq[f64]` | Divides values by their Euclidean norm |
+| `rms_norm_f64` | `(Seq[f64],Seq[f64],f64)` | `Seq[f64]` | RMS-normalize values and multiply by weights |
 | `relu_f64` | `Seq[f64]` | `Seq[f64]` | Elementwise rectified linear unit |
 | `sigmoid_f64` | `Seq[f64]` | `Seq[f64]` | Elementwise logistic activation |
 | `silu_f64` | `Seq[f64]` | `Seq[f64]` | Elementwise SiLU activation |
+| `swiglu_f64` | `(Seq[f64],Seq[f64])` | `Seq[f64]` | `silu(gate) * up` activation |
 | `softmax_f64` | `Seq[f64]` | `Seq[f64]` | Stable vector softmax |
 | `cosine_similarity_f64` | `(Seq[f64],Seq[f64])` | `f64` | Dot product divided by both norms |
 | `squared_distance_f64` | `(Seq[f64],Seq[f64])` | `f64` | Sum of squared pairwise differences |
@@ -59,12 +63,16 @@ graph structure it would compile for user-defined nodes.
 | `equals_f32` | `(Seq[f32],Seq[f32])` | `Bool` | Pairwise equality followed by `std.predicates.all` |
 | `dot_f32` | `(Seq[f32],Seq[f32])` | `f32` | Pairwise multiplication followed by `sum_f32` |
 | `squared_norm_f32` | `Seq[f32]` | `f32` | Sum of squared values |
+| `mean_square_f32` | `Seq[f32]` | `f32` | Mean of squared values |
 | `l1_norm_f32` | `Seq[f32]` | `f32` | Sum of absolute values |
 | `norm_f32` | `Seq[f32]` | `f32` | Square root of `squared_norm_f32` |
+| `rms_f32` | `(Seq[f32],f32)` | `f32` | Root mean square with epsilon |
 | `normalize_f32` | `Seq[f32]` | `Seq[f32]` | Divides values by their Euclidean norm |
+| `rms_norm_f32` | `(Seq[f32],Seq[f32],f32)` | `Seq[f32]` | RMS-normalize values and multiply by weights |
 | `relu_f32` | `Seq[f32]` | `Seq[f32]` | Elementwise rectified linear unit |
 | `sigmoid_f32` | `Seq[f32]` | `Seq[f32]` | Elementwise logistic activation |
 | `silu_f32` | `Seq[f32]` | `Seq[f32]` | Elementwise SiLU activation |
+| `swiglu_f32` | `(Seq[f32],Seq[f32])` | `Seq[f32]` | `silu(gate) * up` activation |
 | `softmax_f32` | `Seq[f32]` | `Seq[f32]` | Stable vector softmax |
 | `cosine_similarity_f32` | `(Seq[f32],Seq[f32])` | `f32` | Dot product divided by both norms |
 | `squared_distance_f32` | `(Seq[f32],Seq[f32])` | `f32` | Sum of squared pairwise differences |

@@ -479,6 +479,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             | TypedEndpointKind::NodeRef { .. }
             | TypedEndpointKind::Int(_)
             | TypedEndpointKind::Real(_)
+            | TypedEndpointKind::RealF32(_)
             | TypedEndpointKind::Bool(_)
             | TypedEndpointKind::String(_)
             | TypedEndpointKind::Unit => Ok(false),
@@ -1783,6 +1784,10 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             TypedEndpointKind::Real(value) => {
                 Ok(ts_value(format!("{value:.17e}"), endpoint.ty.clone()))
             }
+            TypedEndpointKind::RealF32(value) => Ok(ts_value(
+                format!("Math.fround({value:.9e})"),
+                endpoint.ty.clone(),
+            )),
             TypedEndpointKind::Bool(value) => Ok(ts_value(value.to_string(), endpoint.ty.clone())),
             TypedEndpointKind::String(value) => Ok(ts_value(ts_string(value), endpoint.ty.clone())),
             TypedEndpointKind::Unit => Ok(ts_value("undefined", endpoint.ty.clone())),
@@ -2381,6 +2386,8 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 tuple_field(input, 2)
             ),
             "length" => format!("BigInt({}.length)", input.code),
+            "length_f32" => format!("Math.fround({}.length)", input.code),
+            "length_f64" => format!("Number({}.length)", input.code),
             "inner_length" => format!("BigInt({}[0]?.length ?? 0)", input.code),
             "first" => tuple_field(input, 0),
             "second" => tuple_field(input, 1),
@@ -3690,6 +3697,10 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             TypedEndpointKind::Real(value) => {
                 Ok(Some(ts_value(format!("{value:.17e}"), endpoint.ty.clone())))
             }
+            TypedEndpointKind::RealF32(value) => Ok(Some(ts_value(
+                format!("Math.fround({value:.9e})"),
+                endpoint.ty.clone(),
+            ))),
             TypedEndpointKind::Bool(value) => {
                 Ok(Some(ts_value(value.to_string(), endpoint.ty.clone())))
             }
@@ -3900,6 +3911,7 @@ fn endpoint_references_any(endpoint: &TypedEndpoint, names: &HashSet<String>) ->
         }
         TypedEndpointKind::Int(_)
         | TypedEndpointKind::Real(_)
+        | TypedEndpointKind::RealF32(_)
         | TypedEndpointKind::Bool(_)
         | TypedEndpointKind::String(_)
         | TypedEndpointKind::Unit => false,

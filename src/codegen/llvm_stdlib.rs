@@ -266,7 +266,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             "starts_with" => self.emit_runtime_binary("fa_bytes_starts_with", input, &output_ty)?,
             "ends_with" => self.emit_runtime_binary("fa_bytes_ends_with", input, &output_ty)?,
             "byte_length" => self.emit_byte_length(input, &output_ty)?,
-            "length" => self.emit_length(input, &output_ty)?,
+            "length" | "length_f32" | "length_f64" => self.emit_length(input, &output_ty)?,
             "inner_length" => self.emit_inner_length(input, &output_ty)?,
             "has_faults" => self.emit_not_empty(input)?,
             "not_empty" => self.emit_not_empty(input)?,
@@ -479,6 +479,9 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             "decode_jpeg" => self.emit_runtime_unary("fa_cv_decode_jpeg", input, &output_ty)?,
             "decode_png" => self.emit_runtime_unary("fa_cv_decode_png", input, &output_ty)?,
             "decode_pnm" => self.emit_runtime_unary("fa_cv_decode_pnm", input, &output_ty)?,
+            "normalize" => {
+                self.emit_runtime_unary_ptr_arg_sret("fa_cv_normalize", input, &output_ty)?
+            }
             "encode_bmp" => {
                 self.emit_runtime_unary_ptr_arg_sret("fa_cv_encode_bmp", input, &output_ty)?
             }
@@ -1445,8 +1448,33 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             });
         }
         match input.ty {
-            Ty::Seq(_) => Ok(self.seq_count(input.value)?.into()),
+            Ty::Seq(_) => {
+                let count = self.seq_count(input.value)?;
+                self.emit_count_as(count, output_ty, "length")
+            }
             other => Err(format!("length expected Seq, found `{other}`")),
+        }
+    }
+
+    fn emit_count_as(
+        &mut self,
+        count: IntValue<'ctx>,
+        output_ty: &Ty,
+        label: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match output_ty {
+            Ty::I64 => Ok(count.into()),
+            Ty::F32 | Ty::F64 => {
+                let float_ty = self.types.basic_type(output_ty)?.into_float_type();
+                Ok(self
+                    .builder
+                    .build_signed_int_to_float(count, float_ty, label)
+                    .map_err(|error| format!("LLVM backend failed to convert {label}: {error}"))?
+                    .into())
+            }
+            other => Err(format!(
+                "{label} expected i64, f32, or f64 output, found `{other}`"
+            )),
         }
     }
 

@@ -211,6 +211,7 @@ impl Monomorphizer {
             Endpoint::Variable(_)
             | Endpoint::Int(_)
             | Endpoint::Real(_)
+            | Endpoint::RealF32(_)
             | Endpoint::Bool(_)
             | Endpoint::String(_)
             | Endpoint::Unit => Ok(()),

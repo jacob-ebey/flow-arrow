@@ -10,7 +10,7 @@ extern node run_gpu_accumulator(iterations: i64) -> score: f32 {
     (1, 1025, 1)           -> range_step                       -> $indices
     $indices               -> map left_value                   -> $left
     $indices               -> map right_value                  -> $right
-    0                      -> from_int_f32                     -> $zero
+    0.0f32                 -> $zero
     ($left, $right, $zero) -> repeat<$iterations> score_kernel -> final_score -> $score
 }
 

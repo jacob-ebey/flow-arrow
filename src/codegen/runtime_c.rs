@@ -490,6 +490,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 | "decode_jpeg"
                 | "decode_png"
                 | "decode_pnm"
+                | "normalize"
                 | "encode_bmp"
                 | "encode_jpeg"
                 | "encode_pgm"
@@ -1804,6 +1805,10 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             }),
             TypedEndpointKind::Real(value) => Ok(Value {
                 code: format!("{value:.17e}"),
+                ty: endpoint.ty.clone(),
+            }),
+            TypedEndpointKind::RealF32(value) => Ok(Value {
+                code: format!("{value:.9e}f"),
                 ty: endpoint.ty.clone(),
             }),
             TypedEndpointKind::Bool(value) => Ok(Value {
@@ -3592,6 +3597,8 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             "length" => out.push_str(&format!(
                 "  {target} = fa_checked_size_to_i64({input}.count, \"length: sequence is too large\");\n"
             )),
+            "length_f32" => out.push_str(&format!("  {target} = (float){input}.count;\n")),
+            "length_f64" => out.push_str(&format!("  {target} = (double){input}.count;\n")),
             "is_empty" if matches!(input_ty, Ty::Seq(_)) => {
                 out.push_str(&format!("  {target} = {input}.count == 0;\n"))
             }
@@ -3636,6 +3643,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             "decode_jpeg" => out.push_str(&format!("  {target} = fa_cv_decode_jpeg({input});\n")),
             "decode_png" => out.push_str(&format!("  {target} = fa_cv_decode_png({input});\n")),
             "decode_pnm" => out.push_str(&format!("  {target} = fa_cv_decode_pnm({input});\n")),
+            "normalize" => out.push_str(&format!("  {target} = fa_cv_normalize({input});\n")),
             "encode_bmp" => out.push_str(&format!("  {target} = fa_cv_encode_bmp({input});\n")),
             "encode_jpeg" => out.push_str(&format!("  {target} = fa_cv_encode_jpeg({input});\n")),
             "encode_pgm" => out.push_str(&format!("  {target} = fa_cv_encode_pgm({input});\n")),
@@ -4503,6 +4511,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             TypedEndpointKind::Variable(_)
             | TypedEndpointKind::Int(_)
             | TypedEndpointKind::Real(_)
+            | TypedEndpointKind::RealF32(_)
             | TypedEndpointKind::Bool(_)
             | TypedEndpointKind::String(_)
             | TypedEndpointKind::Unit => true,

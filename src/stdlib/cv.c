@@ -62,6 +62,21 @@ static unsigned char fa_cv_to_u8(double value) {
   return (unsigned char)floor(value * 255.0 + 0.5);
 }
 
+static FaCvImage fa_cv_normalize(FaBytes bytes) {
+  if (bytes.len > (size_t)INT64_MAX) {
+    fa_die_usage("normalize: input is too large");
+  }
+  FaCvImage image = fa_cv_image_new(bytes.len, 1);
+  for (size_t i = 0; i < bytes.len; i++) {
+    double channel = fa_cv_from_u8((unsigned char)bytes.bytes[i]);
+    FaCvPixel *pixel = fa_cv_pixel_at(&image, 0, i);
+    pixel->f0 = channel;
+    pixel->f1.f0 = channel;
+    pixel->f1.f1 = channel;
+  }
+  return image;
+}
+
 static bool fa_cv_mul_overflows(size_t a, size_t b, size_t *out) {
   if (a != 0 && b > SIZE_MAX / a) return true;
   *out = a * b;

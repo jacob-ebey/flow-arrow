@@ -261,6 +261,10 @@ impl<'a> LlvmText<'a> {
                 operand: format!("{value:.17e}"),
                 ty: endpoint.ty.clone(),
             }),
+            TypedEndpointKind::RealF32(value) => Ok(TextValue {
+                operand: format!("{value:.9e}"),
+                ty: endpoint.ty.clone(),
+            }),
             TypedEndpointKind::Bool(value) => Ok(TextValue {
                 operand: if *value { "1" } else { "0" }.to_string(),
                 ty: endpoint.ty.clone(),

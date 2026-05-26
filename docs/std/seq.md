@@ -6,6 +6,8 @@ modules.
 | Export | Input | Output | Description |
 | --- | --- | --- | --- |
 | `length` | `Seq[V]` | `i64` | Sequence length |
+| `length_f32` | `Seq[V]` | `f32` | Sequence length as `f32` for same-width numeric pipelines |
+| `length_f64` | `Seq[V]` | `f64` | Sequence length as `f64` for same-width numeric pipelines |
 | `is_empty` | `Seq[V]` | `Bool` | Whether the sequence has no items |
 | `zip` | `(Seq[A],Seq[B])` | `Seq[(A,B)]` | Pair equal-length sequences by position |
 | `broadcast_left` | `(A,Seq[B])` | `Seq[(A,B)]` | Pair one left value with each item in a sequence |
@@ -30,6 +32,8 @@ modules.
 | `set` | `(Seq[V],i64,V)` | `Seq[V]` | Return a copy with one item replaced |
 | `concat` | `(Seq[V],Seq[V])` | `Seq[V]` | Concatenate two sequences |
 
-`zip` faults when sequence lengths differ. `transpose` faults when inner
-sequence lengths differ. `flatten` does not require rectangular input.
-`take` and `drop` reject negative counts. `fill` rejects negative counts.
+`length_f32` and `length_f64` are intended for stdlib and performance-sensitive
+numeric code that must keep operations in one float width without explicit
+conversion nodes. `zip` faults when sequence lengths differ. `transpose` faults
+when inner sequence lengths differ. `flatten` does not require rectangular
+input. `take` and `drop` reject negative counts. `fill` rejects negative counts.

@@ -20,6 +20,7 @@ const RUNTIME_H: &str = include_str!("stdlib/runtime.h");
 const VECTOR_FLOW: &str = include_str!("stdlib/source/vector.flow");
 const MATRIX_FLOW: &str = include_str!("stdlib/source/matrix.flow");
 const CV_FLOW: &str = include_str!("stdlib/source/cv.flow");
+const QUANT_FLOW: &str = include_str!("stdlib/source/quant.flow");
 const VECTOR_EXPORTS: &[&str] = &[
     "sum_f64",
     "mean_f64",
@@ -42,12 +43,16 @@ const VECTOR_EXPORTS: &[&str] = &[
     "equals_f64",
     "dot_f64",
     "squared_norm_f64",
+    "mean_square_f64",
     "l1_norm_f64",
     "norm_f64",
+    "rms_f64",
     "normalize_f64",
+    "rms_norm_f64",
     "relu_f64",
     "sigmoid_f64",
     "silu_f64",
+    "swiglu_f64",
     "softmax_f64",
     "cosine_similarity_f64",
     "squared_distance_f64",
@@ -73,12 +78,16 @@ const VECTOR_EXPORTS: &[&str] = &[
     "equals_f32",
     "dot_f32",
     "squared_norm_f32",
+    "mean_square_f32",
     "l1_norm_f32",
     "norm_f32",
+    "rms_f32",
     "normalize_f32",
+    "rms_norm_f32",
     "relu_f32",
     "sigmoid_f32",
     "silu_f32",
+    "swiglu_f32",
     "softmax_f32",
     "cosine_similarity_f32",
     "squared_distance_f32",
@@ -114,13 +123,19 @@ const MATRIX_EXPORTS: &[&str] = &[
     "row_means_f64",
     "column_means_f64",
     "row_norms_f64",
+    "row_mean_squares_f64",
+    "row_rms_f64",
     "column_norms_f64",
+    "column_mean_squares_f64",
+    "column_rms_f64",
     "squared_norm_f64",
     "l1_norm_f64",
     "norm_f64",
     "frobenius_norm_f64",
     "normalize_rows_f64",
+    "row_rms_norm_f64",
     "row_softmax_f64",
+    "row_swiglu_f64",
     "squared_distance_f64",
     "distance_f64",
     "matvec_f64",
@@ -157,13 +172,19 @@ const MATRIX_EXPORTS: &[&str] = &[
     "row_means_f32",
     "column_means_f32",
     "row_norms_f32",
+    "row_mean_squares_f32",
+    "row_rms_f32",
     "column_norms_f32",
+    "column_mean_squares_f32",
+    "column_rms_f32",
     "squared_norm_f32",
     "l1_norm_f32",
     "norm_f32",
     "frobenius_norm_f32",
     "normalize_rows_f32",
+    "row_rms_norm_f32",
     "row_softmax_f32",
+    "row_swiglu_f32",
     "squared_distance_f32",
     "distance_f32",
     "matvec_f32",
@@ -171,6 +192,38 @@ const MATRIX_EXPORTS: &[&str] = &[
     "matmul_f32",
     "outer_f32",
     "gram_f32",
+];
+const QUANT_EXPORTS: &[&str] = &[
+    "TokenId",
+    "Position",
+    "F32Vector",
+    "F32Matrix",
+    "Logits",
+    "Activation",
+    "Q4KBlock",
+    "Q4KMatrix",
+    "Q4KMWeightMatrix",
+    "KVCache",
+    "q4_k_block_size",
+    "q4_k_subblock_size",
+    "q4_k_subblocks",
+    "q4_k_scale_bytes",
+    "q4_k_quant_bytes",
+    "q4_k_block",
+    "q4_k_block_delta",
+    "q4_k_block_min_delta",
+    "q4_k_block_scales",
+    "q4_k_block_quants",
+    "q4_k_matrix",
+    "q4_k_matrix_rows",
+    "q4_k_matrix_cols",
+    "q4_k_matrix_blocks",
+    "q4_k_m_weight_matrix",
+    "q4_k_m_weight_rows",
+    "q4_k_m_weight_cols",
+    "q4_k_m_weight_blocks",
+    "low_nibble",
+    "high_nibble",
 ];
 const CV_EXPORTS: &[&str] = &[
     "Size",
@@ -296,6 +349,7 @@ pub const SYMBOLS: &[StdSymbol] = &[
     cv::DECODE_JPEG,
     cv::DECODE_PNG,
     cv::DECODE_PNM,
+    cv::NORMALIZE,
     cv::ENCODE_BMP,
     cv::ENCODE_JPEG,
     cv::ENCODE_PGM,
@@ -463,6 +517,8 @@ pub const SYMBOLS: &[StdSymbol] = &[
     intrinsic::RANGE_STEP,
     intrinsic::SELECT,
     seq::LENGTH,
+    seq::LENGTH_F32,
+    seq::LENGTH_F64,
     seq::IS_EMPTY,
     seq::GROUP_BY_ID,
     seq::ZIP,
@@ -607,6 +663,7 @@ pub fn flow_source(module: &str) -> Option<&'static str> {
         "std.vector" => Some(VECTOR_FLOW),
         "std.matrix" => Some(MATRIX_FLOW),
         "std.cv" => Some(CV_FLOW),
+        "std.quant" => Some(QUANT_FLOW),
         _ => None,
     }
 }
@@ -616,6 +673,7 @@ pub fn flow_exports(module: &str) -> Option<&'static [&'static str]> {
         "std.vector" => Some(VECTOR_EXPORTS),
         "std.matrix" => Some(MATRIX_EXPORTS),
         "std.cv" => Some(CV_EXPORTS),
+        "std.quant" => Some(QUANT_EXPORTS),
         _ => None,
     }
 }
@@ -637,6 +695,8 @@ pub fn supports_higher_order_call(name: &str) -> bool {
             | "codes_to_bytes"
             | "byte_length"
             | "length"
+            | "length_f32"
+            | "length_f64"
             | "is_empty"
             | "inner_length"
             | "transpose"

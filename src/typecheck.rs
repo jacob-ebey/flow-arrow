@@ -165,6 +165,7 @@ pub(crate) enum TypedEndpointKind {
     },
     Int(i64),
     Real(f64),
+    RealF32(f32),
     Bool(bool),
     String(String),
     Unit,
@@ -742,6 +743,7 @@ impl<'a> Checker<'a> {
             Endpoint::Name(name) => return Err(format!("expected value, found node `{name}`")),
             Endpoint::Int(value) => (Type::I64, TypedEndpointKind::Int(*value)),
             Endpoint::Real(value) => (Type::F64, TypedEndpointKind::Real(*value)),
+            Endpoint::RealF32(value) => (Type::F32, TypedEndpointKind::RealF32(*value)),
             Endpoint::Bool(value) => (Type::Bool, TypedEndpointKind::Bool(*value)),
             Endpoint::String(value) => (Type::Bytes, TypedEndpointKind::String(value.clone())),
             Endpoint::Unit => (Type::Unit, TypedEndpointKind::Unit),
@@ -1700,6 +1702,7 @@ impl<'a> Checker<'a> {
             Endpoint::Name(name) => Err(format!("expected value, found node `{name}`")),
             Endpoint::Int(_) => Ok(Type::I64),
             Endpoint::Real(_) => Ok(Type::F64),
+            Endpoint::RealF32(_) => Ok(Type::F32),
             Endpoint::Bool(_) => Ok(Type::Bool),
             Endpoint::String(_) => Ok(Type::Bytes),
             Endpoint::Unit => Ok(Type::Unit),
@@ -2441,6 +2444,7 @@ fn stage_symbol_id(resolved: &ResolvedModule, stage: &Stage) -> Option<SymbolId>
         | Stage::Endpoint(Endpoint::Variable(_))
         | Stage::Endpoint(Endpoint::Int(_))
         | Stage::Endpoint(Endpoint::Real(_))
+        | Stage::Endpoint(Endpoint::RealF32(_))
         | Stage::Endpoint(Endpoint::Bool(_))
         | Stage::Endpoint(Endpoint::String(_))
         | Stage::Endpoint(Endpoint::Unit)
@@ -2496,6 +2500,14 @@ fn format_endpoint_for_error(endpoint: &Endpoint) -> String {
             if !text.contains('.') && !text.contains('e') && !text.contains('E') {
                 text.push_str(".0");
             }
+            text
+        }
+        Endpoint::RealF32(value) => {
+            let mut text = value.to_string();
+            if !text.contains('.') && !text.contains('e') && !text.contains('E') {
+                text.push_str(".0");
+            }
+            text.push_str("f32");
             text
         }
         Endpoint::Bool(value) => value.to_string(),

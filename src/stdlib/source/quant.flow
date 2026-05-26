@@ -1,0 +1,94 @@
+import std.int { bit_and, bit_shr }
+import std.tuple { first, second }
+
+type TokenId = i64
+type Position = i64
+type F32Vector = Seq[f32]
+type F32Matrix = Seq[Seq[f32]]
+type Logits = Seq[f32]
+type Activation = Seq[f32]
+type Q4KBlock = (f32, f32, Bytes, Bytes)
+type Q4KMatrix = (i64, i64, Seq[Q4KBlock])
+type Q4KMWeightMatrix = Q4KMatrix
+type KVCache = (Seq[Seq[f32]], Seq[Seq[f32]])
+
+extern node q4_k_block_size() -> value: i64 {
+    256 -> $value
+}
+
+extern node q4_k_subblock_size() -> value: i64 {
+    32 -> $value
+}
+
+extern node q4_k_subblocks() -> value: i64 {
+    8 -> $value
+}
+
+extern node q4_k_scale_bytes() -> value: i64 {
+    12 -> $value
+}
+
+extern node q4_k_quant_bytes() -> value: i64 {
+    128 -> $value
+}
+
+extern node q4_k_block(inputs: (f32, f32, Bytes, Bytes)) -> block: Q4KBlock {
+    $inputs -> $block
+}
+
+extern node q4_k_block_delta(block: Q4KBlock) -> value: f32 {
+    $block -> ($value, $, $, $)
+}
+
+extern node q4_k_block_min_delta(block: Q4KBlock) -> value: f32 {
+    $block -> ($, $value, $, $)
+}
+
+extern node q4_k_block_scales(block: Q4KBlock) -> value: Bytes {
+    $block -> ($, $, $value, $)
+}
+
+extern node q4_k_block_quants(block: Q4KBlock) -> value: Bytes {
+    $block -> ($, $, $, $value)
+}
+
+extern node q4_k_matrix(inputs: (i64, i64, Seq[Q4KBlock])) -> matrix: Q4KMatrix {
+    $inputs -> $matrix
+}
+
+extern node q4_k_matrix_rows(matrix: Q4KMatrix) -> value: i64 {
+    $matrix -> ($value, $, $)
+}
+
+extern node q4_k_matrix_cols(matrix: Q4KMatrix) -> value: i64 {
+    $matrix -> ($, $value, $)
+}
+
+extern node q4_k_matrix_blocks(matrix: Q4KMatrix) -> value: Seq[Q4KBlock] {
+    $matrix -> ($, $, $value)
+}
+
+extern node q4_k_m_weight_matrix(inputs: (i64, i64, Seq[Q4KBlock])) -> matrix: Q4KMWeightMatrix {
+    $inputs -> q4_k_matrix -> $matrix
+}
+
+extern node q4_k_m_weight_rows(matrix: Q4KMWeightMatrix) -> value: i64 {
+    $matrix -> q4_k_matrix_rows -> $value
+}
+
+extern node q4_k_m_weight_cols(matrix: Q4KMWeightMatrix) -> value: i64 {
+    $matrix -> q4_k_matrix_cols -> $value
+}
+
+extern node q4_k_m_weight_blocks(matrix: Q4KMWeightMatrix) -> value: Seq[Q4KBlock] {
+    $matrix -> q4_k_matrix_blocks -> $value
+}
+
+extern node low_nibble(code: i64) -> value: i64 {
+    ($code, 15) -> bit_and -> $value
+}
+
+extern node high_nibble(code: i64) -> value: i64 {
+    ($code, 4)     -> bit_shr -> $shifted
+    ($shifted, 15) -> bit_and -> $value
+}

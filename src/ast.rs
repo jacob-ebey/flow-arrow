@@ -122,6 +122,7 @@ pub enum Endpoint {
     Name(String),
     Int(i64),
     Real(f64),
+    RealF32(f32),
     Bool(bool),
     String(String),
     Unit,

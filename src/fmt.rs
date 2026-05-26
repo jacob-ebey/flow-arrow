@@ -645,6 +645,7 @@ fn format_endpoint(endpoint: &Endpoint) -> String {
         Endpoint::Name(name) => name.clone(),
         Endpoint::Int(value) => value.to_string(),
         Endpoint::Real(value) => format_real(*value),
+        Endpoint::RealF32(value) => format!("{}f32", format_real_f32(*value)),
         Endpoint::Bool(value) => value.to_string(),
         Endpoint::String(value) => format_string(value),
         Endpoint::Unit => "()".to_string(),
@@ -710,6 +711,26 @@ fn format_real(value: f64) -> String {
         text = format!("{value:.15}");
         while text.contains('.') && text.ends_with('0') {
             text.pop();
+        }
+        if text.ends_with('.') {
+            text.push('0');
+        }
+    }
+    if !text.contains('.') {
+        text.push_str(".0");
+    }
+    text
+}
+
+fn format_real_f32(value: f32) -> String {
+    let mut text = value.to_string();
+    if text.contains('e') || text.contains('E') {
+        text = format!("{value:.7}");
+        while text.contains('.') && text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.push('0');
         }
     }
     if !text.contains('.') {
@@ -946,6 +967,10 @@ extern node score_batch(width: i64) -> summary: JobSummary {
         assert_formats(
             "program main(args: Args) -> exit_code: i64 {\n    [0.0,\"a\\n\\\"b\",true,false,()] -> sink -> $exit_code\n}\n",
             "program main(args: Args) -> exit_code: i64 {\n    [0.0, \"a\\n\\\"b\", true, false, ()] -> sink -> $exit_code\n}\n",
+        );
+        assert_formats(
+            "program main(args: Args) -> exit_code: i64 {\n    1.0f32 -> sink -> $exit_code\n}\n",
+            "program main(args: Args) -> exit_code: i64 {\n    1.0f32 -> sink -> $exit_code\n}\n",
         );
     }
 

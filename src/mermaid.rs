@@ -323,6 +323,7 @@ impl MermaidEmitter {
             TypedEndpointKind::Unit => Ok(Vec::new()),
             TypedEndpointKind::Int(_)
             | TypedEndpointKind::Real(_)
+            | TypedEndpointKind::RealF32(_)
             | TypedEndpointKind::Bool(_)
             | TypedEndpointKind::String(_) => {
                 Ok(vec![self.literal_node(&endpoint.label, "literal", "    ")])
@@ -360,6 +361,7 @@ impl MermaidEmitter {
             TypedEndpointKind::Eval { source, .. } => self.emit_typed_endpoint(source, env),
             TypedEndpointKind::Int(_)
             | TypedEndpointKind::Real(_)
+            | TypedEndpointKind::RealF32(_)
             | TypedEndpointKind::Bool(_)
             | TypedEndpointKind::String(_)
             | TypedEndpointKind::Unit => Ok(Vec::new()),
