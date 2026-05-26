@@ -72,6 +72,28 @@ $lines -> fault map parse_real { ok -> $numbers, fault -> $faults }
 formatted, routed to `write_stderr`, and used to derive the final
 `$exit_code`.
 
+## Arithmetic faults
+
+Fixed-width `i64` arithmetic reports overflow as recoverable data:
+
+```text
+add : (i64, i64) -> Faultable[i64]
+sub : (i64, i64) -> Faultable[i64]
+mul : (i64, i64) -> Faultable[i64]
+neg : i64        -> Faultable[i64]
+abs : i64        -> Faultable[i64]
+```
+
+`f64` `add`, `sub`, `mul`, `neg`, and `abs` remain plain `f64`
+operations. Division, remainder, and `sqrt` are faultable because they
+have invalid inputs such as zero divisors or negative square roots.
+
+Integer `reduce add(identity: 0)` returns `Faultable[i64]`; integer
+`scan add(identity: 0)` returns `Seq[Faultable[i64]]`. Use
+`std.fault.expect` only at a boundary where aborting on a fault is the
+intended policy. Use `fault map` or explicit `Faultable[...]` outputs when
+the graph should recover and continue.
+
 ## Seed example
 
 `examples/parse-and-sum-lines/` is the minimal design case:

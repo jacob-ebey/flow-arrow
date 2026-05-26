@@ -3014,7 +3014,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let canonical = self.canonical_name(op);
         if self.gpu_enabled && matches!(canonical.as_str(), "add" | "min" | "max") {
             match item_ty.as_ref() {
-                Ty::I64 => {
+                Ty::I64 if canonical != "add" => {
                     let tmp = self.next_temp();
                     out.push_str(&format!(
                         "  int64_t {tmp} = fa_gpu_reduce_i64({}, {}.items, {}.count, {});\n",
@@ -3129,11 +3129,12 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         item_ty: Ty,
         identity: Value,
     ) -> Result<Value, String> {
-        let (plain_ty, faultable) = match item_ty {
+        let (plain_ty, item_faultable) = match item_ty {
             Ty::Faultable(inner) => (*inner, true),
             other => (other, false),
         };
-        let output_ty = if faultable {
+        let overflow_faultable = plain_ty == Ty::I64;
+        let output_ty = if item_faultable || overflow_faultable {
             Ty::Faultable(Box::new(plain_ty.clone()))
         } else {
             plain_ty.clone()
@@ -3142,22 +3143,32 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let tmp = self.next_temp();
         let i = self.next_temp();
         out.push_str(&format!("  {c_ty} {tmp};\n"));
-        if faultable {
+        if item_faultable || overflow_faultable {
+            let item_value = if item_faultable {
+                format!("{}.items[{i}].value", input.code)
+            } else {
+                format!("{}.items[{i}]", input.code)
+            };
             out.push_str(&format!("  {tmp}.is_fault = false;\n"));
             out.push_str(&format!("  {tmp}.value = {};\n", identity.code));
             out.push_str(&format!(
                 "  for (size_t {i} = 0; {i} < {}.count; {i}++) {{\n",
                 input.code
             ));
-            out.push_str(&format!("    if ({}.items[{i}].is_fault) {{ {tmp}.is_fault = true; {tmp}.fault = {}.items[{i}].fault; break; }}\n", input.code, input.code));
-            out.push_str(&format!(
-                "    {tmp}.value = {};\n",
-                add_expr(
-                    &format!("{tmp}.value"),
-                    &format!("{}.items[{i}].value", input.code),
-                    &plain_ty
-                )
-            ));
+            out.push_str(&format!("    if ({tmp}.is_fault) break;\n"));
+            if item_faultable {
+                out.push_str(&format!("    if ({}.items[{i}].is_fault) {{ {tmp}.is_fault = true; {tmp}.fault = {}.items[{i}].fault; break; }}\n", input.code, input.code));
+            }
+            if overflow_faultable {
+                out.push_str(&format!(
+                    "    {tmp} = fa_faultable_i64_add({tmp}.value, {item_value});\n"
+                ));
+            } else {
+                out.push_str(&format!(
+                    "    {tmp}.value = {};\n",
+                    add_expr(&format!("{tmp}.value"), &item_value, &plain_ty)
+                ));
+            }
             out.push_str("  }\n");
         } else {
             out.push_str(&format!("  {tmp} = {};\n", identity.code));
@@ -3187,10 +3198,20 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let Ty::Seq(item_ty) = input.ty.clone() else {
             return Err(format!("`scan {op}` expected Seq input"));
         };
-        let output_ty = Ty::Seq(item_ty.clone());
+        let plain_item_ty = item_ty.inner_faultable();
+        let pair_ty = Ty::Tuple(vec![plain_item_ty.clone(), plain_item_ty.clone()]);
+        let result_ty = self.call_output_type(op, &pair_ty)?;
+        let operation_faultable =
+            matches!(&result_ty, Ty::Faultable(inner) if inner.as_ref() == &plain_item_ty);
+        let item_faultable = matches!(item_ty.as_ref(), Ty::Faultable(_));
+        let output_item_ty = if item_faultable || operation_faultable {
+            Ty::Faultable(Box::new(plain_item_ty.clone()))
+        } else {
+            plain_item_ty.clone()
+        };
+        let output_ty = Ty::Seq(Box::new(output_item_ty.clone()));
         let c_ty = self.types.c_type(&output_ty);
-        let item_c_ty = self.types.c_type(&item_ty);
-        let pair_ty = Ty::Tuple(vec![*item_ty.clone(), *item_ty.clone()]);
+        let state_c_ty = self.types.c_type(&output_item_ty);
         let pair_c_ty = self.types.c_type(&pair_ty);
         let new_fn = self.types.seq_new_name(&output_ty)?;
         let tmp = self.next_temp();
@@ -3202,17 +3223,48 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             "  {c_ty} {tmp} = {new_fn}({}.count);\n",
             input.code
         ));
-        out.push_str(&format!("  {item_c_ty} {state} = {};\n", identity.code));
+        if matches!(output_item_ty, Ty::Faultable(_)) {
+            out.push_str(&format!("  {state_c_ty} {state};\n"));
+            out.push_str(&format!("  {state}.is_fault = false;\n"));
+            out.push_str(&format!("  {state}.value = {};\n", identity.code));
+        } else {
+            out.push_str(&format!("  {state_c_ty} {state} = {};\n", identity.code));
+        }
         out.push_str(&format!(
             "  for (size_t {i} = 0; {i} < {}.count; {i}++) {{\n",
             input.code
         ));
-        out.push_str(&format!("    {pair_c_ty} {pair};\n"));
-        out.push_str(&format!("    {pair}.f0 = {state};\n"));
-        out.push_str(&format!("    {pair}.f1 = {}.items[{i}];\n", input.code));
-        out.push_str(&format!("    {item_c_ty} {result};\n"));
-        self.emit_assign_call(out, &result, &item_ty, op, &pair, &pair_ty)?;
-        out.push_str(&format!("    {state} = {result};\n"));
+        if matches!(output_item_ty, Ty::Faultable(_)) {
+            out.push_str(&format!("    if (!{state}.is_fault) {{\n"));
+            if item_faultable {
+                out.push_str(&format!("      if ({}.items[{i}].is_fault) {{ {state}.is_fault = true; {state}.fault = {}.items[{i}].fault; }} else {{\n", input.code, input.code));
+                out.push_str(&format!("        {pair_c_ty} {pair};\n"));
+                out.push_str(&format!("        {pair}.f0 = {state}.value;\n"));
+                out.push_str(&format!(
+                    "        {pair}.f1 = {}.items[{i}].value;\n",
+                    input.code
+                ));
+                out.push_str(&format!("        {state_c_ty} {result};\n"));
+                self.emit_assign_call(out, &result, &output_item_ty, op, &pair, &pair_ty)?;
+                out.push_str(&format!("        {state} = {result};\n"));
+                out.push_str("      }\n");
+            } else {
+                out.push_str(&format!("      {pair_c_ty} {pair};\n"));
+                out.push_str(&format!("      {pair}.f0 = {state}.value;\n"));
+                out.push_str(&format!("      {pair}.f1 = {}.items[{i}];\n", input.code));
+                out.push_str(&format!("      {state_c_ty} {result};\n"));
+                self.emit_assign_call(out, &result, &output_item_ty, op, &pair, &pair_ty)?;
+                out.push_str(&format!("      {state} = {result};\n"));
+            }
+            out.push_str("    }\n");
+        } else {
+            out.push_str(&format!("    {pair_c_ty} {pair};\n"));
+            out.push_str(&format!("    {pair}.f0 = {state};\n"));
+            out.push_str(&format!("    {pair}.f1 = {}.items[{i}];\n", input.code));
+            out.push_str(&format!("    {state_c_ty} {result};\n"));
+            self.emit_assign_call(out, &result, &output_item_ty, op, &pair, &pair_ty)?;
+            out.push_str(&format!("    {state} = {result};\n"));
+        }
         out.push_str(&format!("    {tmp}.items[{i}] = {state};\n"));
         out.push_str("  }\n");
         Ok(Value {
@@ -3518,7 +3570,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             "format_real" => {
                 self.emit_format_faultable_or_plain(out, target, input, input_ty, "fa_format_real")?
             }
-            "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
+            "add" | "sub" | "mul" | "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
                 out.push_str(&format!(
                     "  {target} = {};\n",
                     numeric_faultable_binary_expr(name, input, output_ty)
@@ -3530,7 +3582,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     numeric_binary_expr(name, input, output_ty)
                 ));
             }
-            "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
+            "neg" | "abs" | "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
                 out.push_str(&format!(
                     "  {target} = {};\n",
                     numeric_faultable_unary_expr(name, input, output_ty)

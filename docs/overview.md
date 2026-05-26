@@ -188,7 +188,7 @@ because ordinary branching hides scheduling choices.
 Instead, it has pure data selection:
 
 ```flow
-$x -> neg -> $nx
+$x -> neg -> expect -> $nx
 $x -> is_positive -> $p
 ($p, $x, $nx) -> select -> $absx
 ```
@@ -259,7 +259,7 @@ Reductions require an associative operation and identity.
 node dot(xs: Vec[N, f64], ys: Vec[N, f64]) -> s: f64 {
     ($xs, $ys) -> zip
              -> map multiply_pair
-             -> reduce add(identity: 0)
+             -> reduce add(identity: 0.0)
              -> $s
 }
 ```
@@ -281,7 +281,7 @@ because subtraction is not associative.
 Prefix operations are allowed only for associative operators:
 
 ```flow
-$xs -> scan add(identity: 0) -> $prefix_sums
+$xs -> scan add(identity: 0.0) -> $prefix_sums
 ```
 
 The compiler emits a parallel prefix tree.

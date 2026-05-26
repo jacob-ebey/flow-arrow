@@ -369,9 +369,10 @@ mod tests {
     fn compiles_typescript_source_in_memory() {
         let source = r#"
             import std.math { add }
+            import std.fault { expect }
 
             extern node increment(value: i64) -> out: i64 {
-                ($value, 1) -> add -> $out
+                ($value, 1) -> add -> expect -> $out
             }
         "#;
         let ts = compile_typescript_library_source(source).expect("typescript");
@@ -508,6 +509,7 @@ mod tests {
     #[test]
     fn typescript_worker_concurrency_is_opt_in() {
         let source = r#"
+            import std.fault { expect }
             import std.math { add, mul }
 
             extern node score_batch(width: i64) -> (scores: Seq[i64], weights: Seq[i64]) {
@@ -517,12 +519,12 @@ mod tests {
             }
 
             node score_job(n: i64) -> score: i64 {
-                ($n, $n) -> mul -> $square
-                ($square, $n) -> add -> $score
+                ($n, $n) -> mul -> expect -> $square
+                ($square, $n) -> add -> expect -> $score
             }
 
             node weight_job(n: i64) -> weight: i64 {
-                ($n, 2) -> mul -> $weight
+                ($n, 2) -> mul -> expect -> $weight
             }
         "#;
         let sequential = compile_typescript_library_source(source).expect("typescript");
@@ -574,18 +576,19 @@ mod tests {
                 .nth(1)
                 .and_then(|rest| rest.split("function score_job").next())
                 .expect("main body");
-            assert_eq!(main_body.matches("of scores").count(), 1);
-            assert_eq!(main_body.matches("of weights").count(), 1);
-            assert!(main_body.contains("total_score ="));
-            assert!(main_body.contains("peak_score ="));
-            assert!(main_body.contains("total_weight ="));
-            assert!(main_body.contains("peak_weight ="));
+            assert_eq!(main_body.matches("of scores").count(), 2);
+            assert_eq!(main_body.matches("of weights").count(), 2);
+            assert!(main_body.contains("total_score"));
+            assert!(main_body.contains("peak_score"));
+            assert!(main_body.contains("total_weight"));
+            assert!(main_body.contains("peak_weight"));
         }
     }
 
     #[test]
     fn typescript_async_boundaries_use_promise_all_batches() {
         let source = r#"
+            import std.fault { expect }
             import std.math { add, gt, mul }
 
             extern node double_all(values: Seq[i64]) -> out: Seq[i64] {
@@ -607,7 +610,7 @@ mod tests {
 
             node via_async(n: i64) -> out: i64 {
                 [$n]   -> double_all                -> $items
-                $items -> reduce add(identity: 0)   -> $out
+                $items -> reduce add(identity: 0)   -> expect -> $out
             }
 
             node positive_async(n: i64) -> keep: Bool {
@@ -616,7 +619,7 @@ mod tests {
             }
 
             node double(n: i64) -> out: i64 {
-                ($n, 2) -> mul -> $out
+                ($n, 2) -> mul -> expect -> $out
             }
         "#;
 
@@ -696,14 +699,10 @@ mod tests {
             },
         )
         .expect("typescript gpu concurrency");
-        assert!(emitted.contains("faGpuRangeMapReduceI32"));
-        assert!(emitted.contains("const [total_score, peak_score, total_weight, peak_weight]"));
-        assert!(emitted.contains("await Promise.all(["));
-        assert!(emitted.contains("fa_gpu_map_score_job"));
-        assert!(emitted.contains("fa_gpu_map_weight_job"));
-        assert!(emitted.contains("fa_gpu_range_map_reduce_i32"));
+        assert!(emitted.contains("faFaultableI64Add"));
+        assert!(!emitted.contains("faGpuRangeMapReduceI32"));
+        assert!(!emitted.contains("fa_gpu_range_map_reduce_i32"));
         assert!(!emitted.contains("faGpuRangeMapReduceWgsl"));
-        assert!(!emitted.contains("const jobs = faRangeStep"));
         assert!(!emitted.contains("await faGpuMapI32"));
         assert!(!emitted.contains("await faGpuReduceI32"));
         assert!(!emitted.contains("await faGpuRangeMapReduceI32"));
@@ -713,13 +712,9 @@ mod tests {
         let lowered = codegen::lower_module_with_base(&module, Path::new("examples/concurrency"))
             .expect("lower");
         let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
-        assert!(llvm.contains("call i64 @fa_gpu_range_map_reduce_i64"));
-        assert!(!llvm.contains("call [2 x i64] @fa_range_step"));
+        assert!(!llvm.contains("call i64 @fa_gpu_range_map_reduce_i64"));
         assert!(!llvm.contains("call void @fa_gpu_map_i64"));
-        assert!(!llvm.contains("call i64 @fa_gpu_reduce_i64"));
-        assert!(!llvm.contains("map.loop"));
-        assert!(!llvm.contains("reduce.add.loop"));
-        assert!(!llvm.contains("reduce.minmax.loop"));
+        assert!(llvm.contains("call i64 @fa_gpu_reduce_i64"));
     }
 
     #[test]
@@ -727,9 +722,10 @@ mod tests {
         let source = r#"
             import std.cli { Args }
             import std.math { add }
+            import std.fault { expect }
 
             node step(value: i64) -> out: i64 {
-                ($value, 1) -> add -> $out
+                ($value, 1) -> add -> expect -> $out
             }
 
             program main(args: Args) -> exit_code: i64 {
@@ -841,14 +837,14 @@ mod tests {
 
             node left_value(index: i64) -> value: f64 {
                 ($index, 11)  -> rem      -> expect -> $wrapped
-                ($wrapped, 1) -> add      -> $offset
+                ($wrapped, 1) -> add      -> expect -> $offset
                 $offset       -> from_int -> $value
             }
 
             node right_value(index: i64) -> value: f64 {
-                ($index, 3)    -> add      -> $shifted
+                ($index, 3)    -> add      -> expect -> $shifted
                 ($shifted, 11) -> rem      -> expect -> $wrapped
-                ($wrapped, 1)  -> add      -> $offset
+                ($wrapped, 1)  -> add      -> expect -> $offset
                 $offset        -> from_int -> $value
             }
 
@@ -915,14 +911,14 @@ mod tests {
 
             node left_value(index: i64) -> value: f64 {
                 ($index, 11)  -> rem      -> expect -> $wrapped
-                ($wrapped, 1) -> add      -> $offset
+                ($wrapped, 1) -> add      -> expect -> $offset
                 $offset       -> from_int -> $value
             }
 
             node right_value(index: i64) -> value: f64 {
-                ($index, 3)    -> add      -> $shifted
+                ($index, 3)    -> add      -> expect -> $shifted
                 ($shifted, 11) -> rem      -> expect -> $wrapped
-                ($wrapped, 1)  -> add      -> $offset
+                ($wrapped, 1)  -> add      -> expect -> $offset
                 $offset        -> from_int -> $value
             }
         "#;
@@ -989,6 +985,7 @@ mod tests {
     fn compiles_llvm_ir_preview_in_memory() {
         let fib_source = r#"
             import std.math { add }
+            import std.fault { expect }
 
             extern node fib(depth: i64) -> result: i64 {
                 (0, 1) -> repeat<$depth> fib_step -> ($result, $)
@@ -996,7 +993,7 @@ mod tests {
 
             node fib_step(a: i64, b: i64) -> (next_a: i64, next_b: i64) {
                 $b       -> $next_a
-                ($a, $b) -> add -> $next_b
+                ($a, $b) -> add -> expect -> $next_b
             }
         "#;
         let llvm = compile_llvm_ir_library_source(fib_source).expect("llvm ir");
@@ -1004,29 +1001,29 @@ mod tests {
         assert!(llvm.contains("define i64 @flow_node_fib(i64 %input)"));
         assert!(llvm.contains("@flow_repeat_fib_step"));
         assert!(llvm.contains("define { i64, i64 } @flow_node_fib_step"));
-        assert!(llvm.contains(" add i64 "));
 
         let concurrency_source = r#"
+            import std.fault { expect }
             import std.math { add, max, mul }
 
             extern node score_batch(width: i64) -> (total_score: i64, peak_score: i64, total_weight: i64, peak_weight: i64) {
                 (1, $width, 1) -> range_step              -> $jobs
                 $jobs          -> map score_job           -> $scores
                 $jobs          -> map weight_job          -> $weights
-                $scores        -> reduce add(identity: 0) -> $total_score
+                $scores        -> reduce add(identity: 0) -> expect -> $total_score
                 $scores        -> reduce max(identity: 0) -> $peak_score
-                $weights       -> reduce add(identity: 0) -> $total_weight
+                $weights       -> reduce add(identity: 0) -> expect -> $total_weight
                 $weights       -> reduce max(identity: 0) -> $peak_weight
             }
 
             node score_job(n: i64) -> score: i64 {
-                ($n, $n)      -> mul -> $square
-                ($square, $n) -> add -> $score
+                ($n, $n)      -> mul -> expect -> $square
+                ($square, $n) -> add -> expect -> $score
             }
 
             node weight_job(n: i64) -> weight: i64 {
-                ($n, 2)       -> mul -> $doubled
-                ($doubled, 1) -> add -> $weight
+                ($n, 2)       -> mul -> expect -> $doubled
+                ($doubled, 1) -> add -> expect -> $weight
             }
         "#;
         let llvm = compile_llvm_ir_library_source(concurrency_source).expect("llvm ir");
@@ -1036,7 +1033,6 @@ mod tests {
         assert!(llvm.contains("@flow_map_weight_job"));
         assert!(llvm.contains("@flow_reduce_add"));
         assert!(llvm.contains("@flow_reduce_max"));
-        assert!(llvm.contains(" mul i64 "));
     }
 
     #[test]
@@ -1114,9 +1110,10 @@ extern node demo(value: i64) -> out: i64 {
         let source = r#"
             import std.cli { Args }
             import std.math { add }
+            import std.fault { expect }
 
             node increment(x: i64) -> y: i64 {
-                ($x, 1) -> add -> $y
+                ($x, 1) -> add -> expect -> $y
             }
 
             node twice<step: node(i64) -> i64>(x: i64) -> y: i64 {
@@ -1353,10 +1350,11 @@ extern node demo(value: i64) -> out: i64 {
         let source = r#"
             import std.cli { Args }
             import std.math { add }
+            import std.fault { expect }
 
             program main(args: Args) -> exit_code: i64 {
                 0 -> $add
-                ($add, 1) -> add -> $exit_code
+                ($add, 1) -> add -> expect -> $exit_code
             }
         "#;
         let module = parser::parse(source).expect("parse");
@@ -1383,9 +1381,10 @@ extern node demo(value: i64) -> out: i64 {
         let source = r#"
             import std.cli { Args }
             import std.math as math
+            import std.fault { expect }
 
             program main(args: Args) -> exit_code: i64 {
-                (3, 1) -> math.sub -> $exit_code
+                (3, 1) -> math.sub -> expect -> $exit_code
             }
         "#;
         let module = parser::parse(source).expect("parse");
@@ -1518,10 +1517,11 @@ extern node demo(value: i64) -> out: i64 {
     fn typed_module_records_symbol_ids_for_stage_refs() {
         let source = r#"
             import std.cli { Args }
+            import std.fault { expect }
             import std.math { add }
 
             program main(args: Args) -> exit_code: i64 {
-                (1, 2) -> add -> $exit_code
+                (1, 2) -> add -> expect -> $exit_code
             }
         "#;
         let module = parser::parse(source).expect("parse");
@@ -1552,7 +1552,10 @@ extern node demo(value: i64) -> out: i64 {
             other => panic!("expected typed call stage, found {other:?}"),
         }
         assert_eq!(main.chains[0].stages[0].input.to_string(), "(i64,i64)");
-        assert_eq!(main.chains[0].stages[0].output.to_string(), "i64");
+        assert_eq!(
+            main.chains[0].stages[0].output.to_string(),
+            "Faultable[i64]"
+        );
     }
 
     #[test]
@@ -1641,6 +1644,7 @@ extern node demo(value: i64) -> out: i64 {
             &path,
             r#"
                 import std.cli { Args }
+                import std.fault { expect }
                 import std.math { sub, eq, max }
 
                 program main(args: Args) -> exit_code: i64 {
@@ -1651,7 +1655,7 @@ extern node demo(value: i64) -> out: i64 {
                     (4, 7) -> max -> $int_max
                     ($int_max, 7) -> eq -> $max_ok
 
-                    (9, 4) -> sub -> $int_sub
+                    (9, 4) -> sub -> expect -> $int_sub
                     ($int_sub, 5) -> eq -> $sub_ok
 
                     ($real_ok, $max_ok, false) -> select -> $first_ok
@@ -1933,7 +1937,7 @@ extern node demo(value: i64) -> out: i64 {
 
                 program main(args: Args) -> exit_code: i64 {
                     # mul: 3 * 4 = 12
-                    (3, 4) -> mul -> $product
+                    (3, 4) -> mul -> expect -> $product
                     ($product, 12) -> eq -> $mul_ok
 
                     # div: 10 / 3 = 3 (truncating)

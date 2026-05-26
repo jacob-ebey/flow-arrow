@@ -7,19 +7,19 @@ resolution.
 ## Nodes
 
 ```text
-add          : (i64, i64)   -> i64
+add          : (i64, i64)   -> Faultable[i64]
              | (f64, f64)   -> f64
-sub          : (i64, i64)   -> i64
+sub          : (i64, i64)   -> Faultable[i64]
              | (f64, f64)   -> f64
-mul          : (i64, i64)   -> i64
+mul          : (i64, i64)   -> Faultable[i64]
              | (f64, f64)   -> f64
 div          : (i64, i64)   -> Faultable[i64]
              | (f64, f64)   -> Faultable[f64]
 rem          : (i64, i64)   -> Faultable[i64]
              | (f64, f64)   -> Faultable[f64]
-neg          : i64          -> i64
+neg          : i64          -> Faultable[i64]
              | f64         -> f64
-abs          : i64          -> i64
+abs          : i64          -> Faultable[i64]
              | f64         -> f64
 sqrt         : f64          -> Faultable[f64]
 eq           : (i64, i64)   -> Bool
@@ -42,14 +42,16 @@ max          : (i64, i64)   -> i64
 
 ### `add`
 
-Adds two values of the same numeric type. `i64` plus `i64` returns `i64`;
-`f64` plus `f64` returns `f64`. Mixed numeric operands are rejected.
+Adds two values of the same numeric type. `i64` plus `i64` returns
+`Faultable[i64]` because fixed-width addition can overflow; `f64` plus
+`f64` returns `f64`. Mixed numeric operands are rejected.
 
 - Declared associative for the initial portable profile.
 - Identities: `0` for `i64` reductions, `0.0` for `f64` reductions.
-- Suitable for `reduce add(identity: 0)` and `reduce add(identity: 0.0)`.
-- Overflow is a boundary/data validation fault reported by the host
-  runtime for integer results.
+- `reduce add(identity: 0)` over `Seq[i64]` returns `Faultable[i64]`.
+  `reduce add(identity: 0.0)` over `Seq[f64]` returns `f64`.
+- `scan add(identity: 0)` over `Seq[i64]` returns `Seq[Faultable[i64]]`.
+- Integer overflow is reported as a recoverable fault value.
 
 ### `sub`
 
@@ -58,8 +60,7 @@ the same numeric type.
 
 - Not associative.
 - Must not be used with `reduce` or `scan`.
-- Overflow is a boundary/data validation fault reported by the host
-  runtime for integer results.
+- Integer overflow is reported as a recoverable fault value.
 
 ### `mul`
 
@@ -67,8 +68,7 @@ Multiplies two numeric values. Both operands must have the same numeric type.
 
 - Not associative in the reduce sense (no identity declared in the
   initial profile; use user-defined wrappers for product reductions).
-- Overflow is a boundary/data validation fault reported by the host
-  runtime for integer results.
+- Integer overflow is reported as a recoverable fault value.
 
 ### `div`
 
@@ -90,12 +90,12 @@ sign as the dividend, matching C `%`; `f64` remainder matches C `fmod`.
 ### `neg`
 
 Returns the additive inverse. Integer overflow on `i64::MIN` is reported
-as a runtime usage fault.
+as a recoverable fault value.
 
 ### `abs`
 
 Returns the absolute value. Integer overflow on `i64::MIN` is reported
-as a runtime usage fault.
+as a recoverable fault value.
 
 ### `sqrt`
 

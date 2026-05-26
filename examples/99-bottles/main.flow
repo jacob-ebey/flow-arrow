@@ -19,6 +19,7 @@
 #       (body, final_verse) ─> concat_bytes ─> write_stdout ─> exit_code
 import std.bytes { concat_bytes }
 import std.cli { Args }
+import std.fault { expect }
 import std.io { write_stdout }
 import std.int { format_int }
 import std.math { sub, eq }
@@ -39,7 +40,7 @@ program main(args: Args) -> exit_code: i64 {
 #
 node verse_for(n: i64) -> v: Bytes {
     $n      -> format_int -> $n_str
-    ($n, 1) -> sub        -> $m
+    ($n, 1) -> sub        -> expect -> $m
     $m      -> format_int -> $m_str
 
     # Pluralisation: `match` exposes both static alternatives while evaluating

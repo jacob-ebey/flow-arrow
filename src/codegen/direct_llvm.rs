@@ -2770,18 +2770,36 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let Ty::Seq(item_ty) = input.ty.clone() else {
             return Err(format!("`scan {op}` expected Seq input"));
         };
-        let item_ty = item_ty.as_ref().clone();
-        let output_ty = Ty::Seq(Box::new(item_ty.clone()));
+        let input_item_ty = item_ty.as_ref().clone();
+        let plain_item_ty = input_item_ty.inner_faultable();
+        let pair_ty = Ty::Tuple(vec![plain_item_ty.clone(), plain_item_ty.clone()]);
+        let operation_output_ty = self.codegen.call_output_type(op, &pair_ty)?;
+        let operation_faultable = matches!(
+            &operation_output_ty,
+            Ty::Faultable(inner) if inner.as_ref() == &plain_item_ty
+        );
+        let item_faultable = matches!(input_item_ty, Ty::Faultable(_));
+        let output_item_ty = if item_faultable || operation_faultable {
+            Ty::Faultable(Box::new(plain_item_ty.clone()))
+        } else {
+            plain_item_ty.clone()
+        };
+        let output_ty = Ty::Seq(Box::new(output_item_ty.clone()));
         let count = self.seq_count(input.value)?;
         let output = self.emit_seq_new(&output_ty, count)?;
-        let item_llvm_ty = self.types.basic_type(&item_ty)?;
+        let state_llvm_ty = self.types.basic_type(&output_item_ty)?;
         let state_ptr = self
             .builder
-            .build_alloca(item_llvm_ty, "scan.state")
+            .build_alloca(state_llvm_ty, "scan.state")
             .map_err(|error| format!("LLVM backend failed to allocate scan state: {error}"))?;
-        let identity = self.coerce_value_to_ty(identity, &item_ty)?;
+        let identity = self.coerce_value_to_ty(identity, &plain_item_ty)?;
+        let initial = if matches!(output_item_ty, Ty::Faultable(_)) {
+            self.faultable_value(&plain_item_ty, false, None, Some(identity.value))?
+        } else {
+            identity.value
+        };
         self.builder
-            .build_store(state_ptr, identity.value)
+            .build_store(state_ptr, initial)
             .map_err(|error| format!("LLVM backend failed to initialize scan state: {error}"))?;
 
         let function = self.current_function()?;
@@ -2816,36 +2834,137 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         self.builder.position_at_end(body_block);
         let state = self
             .builder
-            .build_load(item_llvm_ty, state_ptr, "state")
+            .build_load(state_llvm_ty, state_ptr, "state")
             .map_err(|error| format!("LLVM backend failed to load scan state: {error}"))?;
         let item = self.load_seq_item(input.value, &input.ty, i)?;
-        let pair_ty = Ty::Tuple(vec![item_ty.clone(), item_ty.clone()]);
-        let mut pair = self
-            .types
-            .basic_type(&pair_ty)?
-            .into_struct_type()
-            .const_zero();
-        pair = self
-            .builder
-            .build_insert_value(pair, state, 0, "scan.pair")
-            .map_err(|error| format!("LLVM backend failed to build scan pair: {error}"))?
-            .into_struct_value();
-        pair = self
-            .builder
-            .build_insert_value(pair, item, 1, "scan.pair")
-            .map_err(|error| format!("LLVM backend failed to build scan pair: {error}"))?
-            .into_struct_value();
-        let next_state = self.emit_call(
-            op,
-            LlvmValue {
-                value: pair.into(),
-                ty: pair_ty,
-            },
-        )?;
+        let next_state = if matches!(output_item_ty, Ty::Faultable(_)) {
+            let state_fault = self.extract_faultable_is_fault(state)?;
+            let item_fault = if item_faultable {
+                self.extract_faultable_is_fault(item)?
+            } else {
+                self.context.bool_type().const_zero()
+            };
+            let existing_fault = self
+                .builder
+                .build_or(state_fault, item_fault, "scan.existing.fault")
+                .map_err(|error| format!("LLVM backend failed to combine scan faults: {error}"))?;
+            let state_value = self.extract_faultable_value(state)?;
+            let item_value = if item_faultable {
+                self.extract_faultable_value(item)?
+            } else {
+                item
+            };
+            let mut pair = self
+                .types
+                .basic_type(&pair_ty)?
+                .into_struct_type()
+                .const_zero();
+            pair = self
+                .builder
+                .build_insert_value(pair, state_value, 0, "scan.pair")
+                .map_err(|error| format!("LLVM backend failed to build scan pair: {error}"))?
+                .into_struct_value();
+            pair = self
+                .builder
+                .build_insert_value(pair, item_value, 1, "scan.pair")
+                .map_err(|error| format!("LLVM backend failed to build scan pair: {error}"))?
+                .into_struct_value();
+            let scanned = self.emit_call(
+                op,
+                LlvmValue {
+                    value: pair.into(),
+                    ty: pair_ty.clone(),
+                },
+            )?;
+            let scanned = if matches!(scanned.ty, Ty::Faultable(_)) {
+                scanned.value
+            } else {
+                self.faultable_value(&plain_item_ty, false, None, Some(scanned.value))?
+            };
+            let scan_fault = self.extract_faultable_is_fault(scanned)?;
+            let any_fault = self
+                .builder
+                .build_or(existing_fault, scan_fault, "scan.any.fault")
+                .map_err(|error| {
+                    format!("LLVM backend failed to combine scan op fault: {error}")
+                })?;
+            let state_fault_value = self.extract_faultable_fault(state)?;
+            let item_fault_value = if item_faultable {
+                self.extract_faultable_fault(item)?
+            } else {
+                self.extract_faultable_fault(scanned)?
+            };
+            let scan_fault_value = self.extract_faultable_fault(scanned)?;
+            let selected_fault = self
+                .builder
+                .build_select(
+                    item_fault,
+                    item_fault_value,
+                    state_fault_value,
+                    "scan.fault",
+                )
+                .map_err(|error| format!("LLVM backend failed to select scan fault: {error}"))?;
+            let no_existing_fault = self
+                .builder
+                .build_not(existing_fault, "scan.no.existing.fault")
+                .map_err(|error| format!("LLVM backend failed to invert scan fault: {error}"))?;
+            let new_scan_fault = self
+                .builder
+                .build_and(scan_fault, no_existing_fault, "scan.new.fault")
+                .map_err(|error| {
+                    format!("LLVM backend failed to combine scan new fault: {error}")
+                })?;
+            let selected_fault = self
+                .builder
+                .build_select(
+                    new_scan_fault,
+                    scan_fault_value,
+                    selected_fault,
+                    "scan.fault",
+                )
+                .map_err(|error| format!("LLVM backend failed to select scan op fault: {error}"))?;
+            let scan_value = self.extract_faultable_value(scanned)?;
+            let next =
+                self.faultable_value(&plain_item_ty, true, Some(selected_fault), Some(scan_value))?;
+            let any_fault_i8 = self
+                .builder
+                .build_int_z_extend(any_fault, self.context.i8_type(), "scan.fault.flag")
+                .map_err(|error| {
+                    format!("LLVM backend failed to extend scan fault flag: {error}")
+                })?;
+            self.builder
+                .build_insert_value(next.into_struct_value(), any_fault_i8, 0, "scan.fault.flag")
+                .map_err(|error| format!("LLVM backend failed to set scan fault flag: {error}"))?
+                .as_basic_value_enum()
+        } else {
+            let mut pair = self
+                .types
+                .basic_type(&pair_ty)?
+                .into_struct_type()
+                .const_zero();
+            pair = self
+                .builder
+                .build_insert_value(pair, state, 0, "scan.pair")
+                .map_err(|error| format!("LLVM backend failed to build scan pair: {error}"))?
+                .into_struct_value();
+            pair = self
+                .builder
+                .build_insert_value(pair, item, 1, "scan.pair")
+                .map_err(|error| format!("LLVM backend failed to build scan pair: {error}"))?
+                .into_struct_value();
+            self.emit_call(
+                op,
+                LlvmValue {
+                    value: pair.into(),
+                    ty: pair_ty.clone(),
+                },
+            )?
+            .value
+        };
         self.builder
-            .build_store(state_ptr, next_state.value)
+            .build_store(state_ptr, next_state)
             .map_err(|error| format!("LLVM backend failed to store scan state: {error}"))?;
-        self.store_seq_item(output.value, &output_ty, i, next_state.value)?;
+        self.store_seq_item(output.value, &output_ty, i, next_state)?;
         let next_i = self
             .builder
             .build_int_add(i, self.context.i64_type().const_int(1, false), "next")
@@ -2873,7 +2992,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         let canonical = self.codegen.canonical_name(op);
         if self.options.gpu && matches!(canonical.as_str(), "add" | "min" | "max") {
             match item_ty.as_ref() {
-                Ty::I64 => {
+                Ty::I64 if canonical != "add" => {
                     let identity = self.coerce_value_to_ty(identity, &Ty::I64)?;
                     let input_items = self.seq_items(input.value)?;
                     let count = self.seq_count(input.value)?;
@@ -3063,11 +3182,12 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         item_ty: Ty,
         identity: LlvmValue<'ctx>,
     ) -> Result<LlvmValue<'ctx>, String> {
-        let (plain_ty, faultable) = match item_ty {
+        let (plain_ty, item_faultable) = match item_ty {
             Ty::Faultable(inner) => (*inner, true),
             other => (other, false),
         };
-        let output_ty = if faultable {
+        let overflow_faultable = plain_ty == Ty::I64;
+        let output_ty = if item_faultable || overflow_faultable {
             Ty::Faultable(Box::new(plain_ty.clone()))
         } else {
             plain_ty.clone()
@@ -3077,7 +3197,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             .builder
             .build_alloca(output_llvm_ty, "reduce.state")
             .map_err(|error| format!("LLVM backend failed to allocate reduce state: {error}"))?;
-        let initial = if faultable {
+        let initial = if item_faultable || overflow_faultable {
             self.faultable_value(&plain_ty, false, None, Some(identity.value))?
         } else {
             identity.value
@@ -3120,26 +3240,78 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
 
         self.builder.position_at_end(body_block);
         let item = self.load_seq_item(input.value, &input.ty, i)?;
-        if faultable {
+        if item_faultable || overflow_faultable {
             let state = self
                 .builder
                 .build_load(output_llvm_ty, state_ptr, "state")
                 .map_err(|error| format!("LLVM backend failed to load reduce state: {error}"))?;
             let state_fault = self.extract_faultable_is_fault(state)?;
-            let item_fault = self.extract_faultable_is_fault(item)?;
+            let item_fault = if item_faultable {
+                self.extract_faultable_is_fault(item)?
+            } else {
+                self.context.bool_type().const_zero()
+            };
             let any_fault = self
                 .builder
                 .build_or(state_fault, item_fault, "any.fault")
                 .map_err(|error| format!("LLVM backend failed to combine fault flags: {error}"))?;
+            let existing_fault = any_fault;
             let state_value = self.extract_faultable_value(state)?;
-            let item_value = self.extract_faultable_value(item)?;
-            let sum_value = self.emit_add_values(state_value, item_value, &plain_ty)?;
-            let item_fault_value = self.extract_faultable_fault(item)?;
+            let item_value = if item_faultable {
+                self.extract_faultable_value(item)?
+            } else {
+                item
+            };
+            let sum = if overflow_faultable {
+                self.emit_runtime_sret_call(
+                    "fa_faultable_i64_add",
+                    &output_ty,
+                    &[
+                        self.context.i64_type().into(),
+                        self.context.i64_type().into(),
+                    ],
+                    &[
+                        state_value.into_int_value().into(),
+                        item_value.into_int_value().into(),
+                    ],
+                )?
+            } else {
+                let sum_value = self.emit_add_values(state_value, item_value, &plain_ty)?;
+                self.faultable_value(&plain_ty, false, None, Some(sum_value))?
+            };
+            let sum_fault = self.extract_faultable_is_fault(sum)?;
+            let any_fault = self
+                .builder
+                .build_or(any_fault, sum_fault, "any.fault")
+                .map_err(|error| format!("LLVM backend failed to combine sum fault: {error}"))?;
+            let item_fault_value = if item_faultable {
+                self.extract_faultable_fault(item)?
+            } else {
+                self.extract_faultable_fault(sum)?
+            };
             let state_fault_value = self.extract_faultable_fault(state)?;
+            let sum_fault_value = self.extract_faultable_fault(sum)?;
             let selected_fault = self
                 .builder
                 .build_select(item_fault, item_fault_value, state_fault_value, "fault")
                 .map_err(|error| format!("LLVM backend failed to select reduce fault: {error}"))?;
+            let no_existing_fault = self
+                .builder
+                .build_not(existing_fault, "no.existing.fault")
+                .map_err(|error| format!("LLVM backend failed to invert reduce fault: {error}"))?;
+            let new_sum_fault = self
+                .builder
+                .build_and(sum_fault, no_existing_fault, "new.sum.fault")
+                .map_err(|error| {
+                    format!("LLVM backend failed to combine reduce sum fault: {error}")
+                })?;
+            let selected_fault = self
+                .builder
+                .build_select(new_sum_fault, sum_fault_value, selected_fault, "fault")
+                .map_err(|error| {
+                    format!("LLVM backend failed to select reduce sum fault: {error}")
+                })?;
+            let sum_value = self.extract_faultable_value(sum)?;
             let next =
                 self.faultable_value(&plain_ty, true, Some(selected_fault), Some(sum_value))?;
             let any_fault_i8 = self
@@ -4193,6 +4365,26 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                         "llvm.smul.with.overflow.i64",
                     );
                 }
+                "fa_faultable_i64_add" => {
+                    return self.define_wasm_faultable_i64_overflow_function(
+                        name,
+                        "llvm.sadd.with.overflow.i64",
+                    );
+                }
+                "fa_faultable_i64_sub" => {
+                    return self.define_wasm_faultable_i64_overflow_function(
+                        name,
+                        "llvm.ssub.with.overflow.i64",
+                    );
+                }
+                "fa_faultable_i64_mul" => {
+                    return self.define_wasm_faultable_i64_overflow_function(
+                        name,
+                        "llvm.smul.with.overflow.i64",
+                    );
+                }
+                "fa_faultable_i64_neg" => return self.define_wasm_faultable_i64_neg(),
+                "fa_faultable_i64_abs" => return self.define_wasm_faultable_i64_abs(),
                 "fa_checked_i64_div" => return self.define_wasm_checked_i64_div_rem(name, "div"),
                 "fa_checked_i64_rem" => return self.define_wasm_checked_i64_div_rem(name, "rem"),
                 "fa_checked_i64_neg" => return self.define_wasm_checked_i64_neg(),
@@ -4200,6 +4392,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                 "fa_checked_f64_div" => return self.define_wasm_checked_f64_div_rem(name, "div"),
                 "fa_checked_f64_rem" => return self.define_wasm_checked_f64_div_rem(name, "rem"),
                 "fa_checked_sqrt" => return self.define_wasm_checked_sqrt(),
+                "fa_exit_fault" => return self.define_wasm_exit_fault(),
                 _ => {}
             }
         }
@@ -4262,6 +4455,229 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         self.builder
             .build_return(Some(&result))
             .map_err(|error| format!("LLVM backend failed to return `{name}`: {error}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(function)
+    }
+
+    fn define_wasm_faultable_i64_overflow_function(
+        &mut self,
+        name: &str,
+        intrinsic_name: &str,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let saved_block = self.builder.get_insert_block();
+        let i64_ty = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let function = self.module.add_function(
+            name,
+            self.context
+                .void_type()
+                .fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false),
+            None,
+        );
+        let entry = self.context.append_basic_block(function, "entry");
+        let fault_block = self.context.append_basic_block(function, "fault");
+        let ok_block = self.context.append_basic_block(function, "ok");
+        self.builder.position_at_end(entry);
+        let out_ptr = function
+            .get_nth_param(0)
+            .ok_or_else(|| format!("`{name}` missing output parameter"))?
+            .into_pointer_value();
+        let left = function
+            .get_nth_param(1)
+            .ok_or_else(|| format!("`{name}` missing left parameter"))?
+            .into_int_value();
+        let right = function
+            .get_nth_param(2)
+            .ok_or_else(|| format!("`{name}` missing right parameter"))?
+            .into_int_value();
+        let intrinsic = Intrinsic::find(intrinsic_name)
+            .and_then(|intrinsic| intrinsic.get_declaration(&self.module, &[i64_ty.into()]))
+            .ok_or_else(|| format!("failed to declare `{intrinsic_name}`"))?;
+        let pair = self
+            .builder
+            .build_call(intrinsic, &[left.into(), right.into()], name)
+            .map_err(|error| format!("LLVM backend failed to call `{intrinsic_name}`: {error}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("`{intrinsic_name}` did not return a value"))?
+            .into_struct_value();
+        let result = self
+            .builder
+            .build_extract_value(pair, 0, "result")
+            .map_err(|error| format!("LLVM backend failed to extract `{name}` result: {error}"))?;
+        let overflow = self
+            .builder
+            .build_extract_value(pair, 1, "overflow")
+            .map_err(|error| format!("LLVM backend failed to extract `{name}` overflow: {error}"))?
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(overflow, fault_block, ok_block)
+            .map_err(|error| format!("LLVM backend failed to branch in `{name}`: {error}"))?;
+
+        self.builder.position_at_end(fault_block);
+        let faulted = self.faultable_value(&Ty::I64, true, None, Some(result))?;
+        self.builder
+            .build_store(out_ptr, faulted)
+            .map_err(|error| format!("LLVM backend failed to store `{name}` fault: {error}"))?;
+        self.builder
+            .build_return(None)
+            .map_err(|error| format!("LLVM backend failed to return `{name}` fault: {error}"))?;
+
+        self.builder.position_at_end(ok_block);
+        let ok = self.faultable_value(&Ty::I64, false, None, Some(result))?;
+        self.builder
+            .build_store(out_ptr, ok)
+            .map_err(|error| format!("LLVM backend failed to store `{name}` ok: {error}"))?;
+        self.builder
+            .build_return(None)
+            .map_err(|error| format!("LLVM backend failed to return `{name}` ok: {error}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(function)
+    }
+
+    fn define_wasm_faultable_i64_neg(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        let saved_block = self.builder.get_insert_block();
+        let i64_ty = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let function = self.module.add_function(
+            "fa_faultable_i64_neg",
+            self.context
+                .void_type()
+                .fn_type(&[ptr_ty.into(), i64_ty.into()], false),
+            None,
+        );
+        let entry = self.context.append_basic_block(function, "entry");
+        let fault_block = self.context.append_basic_block(function, "fault");
+        let ok_block = self.context.append_basic_block(function, "ok");
+        self.builder.position_at_end(entry);
+        let out_ptr = function
+            .get_nth_param(0)
+            .ok_or_else(|| "`fa_faultable_i64_neg` missing output parameter".to_string())?
+            .into_pointer_value();
+        let value = function
+            .get_nth_param(1)
+            .ok_or_else(|| "`fa_faultable_i64_neg` missing value parameter".to_string())?
+            .into_int_value();
+        let overflow = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                value,
+                i64_ty.const_int(i64::MIN as u64, true),
+                "overflow",
+            )
+            .map_err(|error| {
+                format!("LLVM backend failed to check `fa_faultable_i64_neg`: {error}")
+            })?;
+        let negated = self.builder.build_int_neg(value, "neg").map_err(|error| {
+            format!("LLVM backend failed to negate `fa_faultable_i64_neg`: {error}")
+        })?;
+        self.builder
+            .build_conditional_branch(overflow, fault_block, ok_block)
+            .map_err(|error| {
+                format!("LLVM backend failed to branch in `fa_faultable_i64_neg`: {error}")
+            })?;
+        self.builder.position_at_end(fault_block);
+        let faulted = self.faultable_value(&Ty::I64, true, None, Some(value.into()))?;
+        self.builder
+            .build_store(out_ptr, faulted)
+            .map_err(|error| {
+                format!("LLVM backend failed to store `fa_faultable_i64_neg` fault: {error}")
+            })?;
+        self.builder.build_return(None).map_err(|error| {
+            format!("LLVM backend failed to return `fa_faultable_i64_neg` fault: {error}")
+        })?;
+        self.builder.position_at_end(ok_block);
+        let ok = self.faultable_value(&Ty::I64, false, None, Some(negated.into()))?;
+        self.builder.build_store(out_ptr, ok).map_err(|error| {
+            format!("LLVM backend failed to store `fa_faultable_i64_neg` ok: {error}")
+        })?;
+        self.builder.build_return(None).map_err(|error| {
+            format!("LLVM backend failed to return `fa_faultable_i64_neg` ok: {error}")
+        })?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(function)
+    }
+
+    fn define_wasm_faultable_i64_abs(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        let saved_block = self.builder.get_insert_block();
+        let i64_ty = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let function = self.module.add_function(
+            "fa_faultable_i64_abs",
+            self.context
+                .void_type()
+                .fn_type(&[ptr_ty.into(), i64_ty.into()], false),
+            None,
+        );
+        let entry = self.context.append_basic_block(function, "entry");
+        let fault_block = self.context.append_basic_block(function, "fault");
+        let ok_block = self.context.append_basic_block(function, "ok");
+        self.builder.position_at_end(entry);
+        let out_ptr = function
+            .get_nth_param(0)
+            .ok_or_else(|| "`fa_faultable_i64_abs` missing output parameter".to_string())?
+            .into_pointer_value();
+        let value = function
+            .get_nth_param(1)
+            .ok_or_else(|| "`fa_faultable_i64_abs` missing value parameter".to_string())?
+            .into_int_value();
+        let zero = i64_ty.const_zero();
+        let overflow = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                value,
+                i64_ty.const_int(i64::MIN as u64, true),
+                "overflow",
+            )
+            .map_err(|error| {
+                format!("LLVM backend failed to check `fa_faultable_i64_abs`: {error}")
+            })?;
+        let is_negative = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, value, zero, "is_negative")
+            .map_err(|error| {
+                format!("LLVM backend failed to compare `fa_faultable_i64_abs`: {error}")
+            })?;
+        let negated = self.builder.build_int_neg(value, "neg").map_err(|error| {
+            format!("LLVM backend failed to negate `fa_faultable_i64_abs`: {error}")
+        })?;
+        let result = self
+            .builder
+            .build_select(is_negative, negated, value, "abs")
+            .map_err(|error| {
+                format!("LLVM backend failed to select `fa_faultable_i64_abs`: {error}")
+            })?;
+        self.builder
+            .build_conditional_branch(overflow, fault_block, ok_block)
+            .map_err(|error| {
+                format!("LLVM backend failed to branch in `fa_faultable_i64_abs`: {error}")
+            })?;
+        self.builder.position_at_end(fault_block);
+        let faulted = self.faultable_value(&Ty::I64, true, None, Some(value.into()))?;
+        self.builder
+            .build_store(out_ptr, faulted)
+            .map_err(|error| {
+                format!("LLVM backend failed to store `fa_faultable_i64_abs` fault: {error}")
+            })?;
+        self.builder.build_return(None).map_err(|error| {
+            format!("LLVM backend failed to return `fa_faultable_i64_abs` fault: {error}")
+        })?;
+        self.builder.position_at_end(ok_block);
+        let ok = self.faultable_value(&Ty::I64, false, None, Some(result))?;
+        self.builder.build_store(out_ptr, ok).map_err(|error| {
+            format!("LLVM backend failed to store `fa_faultable_i64_abs` ok: {error}")
+        })?;
+        self.builder.build_return(None).map_err(|error| {
+            format!("LLVM backend failed to return `fa_faultable_i64_abs` ok: {error}")
+        })?;
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
         }
@@ -4514,6 +4930,30 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         self.builder
             .build_return(Some(&result))
             .map_err(|error| format!("LLVM backend failed to return `fa_checked_sqrt`: {error}"))?;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        Ok(function)
+    }
+
+    fn define_wasm_exit_fault(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        let saved_block = self.builder.get_insert_block();
+        let function = self.module.add_function(
+            "fa_exit_fault",
+            self.context
+                .void_type()
+                .fn_type(&[self.runtime_pair_type().into()], false),
+            None,
+        );
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        self.build_trap_if(
+            self.context.bool_type().const_int(1, false),
+            "fa_exit_fault",
+        )?;
+        self.builder
+            .build_unreachable()
+            .map_err(|error| format!("LLVM backend failed to build fa_exit_fault trap: {error}"))?;
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
         }

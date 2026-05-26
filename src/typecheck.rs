@@ -2209,11 +2209,17 @@ impl<'a> Checker<'a> {
                 last_error.unwrap_or_else(|| format!("expected reduce input, found `{pair}`"))
             )
         })?;
-        self.expect_type(
-            &format!("reduce `{name}` result"),
-            &output,
-            &plain_item_type,
-        )?;
+        let operation_faultable = match &output {
+            Type::Faultable(inner) if inner.as_ref() == &plain_item_type => true,
+            _ => {
+                self.expect_type(
+                    &format!("reduce `{name}` result"),
+                    &output,
+                    &plain_item_type,
+                )?;
+                false
+            }
+        };
         self.expect_type(
             &format!("reduce `{name}` identity"),
             identity,
@@ -2222,11 +2228,13 @@ impl<'a> Checker<'a> {
         if callable.name.is_empty() {
             return Err("internal error: empty callable name".to_string());
         }
-        Ok(if input_faultable || item_faultable {
-            Type::Faultable(Box::new(plain_item_type))
-        } else {
-            plain_item_type
-        })
+        Ok(
+            if input_faultable || item_faultable || operation_faultable {
+                Type::Faultable(Box::new(plain_item_type))
+            } else {
+                plain_item_type
+            },
+        )
     }
 
     fn apply_scan(
@@ -2249,11 +2257,23 @@ impl<'a> Checker<'a> {
         )?;
         let pair = Type::Tuple(vec![plain_item_type.clone(), plain_item_type.clone()]);
         let result = self.apply_node(callable, CallableKind::Node, name, &pair, true, false)?;
-        self.expect_type(&format!("scan `{name}` result"), &result, &plain_item_type)?;
+        let item_faultable = matches!(item_type.as_ref(), Type::Faultable(_));
+        let operation_faultable = match &result {
+            Type::Faultable(inner) if inner.as_ref() == &plain_item_type => true,
+            _ => {
+                self.expect_type(&format!("scan `{name}` result"), &result, &plain_item_type)?;
+                false
+            }
+        };
         if callable.name.is_empty() {
             return Err("internal error: empty callable name".to_string());
         }
-        let seq = Type::Seq(Box::new(plain_item_type));
+        let output_item = if item_faultable || operation_faultable {
+            Type::Faultable(Box::new(plain_item_type))
+        } else {
+            plain_item_type
+        };
+        let seq = Type::Seq(Box::new(output_item));
         Ok(if input_faultable {
             Type::Faultable(Box::new(seq))
         } else {
@@ -2530,7 +2550,13 @@ fn format_endpoint_list_for_error(items: &[Endpoint], open: &str, close: &str) -
 fn stdlib_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, String> {
     if symbol.module == "std.math" {
         match symbol.name {
-            "add" | "sub" | "mul" | "min" | "max" => return Ok(numeric_binary_signatures()),
+            "add" | "sub" | "mul" => return Ok(numeric_binary_signatures()),
+            "min" | "max" => {
+                return Ok(vec![
+                    numeric_signature(Type::I64, Type::I64),
+                    numeric_signature(Type::F64, Type::F64),
+                ]);
+            }
             "div" | "rem" => return Ok(numeric_faultable_binary_signatures()),
             "neg" | "abs" => return Ok(numeric_unary_signatures()),
             "sqrt" => return Ok(numeric_faultable_real_unary_signatures()),
@@ -2553,7 +2579,13 @@ fn stdlib_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, Strin
 }
 
 fn stdlib_reduce_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>, String> {
-    if symbol.module == "std.math" && matches!(symbol.name, "add" | "min" | "max") {
+    if symbol.module == "std.math" && symbol.name == "add" {
+        return Ok(vec![
+            numeric_faultable_signature(Type::I64, Type::I64),
+            numeric_signature(Type::F64, Type::F64),
+        ]);
+    }
+    if symbol.module == "std.math" && matches!(symbol.name, "min" | "max") {
         return Ok(vec![
             numeric_signature(Type::I64, Type::I64),
             numeric_signature(Type::F64, Type::F64),
@@ -2570,26 +2602,23 @@ fn stdlib_reduce_signatures(symbol: &stdlib::StdSymbol) -> Result<Vec<Signature>
 
 fn numeric_binary_signatures() -> Vec<Signature> {
     vec![
-        numeric_signature(Type::I64, Type::I64),
+        numeric_faultable_signature(Type::I64, Type::I64),
         numeric_signature(Type::F64, Type::F64),
     ]
 }
 
 fn numeric_faultable_binary_signatures() -> Vec<Signature> {
-    numeric_binary_signatures()
-        .into_iter()
-        .map(|signature| Signature {
-            input: signature.input,
-            output: Type::Faultable(Box::new(signature.output)),
-        })
-        .collect()
+    vec![
+        numeric_faultable_signature(Type::I64, Type::I64),
+        numeric_faultable_signature(Type::F64, Type::F64),
+    ]
 }
 
 fn numeric_unary_signatures() -> Vec<Signature> {
     vec![
         Signature {
             input: Type::I64,
-            output: Type::I64,
+            output: Type::Faultable(Box::new(Type::I64)),
         },
         Signature {
             input: Type::F64,
@@ -2628,6 +2657,15 @@ fn numeric_signature(left: Type, right: Type) -> Signature {
     Signature {
         input: Type::Tuple(vec![left, right]),
         output,
+    }
+}
+
+fn numeric_faultable_signature(left: Type, right: Type) -> Signature {
+    debug_assert_eq!(left, right, "numeric signatures must not mix types");
+    let output = left.clone();
+    Signature {
+        input: Type::Tuple(vec![left, right]),
+        output: Type::Faultable(Box::new(output)),
     }
 }
 

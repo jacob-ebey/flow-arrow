@@ -72,7 +72,7 @@ $tokens -> filter not_empty                      -> $nonempty
 $nonempty -> fault map parse_real { ok -> $numbers, fault -> $faults }
 
 $numbers -> map one                              -> $ones
-$ones -> reduce add(identity: 0)                 -> $count
+$ones -> reduce add(identity: 0) -> expect       -> $count
 $numbers -> reduce add(identity: 0.0)            -> $sum
 ($count, $sum) -> render_summary                 -> $success_output
 

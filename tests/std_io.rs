@@ -4,6 +4,7 @@ mod support;
 fn std_io_nodes_run() {
     let source = r#"
         import std.cli { Args }
+        import std.fault { expect }
         import std.io { read_stdin, write_stdout, write_stderr }
         import std.math { add }
 
@@ -11,7 +12,7 @@ fn std_io_nodes_run() {
             () -> read_stdin -> $input
             $input -> write_stdout -> $stdout_status
             "err\n" -> write_stderr -> $stderr_status
-            ($stdout_status, $stderr_status) -> add -> $exit_code
+            ($stdout_status, $stderr_status) -> add -> expect -> $exit_code
         }
     "#;
 

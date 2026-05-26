@@ -1,6 +1,7 @@
 # gpu-accumulator-benchmark library target
 #
 # Pure export-oriented version used by JavaScript/WebGPU browser validation.
+import std.fault { expect }
 import std.math { add, rem }
 import std.real { from_int }
 import std.vector { dot, squared_distance, squared_norm }
@@ -13,15 +14,15 @@ extern node run_gpu_accumulator(iterations: i64) -> score: f64 {
 }
 
 node left_value(index: i64) -> value: f64 {
-    ($index, 11)  -> rem      -> $wrapped
-    ($wrapped, 1) -> add      -> $offset
+    ($index, 11)  -> rem      -> expect -> $wrapped
+    ($wrapped, 1) -> add      -> expect -> $offset
     $offset       -> from_int -> $value
 }
 
 node right_value(index: i64) -> value: f64 {
-    ($index, 3)    -> add      -> $shifted
-    ($shifted, 11) -> rem      -> $wrapped
-    ($wrapped, 1)  -> add      -> $offset
+    ($index, 3)    -> add      -> expect -> $shifted
+    ($shifted, 11) -> rem      -> expect -> $wrapped
+    ($wrapped, 1)  -> add      -> expect -> $offset
     $offset        -> from_int -> $value
 }
 

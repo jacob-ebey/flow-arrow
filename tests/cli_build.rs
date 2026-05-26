@@ -148,7 +148,7 @@ fn build_typescript_fib_example_and_typecheck_output() {
     assert!(generated_ts.contains("let result: bigint = 0n"));
     assert!(generated_ts.contains("[result, t0] = fib_step(result, t0)"));
     assert!(generated_ts.contains("return result;"));
-    assert!(generated_ts.contains("return [b, faCheckedI64Add(a, b)];"));
+    assert!(generated_ts.contains("return [b, faExpect(faFaultableI64Add(a, b))];"));
     assert!(!generated_ts.contains("arguments["));
     assert!(!generated_ts.contains("...t0"));
     assert!(!generated_ts.contains("return t0[0]"));
@@ -157,7 +157,7 @@ fn build_typescript_fib_example_and_typecheck_output() {
     assert!(generated_ts.contains("for (let"));
     assert!(!generated_ts.contains("faParseReal"));
     assert!(!generated_ts.contains("FaArgs"));
-    assert!(!generated_ts.contains("FaFaultable"));
+    assert!(generated_ts.contains("FaFaultable"));
 
     if Command::new("tsc").arg("--version").output().is_ok() {
         let output = Command::new("tsc")
@@ -213,7 +213,7 @@ fn build_javascript_fib_example_and_run_node_script() {
     assert!(generated.contains("let result = 0n"));
     assert!(generated.contains("[result, t0] = fib_step(result, t0)"));
     assert!(generated.contains("return result;"));
-    assert!(generated.contains("return [b, faCheckedI64Add(a, b)];"));
+    assert!(generated.contains("return [b, faExpect(faFaultableI64Add(a, b))];"));
     assert!(!generated.contains("arguments["));
     assert!(!generated.contains("...t0"));
     assert!(!generated.contains("return t0[0]"));

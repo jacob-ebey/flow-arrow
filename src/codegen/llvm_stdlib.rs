@@ -41,8 +41,17 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             });
         }
         let value = match name {
-            "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
+            "add" | "sub" | "mul" | "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
                 let function_name = match (&output_ty, name) {
+                    (Ty::Faultable(inner), "add") if inner.as_ref() == &Ty::I64 => {
+                        "fa_faultable_i64_add"
+                    }
+                    (Ty::Faultable(inner), "sub") if inner.as_ref() == &Ty::I64 => {
+                        "fa_faultable_i64_sub"
+                    }
+                    (Ty::Faultable(inner), "mul") if inner.as_ref() == &Ty::I64 => {
+                        "fa_faultable_i64_mul"
+                    }
                     (Ty::Faultable(inner), "div") if inner.as_ref() == &Ty::I64 => {
                         "fa_faultable_i64_div"
                     }
@@ -104,6 +113,22 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     &output_ty,
                     &[self.context.f64_type().into()],
                     &[input.value.into_float_value().into()],
+                )?
+            }
+            "neg" | "abs" if matches!(output_ty, Ty::Faultable(_)) => {
+                if input.ty != Ty::I64 {
+                    return Err(format!("{name} expected i64 input, found `{}`", input.ty));
+                }
+                let function_name = match name {
+                    "neg" => "fa_faultable_i64_neg",
+                    "abs" => "fa_faultable_i64_abs",
+                    _ => unreachable!(),
+                };
+                self.emit_runtime_sret_call(
+                    function_name,
+                    &output_ty,
+                    &[self.context.i64_type().into()],
+                    &[input.value.into_int_value().into()],
                 )?
             }
             "neg" | "abs" | "sqrt" | "exp" | "sin" | "cos" => {
@@ -964,7 +989,7 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             })
     }
 
-    fn emit_runtime_sret_call(
+    pub(super) fn emit_runtime_sret_call(
         &mut self,
         function_name: &str,
         output_ty: &Ty,

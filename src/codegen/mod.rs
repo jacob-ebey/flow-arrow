@@ -954,9 +954,20 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
             Ty::Faultable(_) => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
             _ => Ok(Ty::Bytes),
         },
-        "add" | "sub" | "mul" | "min" | "max" => numeric_binary_output(input),
+        "add" | "sub" | "mul" => {
+            let output = numeric_binary_output(input)?;
+            Ok(match output {
+                Ty::I64 => Ty::Faultable(Box::new(Ty::I64)),
+                other => other,
+            })
+        }
+        "min" | "max" => numeric_binary_output(input),
         "div" | "rem" => Ok(Ty::Faultable(Box::new(numeric_binary_output(input)?))),
-        "neg" | "abs" => Ok(input.clone()),
+        "neg" | "abs" => match input {
+            Ty::I64 => Ok(Ty::Faultable(Box::new(Ty::I64))),
+            Ty::F64 => Ok(Ty::F64),
+            other => Err(format!("{name} expected i64 or f64, found `{other}`")),
+        },
         "sqrt" => Ok(Ty::Faultable(Box::new(Ty::F64))),
         "exp" | "sin" | "cos" => Ok(Ty::F64),
         "eq" | "lt" | "gt" | "le" | "ge" | "not_empty" | "is_empty" | "and" | "or" | "xor"
@@ -1534,6 +1545,9 @@ fn numeric_faultable_binary_expr(name: &str, input: &str, output_ty: &Ty) -> Str
         ("div", Ty::F64) => format!("fa_faultable_f64_div({left}, {right})"),
         ("rem", Ty::I64) => format!("fa_faultable_i64_rem({left}, {right})"),
         ("rem", Ty::F64) => format!("fa_faultable_f64_rem({left}, {right})"),
+        ("add", Ty::I64) => format!("fa_faultable_i64_add({left}, {right})"),
+        ("sub", Ty::I64) => format!("fa_faultable_i64_sub({left}, {right})"),
+        ("mul", Ty::I64) => format!("fa_faultable_i64_mul({left}, {right})"),
         _ => unreachable!(),
     }
 }
@@ -1558,6 +1572,8 @@ fn numeric_faultable_unary_expr(name: &str, input: &str, output_ty: &Ty) -> Stri
     };
     match (name, inner.as_ref()) {
         ("sqrt", Ty::F64) => format!("fa_faultable_sqrt({input})"),
+        ("neg", Ty::I64) => format!("fa_faultable_i64_neg({input})"),
+        ("abs", Ty::I64) => format!("fa_faultable_i64_abs({input})"),
         _ => unreachable!(),
     }
 }
@@ -2264,13 +2280,14 @@ mod tests {
             r#"
                 extern node parts(value: i64) -> (original: i64, doubled: i64) {
                     $value       -> $original
-                    ($value, 2)  -> mul -> $doubled
+                    ($value, 2)  -> mul -> expect -> $doubled
                 }
 
                 extern node label() -> value: Bytes {
                     "compound" -> $value
                 }
 
+                import std.fault { expect }
                 import std.math { mul }
             "#,
         )
@@ -2373,6 +2390,7 @@ mod tests {
     fn independent_pure_chains_emit_parallel_tasks() {
         let module = parser::parse(
             r#"
+                import std.fault { expect }
                 import std.math { add, max, mul }
 
                 struct JobSummary {
@@ -2386,9 +2404,9 @@ mod tests {
                     (1, $width, 1) -> range_step              -> $jobs
                     $jobs        -> map score_job           -> $scores
                     $jobs        -> map weight_job          -> $weights
-                    $scores      -> reduce add(identity: 0) -> $total_score
+                    $scores      -> reduce add(identity: 0) -> expect -> $total_score
                     $scores      -> reduce max(identity: 0) -> $peak_score
-                    $weights     -> reduce add(identity: 0) -> $total_weight
+                    $weights     -> reduce add(identity: 0) -> expect -> $total_weight
                     $weights     -> reduce max(identity: 0) -> $peak_weight
                     JobSummary {
                         total_score: $total_score,
@@ -2399,13 +2417,13 @@ mod tests {
                 }
 
                 node score_job(n: i64) -> score: i64 {
-                    ($n, $n)      -> mul -> $square
-                    ($square, $n) -> add -> $score
+                    ($n, $n)      -> mul -> expect -> $square
+                    ($square, $n) -> add -> expect -> $score
                 }
 
                 node weight_job(n: i64) -> weight: i64 {
-                    ($n, 2)       -> mul -> $doubled
-                    ($doubled, 1) -> add -> $weight
+                    ($n, 2)       -> mul -> expect -> $doubled
+                    ($doubled, 1) -> add -> expect -> $weight
                 }
             "#,
         )
@@ -2462,6 +2480,7 @@ mod tests {
         let module = checked_module(
             r#"
                 import std.cli { Args }
+                import std.fault { expect }
                 import std.math { add }
 
                 struct Point {
@@ -2472,7 +2491,7 @@ mod tests {
                 node sum_point(point: Point) -> total: i64 {
                     $point -> field x -> $x
                     $point -> field y -> $y
-                    ($x, $y) -> add -> $total
+                    ($x, $y) -> add -> expect -> $total
                 }
 
                 program main(args: Args) -> exit_code: i64 {
@@ -2493,6 +2512,7 @@ mod tests {
         let module = checked_module(
             r#"
                 import std.cli { Args }
+                import std.fault { expect }
                 import std.math { add }
 
                 struct Point {
@@ -2503,7 +2523,7 @@ mod tests {
                 node sum_point(point: Point) -> total: i64 {
                     $point -> field x -> $x
                     $point -> field y -> $y
-                    ($x, $y) -> add -> $total
+                    ($x, $y) -> add -> expect -> $total
                 }
 
                 program main(args: Args) -> exit_code: i64 {

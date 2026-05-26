@@ -275,7 +275,10 @@ The compiler keeps GPU support in the backend lowering pipeline, not in a
 separate evaluator. A backend-neutral GPU planner walks the typed module and
 recognizes GPU-legal typed regions. The implemented scalar path covers pure
 `Seq[i64] -> Seq[i64]` and `Seq[f64] -> Seq[f64]` `map` kernels plus numeric
-`reduce add`, `reduce min`, and `reduce max` over `Seq[i64]` and `Seq[f64]`.
+`reduce min` and `reduce max` over `Seq[i64]`, and `reduce add`,
+`reduce min`, and `reduce max` over `Seq[f64]`. Integer `reduce add`
+returns `Faultable[i64]` because overflow is recoverable, so it is not lowered
+to the current plain `i64` GPU reduction helper.
 It also recognizes `range_step -> map i64 -> reduce` groups and lowers them as
 GPU-resident virtual-range reductions, so the host does not materialize the
 range or mapped sequence when every downstream consumer is reducible on the GPU.

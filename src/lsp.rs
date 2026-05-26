@@ -2231,10 +2231,11 @@ mod tests {
     #[test]
     fn analysis_finds_local_definitions_and_variables() {
         let source = r#"
+            import std.fault { expect }
             import std.math { add }
 
             node inc(value: i64) -> out: i64 {
-                ($value, 1) -> add -> $out
+                ($value, 1) -> add -> expect -> $out
             }
 
             program main(args: Args) -> exit_code: i64 {
@@ -2404,7 +2405,8 @@ program main(args: Args) -> exit_code: Faultable[i64] {
 
     #[test]
     fn lsp_summarizes_library_modules_for_destructured_repeat_bindings() {
-        let source = r#"import std.math { add }
+        let source = r#"import std.fault { expect }
+import std.math { add }
 
 extern node fib(depth: i64) -> result: i64 {
     (0, 1) -> repeat<$depth> fib_step -> ($result, $)
@@ -2412,7 +2414,7 @@ extern node fib(depth: i64) -> result: i64 {
 
 node fib_step(a: i64, b: i64) -> (next_a: i64, next_b: i64) {
     $b       -> $next_a
-    ($a, $b) -> add -> $next_b
+    ($a, $b) -> add -> expect -> $next_b
 }
 "#;
         let analysis = Analysis::new("file:///tmp/fib.flow".to_string(), source.to_string());

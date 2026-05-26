@@ -4,12 +4,13 @@
 # typecheck/codegen and compiles as two ordinary calls to `increment`.
 import std.bytes { concat_bytes }
 import std.cli { Args }
+import std.fault { expect }
 import std.io { write_stdout }
 import std.int { format_int }
 import std.math { add }
 
 node increment(x: i64) -> y: i64 {
-    ($x, 1) -> add -> $y
+    ($x, 1) -> add -> expect -> $y
 }
 
 node twice<step: node(i64) -> i64>(x: i64) -> y: i64 {

@@ -34,6 +34,7 @@
 #   9. scan add over per-token depth deltas -> depth at each token.
 #  10. Format kind+text+depth as lines and write to stdout.
 import std.cli { Args }
+import std.fault { expect }
 import std.io { read_stdin, write_stdout }
 import std.bytes { bytes_to_codes, codes_to_bytes, concat_bytes, join_bytes }
 import std.int {
@@ -292,7 +293,7 @@ node is_nonneg(k: i64) -> b: Bool {
 }
 
 node add_int(a: i64, b: i64) -> r: i64 {
-    ($a, $b) -> add -> $r
+    ($a, $b) -> add -> expect -> $r
 }
 
 # ---------------------------------------------------------------------------

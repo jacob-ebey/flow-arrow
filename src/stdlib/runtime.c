@@ -66,6 +66,34 @@ static int64_t fa_checked_i64_abs(int64_t value) {
   return value < 0 ? -value : value;
 }
 
+static FaFaultable_i64 fa_faultable_i64_add(int64_t left, int64_t right) {
+  int64_t out;
+  if (__builtin_add_overflow(left, right, &out)) return FaFaultable_i64_fault(fa_fault_cstr("add: integer overflow"));
+  return FaFaultable_i64_ok(out);
+}
+
+static FaFaultable_i64 fa_faultable_i64_sub(int64_t left, int64_t right) {
+  int64_t out;
+  if (__builtin_sub_overflow(left, right, &out)) return FaFaultable_i64_fault(fa_fault_cstr("sub: integer overflow"));
+  return FaFaultable_i64_ok(out);
+}
+
+static FaFaultable_i64 fa_faultable_i64_mul(int64_t left, int64_t right) {
+  int64_t out;
+  if (__builtin_mul_overflow(left, right, &out)) return FaFaultable_i64_fault(fa_fault_cstr("mul: integer overflow"));
+  return FaFaultable_i64_ok(out);
+}
+
+static FaFaultable_i64 fa_faultable_i64_neg(int64_t value) {
+  if (value == INT64_MIN) return FaFaultable_i64_fault(fa_fault_cstr("neg: integer overflow"));
+  return FaFaultable_i64_ok(-value);
+}
+
+static FaFaultable_i64 fa_faultable_i64_abs(int64_t value) {
+  if (value == INT64_MIN) return FaFaultable_i64_fault(fa_fault_cstr("abs: integer overflow"));
+  return FaFaultable_i64_ok(value < 0 ? -value : value);
+}
+
 static double fa_checked_f64_div(double left, double right) {
   if (right == 0.0) fa_die_usage("div: division by zero");
   return left / right;

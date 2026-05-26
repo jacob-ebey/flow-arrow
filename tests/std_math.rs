@@ -8,19 +8,19 @@ fn std_math_nodes_run() {
         import std.math { add, sub, mul, div, rem, neg, abs, sqrt, eq, lt, gt, le, ge, min, max }
 
         program main(args: Args) -> exit_code: i64 {
-            (2, 3) -> add -> $five_a
+            (2, 3) -> add -> expect -> $five_a
             ($five_a, 5) -> eq -> $add_ok
-            (8, 3) -> sub -> $five_b
+            (8, 3) -> sub -> expect -> $five_b
             ($five_b, 5) -> eq -> $sub_ok
-            (3, 4) -> mul -> $twelve
+            (3, 4) -> mul -> expect -> $twelve
             ($twelve, 12) -> eq -> $mul_ok
             (10, 3) -> div -> expect -> $three
             ($three, 3) -> eq -> $div_ok
             (10, 3) -> rem -> expect -> $one
             ($one, 1) -> eq -> $rem_ok
-            5 -> neg -> $minus_five
+            5 -> neg -> expect -> $minus_five
             ($minus_five, -5) -> eq -> $neg_ok
-            -8 -> abs -> $eight
+            -8 -> abs -> expect -> $eight
             ($eight, 8) -> eq -> $abs_ok
             81.0 -> sqrt -> expect -> $nine
             ($nine, 9.0) -> eq -> $sqrt_ok
@@ -122,7 +122,22 @@ fn std_math_invalid_numeric_inputs_are_reported() {
 
                 program main(args: Args) -> exit_code: i64 {
                     "9223372036854775807" -> parse_int -> expect -> $max
-                    ($max, 1) -> add -> $exit_code
+                    ($max, 1) -> add -> expect -> $exit_code
+                }
+            "#,
+            "add: integer overflow",
+        ),
+        (
+            "math-reduce-add-overflow",
+            r#"
+                import std.cli { Args }
+                import std.fault { expect }
+                import std.int { parse_int }
+                import std.math { add }
+
+                program main(args: Args) -> exit_code: Faultable[i64] {
+                    "9223372036854775807" -> parse_int -> expect -> $max
+                    [$max, 1] -> reduce add(identity: 0) -> $exit_code
                 }
             "#,
             "add: integer overflow",
@@ -136,7 +151,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.math { neg }
 
                 program main(args: Args) -> exit_code: i64 {
-                    "-9223372036854775808" -> parse_int -> expect -> neg -> $exit_code
+                    "-9223372036854775808" -> parse_int -> expect -> neg -> expect -> $exit_code
                 }
             "#,
             "neg: integer overflow",
@@ -150,7 +165,7 @@ fn std_math_invalid_numeric_inputs_are_reported() {
                 import std.math { abs }
 
                 program main(args: Args) -> exit_code: i64 {
-                    "-9223372036854775808" -> parse_int -> expect -> abs -> $exit_code
+                    "-9223372036854775808" -> parse_int -> expect -> abs -> expect -> $exit_code
                 }
             "#,
             "abs: integer overflow",
@@ -185,27 +200,39 @@ fn std_math_invalid_inputs_are_recoverable_with_fault_map() {
     let source = r#"
         import std.bytes { concat_bytes }
         import std.cli { Args }
-        import std.fault { format_faults, has_faults }
-        import std.int { format_int }
+        import std.fault { expect, format_faults, has_faults }
+        import std.int { format_int, parse_int }
         import std.io { write_stderr, write_stdout }
-        import std.math { div, sqrt }
+        import std.math { abs, add, div, sqrt }
         import std.seq { length }
 
         program main(args: Args) -> exit_code: i64 {
+            "9223372036854775807" -> parse_int -> expect -> $max
+            "-9223372036854775808" -> parse_int -> expect -> $min
             [(1, 0), (6, 2), (8, 0)] -> fault map div { ok -> $quotients, fault -> $div_faults }
             [-1.0, 4.0] -> fault map sqrt { ok -> $roots, fault -> $sqrt_faults }
+            [($max, 1), (5, 7)] -> fault map add { ok -> $sums, fault -> $add_faults }
+            [$min, -7] -> fault map abs { ok -> $magnitudes, fault -> $abs_faults }
 
             $quotients -> length -> format_int -> $quotient_count
             $roots -> length -> format_int -> $root_count
-            ["ok:", $quotient_count, ":", $root_count, "\n"] -> concat_bytes -> write_stdout -> $stdout_status
+            $sums -> length -> format_int -> $sum_count
+            $magnitudes -> length -> format_int -> $magnitude_count
+            ["ok:", $quotient_count, ":", $root_count, ":", $sum_count, ":", $magnitude_count, "\n"] -> concat_bytes -> write_stdout -> $stdout_status
 
             $div_faults -> format_faults -> $div_messages
             $sqrt_faults -> format_faults -> $sqrt_messages
-            [$div_messages, "\n", $sqrt_messages, "\n"] -> concat_bytes -> write_stderr -> $stderr_status
+            $add_faults -> format_faults -> $add_messages
+            $abs_faults -> format_faults -> $abs_messages
+            [$div_messages, "\n", $sqrt_messages, "\n", $add_messages, "\n", $abs_messages, "\n"] -> concat_bytes -> write_stderr -> $stderr_status
 
             $div_faults -> has_faults -> $has_div_faults
             $sqrt_faults -> has_faults -> $has_sqrt_faults
-            ($has_div_faults, $has_sqrt_faults, false) -> select -> $captured
+            $add_faults -> has_faults -> $has_add_faults
+            $abs_faults -> has_faults -> $has_abs_faults
+            ($has_div_faults, $has_sqrt_faults, false) -> select -> $captured0
+            ($captured0, $has_add_faults, false) -> select -> $captured1
+            ($captured1, $has_abs_faults, false) -> select -> $captured
             ($captured, 0, 1) -> select -> $exit_code
         }
     "#;
@@ -216,7 +243,10 @@ fn std_math_invalid_inputs_are_recoverable_with_fault_map() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "ok:1:1\n");
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("utf8"),
+        "ok:1:1:1:1\n"
+    );
     let stderr = String::from_utf8(output.stderr).expect("utf8");
     assert!(
         stderr.contains("div: division by zero"),
@@ -224,6 +254,14 @@ fn std_math_invalid_inputs_are_recoverable_with_fault_map() {
     );
     assert!(
         stderr.contains("sqrt: negative input"),
+        "stderr was: {stderr}"
+    );
+    assert!(
+        stderr.contains("add: integer overflow"),
+        "stderr was: {stderr}"
+    );
+    assert!(
+        stderr.contains("abs: integer overflow"),
         "stderr was: {stderr}"
     );
 }

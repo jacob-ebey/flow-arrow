@@ -1,4 +1,5 @@
 # Exports a pure Fibonacci node for the wasm32-unknown-unknown cdylib target.
+import std.fault { expect }
 import std.math { add }
 
 extern node fib(depth: i64) -> result: i64 {
@@ -7,5 +8,5 @@ extern node fib(depth: i64) -> result: i64 {
 
 node fib_step(a: i64, b: i64) -> (next_a: i64, next_b: i64) {
     $b       -> $next_a
-    ($a, $b) -> add -> $next_b
+    ($a, $b) -> add -> expect -> $next_b
 }

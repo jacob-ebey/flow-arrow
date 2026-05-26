@@ -54,13 +54,13 @@ walk_files        : Bytes -> Faultable[Seq[Bytes]]
 read_files        : Seq[Bytes] -> Faultable[Seq[(Bytes,Bytes)]]
 
 # Arithmetic
-add               : (i64, i64) -> i64 | (f64, f64) -> f64 # associative
-sub               : (i64, i64) -> i64 | (f64, f64) -> f64
-mul               : (i64, i64) -> i64 | (f64, f64) -> f64
+add               : (i64, i64) -> Faultable[i64] | (f64, f64) -> f64 # associative
+sub               : (i64, i64) -> Faultable[i64] | (f64, f64) -> f64
+mul               : (i64, i64) -> Faultable[i64] | (f64, f64) -> f64
 div               : (i64, i64) -> Faultable[i64] | (f64, f64) -> Faultable[f64]
 rem               : (i64, i64) -> Faultable[i64] | (f64, f64) -> Faultable[f64]
-neg               : i64 -> i64 | f64 -> f64
-abs               : i64 -> i64 | f64 -> f64
+neg               : i64 -> Faultable[i64] | f64 -> f64
+abs               : i64 -> Faultable[i64] | f64 -> f64
 sqrt              : f64 -> Faultable[f64]
 min               : (i64, i64) -> i64 | (f64, f64) -> f64
 max               : (i64, i64) -> i64 | (f64, f64) -> f64

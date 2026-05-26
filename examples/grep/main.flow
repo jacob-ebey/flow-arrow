@@ -155,7 +155,7 @@ node grep_file(input: (Bytes, Bytes, Bytes)) -> out: Seq[Bytes] {
     $contents -> split_lines -> $lines
 
     $lines                  -> length     -> $line_count
-    ($line_count, 1)        -> add        -> $line_stop
+    ($line_count, 1)        -> add        -> expect -> $line_stop
     (1, $line_stop, 1)      -> range_step -> $line_numbers
     ($line_numbers, $lines) -> zip        -> $numbered_lines
 

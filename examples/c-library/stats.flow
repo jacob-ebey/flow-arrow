@@ -2,6 +2,7 @@
 #
 # This is based on ../concurrency/main.flow, but exported as a library node so
 # the C application can call the same aggregate API.
+import std.fault { expect }
 import std.math { add, max, mul }
 
 struct JobSummary {
@@ -15,9 +16,9 @@ extern node score_batch(width: i64) -> summary: JobSummary {
     (1, $width, 1) -> range_step              -> $jobs
     $jobs          -> map score_job           -> $scores
     $jobs          -> map weight_job          -> $weights
-    $scores        -> reduce add(identity: 0) -> $total_score
+    $scores        -> reduce add(identity: 0) -> expect -> $total_score
     $scores        -> reduce max(identity: 0) -> $peak_score
-    $weights       -> reduce add(identity: 0) -> $total_weight
+    $weights       -> reduce add(identity: 0) -> expect -> $total_weight
     $weights       -> reduce max(identity: 0) -> $peak_weight
     JobSummary {
         total_score: $total_score,
@@ -28,11 +29,11 @@ extern node score_batch(width: i64) -> summary: JobSummary {
 }
 
 node score_job(n: i64) -> score: i64 {
-    ($n, $n)      -> mul -> $square
-    ($square, $n) -> add -> $score
+    ($n, $n)      -> mul -> expect -> $square
+    ($square, $n) -> add -> expect -> $score
 }
 
 node weight_job(n: i64) -> weight: i64 {
-    ($n, 2)       -> mul -> $doubled
-    ($doubled, 1) -> add -> $weight
+    ($n, 2)       -> mul -> expect -> $doubled
+    ($doubled, 1) -> add -> expect -> $weight
 }

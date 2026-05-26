@@ -15,13 +15,14 @@
 #       -> append_newline -> write_stdout
 import std.bytes { concat_bytes }
 import std.cli { Args }
+import std.fault { expect }
 import std.io { read_stdin, write_stdout }
 import std.int { parse_int, format_int }
 import std.math { add }
 
 program main(args: Args) -> exit_code: Faultable[i64] {
     ()              -> read_stdin   -> parse_int  -> $depth
-    $depth          -> fib   -> format_int -> $result
+    $depth          -> fib          -> format_int -> $result
     [$result, "\n"] -> concat_bytes -> $output
     $output         -> write_stdout -> $exit_code
 }
@@ -32,5 +33,5 @@ node fib(depth: i64) -> result: i64 {
 
 node fib_step(a: i64, b: i64) -> (next_a: i64, next_b: i64) {
     $b       -> $next_a
-    ($a, $b) -> add -> $next_b
+    ($a, $b) -> add -> expect -> $next_b
 }

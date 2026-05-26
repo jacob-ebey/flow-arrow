@@ -2413,14 +2413,20 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             "parse_real" => format!("faParseReal({})", input.code),
             "from_int" => format!("Number({})", input.code),
             "format_int" | "format_real" => format!("{}.toString()", input.code),
-            "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
+            "add" | "sub" | "mul" | "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
                 ts_faultable_numeric_binary_expr(name, input, output_ty)
             }
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 ts_numeric_binary_expr(name, input, output_ty)
             }
+            "neg" if matches!(output_ty, Ty::Faultable(_)) => {
+                format!("faFaultableI64Neg({})", input.code)
+            }
             "neg" if output_ty == &Ty::I64 => format!("faCheckedI64Neg({})", input.code),
             "neg" => format!("(-{})", input.code),
+            "abs" if matches!(output_ty, Ty::Faultable(_)) => {
+                format!("faFaultableI64Abs({})", input.code)
+            }
             "abs" if output_ty == &Ty::I64 => format!("faCheckedI64Abs({})", input.code),
             "abs" => format!("Math.abs({})", input.code),
             "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
@@ -2745,7 +2751,13 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             Ty::Faultable(inner) => inner.as_ref().clone(),
             other => other.clone(),
         };
-        let output_ty = if input_faultable || item_faultable {
+        let pair_ty = Ty::Tuple(vec![plain_item_ty.clone(), plain_item_ty.clone()]);
+        let operation_output_ty = self.codegen.call_output_type(op, &pair_ty)?;
+        let operation_faultable = matches!(
+            &operation_output_ty,
+            Ty::Faultable(inner) if inner.as_ref() == &plain_item_ty
+        );
+        let output_ty = if input_faultable || item_faultable || operation_faultable {
             Ty::Faultable(Box::new(plain_item_ty.clone()))
         } else {
             plain_item_ty.clone()
@@ -2773,7 +2785,7 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         } else {
             input.code.clone()
         };
-        if self.options.gpu && !input_faultable && !item_faultable {
+        if self.options.gpu && !input_faultable && !item_faultable && !operation_faultable {
             let canonical = self.codegen.canonical_name(op);
             if matches!(canonical.as_str(), "add" | "min" | "max") {
                 match plain_item_ty {
@@ -2812,38 +2824,64 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             ts_type(&plain_item_ty),
             identity.code
         ));
-        if item_faultable {
+        if item_faultable || operation_faultable {
             let fault = self.next_temp();
             out.push_str(&format!(
                 "{body_indent}let {fault}: FaFault | null = null;\n"
             ));
             out.push_str(&format!("{body_indent}for (const {item} of {source}) {{\n"));
-            out.push_str(&format!(
-                "{body_indent}  if ({item}.is_fault === true) {{ {fault} = {item}.fault; break; }}\n"
-            ));
-            let pair_ty = Ty::Tuple(vec![plain_item_ty.clone(), plain_item_ty.clone()]);
+            out.push_str(&format!("{body_indent}  if ({fault}) break;\n"));
+            if item_faultable {
+                out.push_str(&format!(
+                    "{body_indent}  if ({item}.is_fault === true) {{ {fault} = {item}.fault; break; }}\n"
+                ));
+            }
             let pair = ts_tuple_value(
                 vec![
                     ts_value(acc.clone(), plain_item_ty.clone()),
-                    ts_value(format!("{item}.value"), plain_item_ty.clone()),
+                    ts_value(
+                        if item_faultable {
+                            format!("{item}.value")
+                        } else {
+                            item.clone()
+                        },
+                        plain_item_ty.clone(),
+                    ),
                 ],
-                pair_ty,
+                pair_ty.clone(),
             );
             let reduced = self.emit_call(out, op, pair, &(body_indent.clone() + "  "))?;
-            out.push_str(&format!("{body_indent}  {acc} = {};\n", reduced.code));
+            let reduced_code = if operation_faultable && !ts_value_code_is_stable(&reduced.code) {
+                let reduced_tmp = self.next_temp();
+                out.push_str(&format!(
+                    "{body_indent}  const {reduced_tmp}: {} = {};\n",
+                    ts_type(&reduced.ty),
+                    reduced.code
+                ));
+                reduced_tmp
+            } else {
+                reduced.code
+            };
+            if operation_faultable {
+                out.push_str(&format!(
+                    "{body_indent}  if ({}.is_fault === true) {{ {fault} = {}.fault; }} else {{ {acc} = {}.value; }}\n",
+                    reduced_code, reduced_code, reduced_code
+                ));
+            } else {
+                out.push_str(&format!("{body_indent}  {acc} = {};\n", reduced_code));
+            }
             out.push_str(&format!("{body_indent}}}\n"));
             out.push_str(&format!(
                 "{body_indent}{tmp} = {fault} ? faFault({fault}) : faOk({acc});\n"
             ));
         } else {
             out.push_str(&format!("{body_indent}for (const {item} of {source}) {{\n"));
-            let pair_ty = Ty::Tuple(vec![plain_item_ty.clone(), plain_item_ty.clone()]);
             let pair = ts_tuple_value(
                 vec![
                     ts_value(acc.clone(), plain_item_ty.clone()),
                     ts_value(item.clone(), plain_item_ty.clone()),
                 ],
-                pair_ty,
+                pair_ty.clone(),
             );
             let reduced = self.emit_call(out, op, pair, &(body_indent.clone() + "  "))?;
             out.push_str(&format!("{body_indent}  {acc} = {};\n", reduced.code));
@@ -2872,33 +2910,91 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         let Ty::Seq(item_ty) = input.ty.clone() else {
             return Err(format!("`scan {op}` expected Seq input"));
         };
+        let plain_item_ty = item_ty.inner_faultable();
+        let pair_ty = Ty::Tuple(vec![plain_item_ty.clone(), plain_item_ty.clone()]);
+        let operation_output_ty = self.codegen.call_output_type(op, &pair_ty)?;
+        let operation_faultable = matches!(
+            &operation_output_ty,
+            Ty::Faultable(inner) if inner.as_ref() == &plain_item_ty
+        );
+        let item_faultable = matches!(item_ty.as_ref(), Ty::Faultable(_));
+        let output_item_ty = if item_faultable || operation_faultable {
+            Ty::Faultable(Box::new(plain_item_ty.clone()))
+        } else {
+            plain_item_ty.clone()
+        };
+        let output_ty = Ty::Seq(Box::new(output_item_ty.clone()));
         let tmp = self.next_temp_or_preferred(preferred);
         let acc = self.next_temp();
         let item = self.next_temp();
-        let output_ty = input.ty.clone();
         out.push_str(&format!(
             "{indent}const {tmp}: {} = [];\n",
             ts_type(&output_ty)
         ));
-        out.push_str(&format!(
-            "{indent}let {acc}: {} = {};\n",
-            ts_type(&item_ty),
-            identity.code
-        ));
+        if matches!(output_item_ty, Ty::Faultable(_)) {
+            out.push_str(&format!(
+                "{indent}let {acc}: {} = faOk({});\n",
+                ts_type(&output_item_ty),
+                identity.code
+            ));
+        } else {
+            out.push_str(&format!(
+                "{indent}let {acc}: {} = {};\n",
+                ts_type(&output_item_ty),
+                identity.code
+            ));
+        }
         out.push_str(&format!(
             "{indent}for (const {item} of {}) {{\n",
             input.code
         ));
-        let pair_ty = Ty::Tuple(vec![item_ty.as_ref().clone(), item_ty.as_ref().clone()]);
-        let pair = ts_tuple_value(
-            vec![
-                ts_value(acc.clone(), item_ty.as_ref().clone()),
-                ts_value(item.clone(), item_ty.as_ref().clone()),
-            ],
-            pair_ty,
-        );
-        let scanned = self.emit_call(out, op, pair, &(indent.to_string() + "  "))?;
-        out.push_str(&format!("{indent}  {acc} = {};\n", scanned.code));
+        if matches!(output_item_ty, Ty::Faultable(_)) {
+            out.push_str(&format!("{indent}  if ({acc}.is_fault !== true) {{\n"));
+            if item_faultable {
+                out.push_str(&format!(
+                    "{indent}    if ({item}.is_fault === true) {{ {acc} = faFault({item}.fault); }} else {{\n"
+                ));
+            }
+            let nested_indent = if item_faultable {
+                format!("{indent}      ")
+            } else {
+                format!("{indent}    ")
+            };
+            let pair = ts_tuple_value(
+                vec![
+                    ts_value(format!("{acc}.value"), plain_item_ty.clone()),
+                    ts_value(
+                        if item_faultable {
+                            format!("{item}.value")
+                        } else {
+                            item.clone()
+                        },
+                        plain_item_ty.clone(),
+                    ),
+                ],
+                pair_ty,
+            );
+            let scanned = self.emit_call(out, op, pair, &nested_indent)?;
+            if operation_faultable {
+                out.push_str(&format!("{nested_indent}{acc} = {};\n", scanned.code));
+            } else {
+                out.push_str(&format!("{nested_indent}{acc} = faOk({});\n", scanned.code));
+            }
+            if item_faultable {
+                out.push_str(&format!("{indent}    }}\n"));
+            }
+            out.push_str(&format!("{indent}  }}\n"));
+        } else {
+            let pair = ts_tuple_value(
+                vec![
+                    ts_value(acc.clone(), plain_item_ty.clone()),
+                    ts_value(item.clone(), plain_item_ty.clone()),
+                ],
+                pair_ty,
+            );
+            let scanned = self.emit_call(out, op, pair, &(indent.to_string() + "  "))?;
+            out.push_str(&format!("{indent}  {acc} = {};\n", scanned.code));
+        }
         out.push_str(&format!("{indent}  {tmp}.push({acc});\n"));
         out.push_str(&format!("{indent}}}\n"));
         Ok(ts_value(tmp, output_ty))
@@ -3444,9 +3540,18 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         output_ty: &Ty,
     ) -> Result<Option<String>, String> {
         if matches!(output_ty, Ty::Faultable(_)) {
-            return Ok(None);
+            return match name {
+                "add" | "sub" | "mul" => Ok(Some(ts_faultable_numeric_binary_expr(
+                    name, input, output_ty,
+                ))),
+                _ => Ok(None),
+            };
         }
         let expr = match name {
+            "expect" => match &input.ty {
+                Ty::Faultable(_) => format!("faExpect({})", input.code),
+                _ => input.code.clone(),
+            },
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 ts_numeric_binary_expr(name, input, output_ty)
             }
@@ -3898,6 +4003,9 @@ fn ts_faultable_numeric_binary_expr(name: &str, input: &TsValue, output_ty: &Ty)
         ("div", Ty::F64) => format!("faFaultableRealDiv({left}, {right})"),
         ("rem", Ty::I64) => format!("faFaultableI64Rem({left}, {right})"),
         ("rem", Ty::F64) => format!("faFaultableRealRem({left}, {right})"),
+        ("add", Ty::I64) => format!("faFaultableI64Add({left}, {right})"),
+        ("sub", Ty::I64) => format!("faFaultableI64Sub({left}, {right})"),
+        ("mul", Ty::I64) => format!("faFaultableI64Mul({left}, {right})"),
         _ => unreachable!(),
     }
 }
@@ -4134,6 +4242,34 @@ function faCheckedI64Neg(value: bigint): bigint {
 function faCheckedI64Abs(value: bigint): bigint {
   if (value === FA_I64_MIN) throw new Error("abs: integer overflow");
   return value < 0n ? -value : value;
+}
+
+function faFaultableI64Add(left: bigint, right: bigint): FaFaultable<bigint> {
+  const value = left + right;
+  if (value < FA_I64_MIN || value > FA_I64_MAX) return faFaultMessage("add: integer overflow");
+  return faOk(value);
+}
+
+function faFaultableI64Sub(left: bigint, right: bigint): FaFaultable<bigint> {
+  const value = left - right;
+  if (value < FA_I64_MIN || value > FA_I64_MAX) return faFaultMessage("sub: integer overflow");
+  return faOk(value);
+}
+
+function faFaultableI64Mul(left: bigint, right: bigint): FaFaultable<bigint> {
+  const value = left * right;
+  if (value < FA_I64_MIN || value > FA_I64_MAX) return faFaultMessage("mul: integer overflow");
+  return faOk(value);
+}
+
+function faFaultableI64Neg(value: bigint): FaFaultable<bigint> {
+  if (value === FA_I64_MIN) return faFaultMessage("neg: integer overflow");
+  return faOk(-value);
+}
+
+function faFaultableI64Abs(value: bigint): FaFaultable<bigint> {
+  if (value === FA_I64_MIN) return faFaultMessage("abs: integer overflow");
+  return faOk(value < 0n ? -value : value);
 }
 
 function faCheckedRealDiv(left: number, right: number): number {
@@ -4864,9 +5000,27 @@ function faAssertI64(value, label) {{
   if (value < FA_I64_MIN || value > FA_I64_MAX) throw new Error(`${{label}}: integer overflow`);
   return value;
 }}
+function faOk(value) {{ return {{ is_fault: false, value }}; }}
+function faFaultMessage(message) {{ return {{ is_fault: true, fault: {{ message }} }}; }}
+function faExpect(value) {{
+  if (value && value.is_fault === true) throw new Error(value.fault.message);
+  return value && value.is_fault === false ? value.value : value;
+}}
 function faCheckedI64Add(left, right) {{ return faAssertI64(left + right, "add"); }}
 function faCheckedI64Sub(left, right) {{ return faAssertI64(left - right, "sub"); }}
 function faCheckedI64Mul(left, right) {{ return faAssertI64(left * right, "mul"); }}
+function faFaultableI64Add(left, right) {{
+  const value = left + right;
+  return value < FA_I64_MIN || value > FA_I64_MAX ? faFaultMessage("add: integer overflow") : faOk(value);
+}}
+function faFaultableI64Sub(left, right) {{
+  const value = left - right;
+  return value < FA_I64_MIN || value > FA_I64_MAX ? faFaultMessage("sub: integer overflow") : faOk(value);
+}}
+function faFaultableI64Mul(left, right) {{
+  const value = left * right;
+  return value < FA_I64_MIN || value > FA_I64_MAX ? faFaultMessage("mul: integer overflow") : faOk(value);
+}}
 function faCheckedI64Div(left, right) {{
   if (right === 0n) throw new Error("div: division by zero");
   if (left === FA_I64_MIN && right === -1n) throw new Error("div: integer overflow");
