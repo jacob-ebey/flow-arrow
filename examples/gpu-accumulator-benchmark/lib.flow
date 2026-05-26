@@ -2,8 +2,7 @@
 #
 # Pure export-oriented version used by JavaScript/WebGPU browser validation.
 import std.fault { expect }
-import std.math { add_i64, add_f32, rem_i64 as rem }
-import std.real { from_int_f32 }
+import std.math { add_i64, add_f32, eq_i64 as eq, rem_i64 as rem }
 import std.vector { dot_f32, squared_distance_f32, squared_norm_f32 }
 
 extern node run_gpu_accumulator(iterations: i64) -> score: f32 {
@@ -15,16 +14,32 @@ extern node run_gpu_accumulator(iterations: i64) -> score: f32 {
 }
 
 node left_value(index: i64) -> value: f32 {
-    ($index, 11)  -> rem          -> expect -> $wrapped
-    ($wrapped, 1) -> add_i64      -> expect -> $offset
-    $offset       -> from_int_f32 -> $value
+    ($index, 11)  -> rem     -> expect -> $wrapped
+    ($wrapped, 1) -> add_i64 -> expect -> offset_to_f32 -> $value
 }
 
 node right_value(index: i64) -> value: f32 {
-    ($index, 3)    -> add_i64      -> expect -> $shifted
-    ($shifted, 11) -> rem          -> expect -> $wrapped
-    ($wrapped, 1)  -> add_i64      -> expect -> $offset
-    $offset        -> from_int_f32 -> $value
+    ($index, 3)    -> add_i64 -> expect -> $shifted
+    ($shifted, 11) -> rem     -> expect -> $wrapped
+    ($wrapped, 1)  -> add_i64 -> expect -> offset_to_f32 -> $value
+}
+
+node offset_to_f32(offset: i64) -> value: f32 {
+    $offset
+    -> match {
+        eq(1) -> 1.0f32
+        eq(2) -> 2.0f32
+        eq(3) -> 3.0f32
+        eq(4) -> 4.0f32
+        eq(5) -> 5.0f32
+        eq(6) -> 6.0f32
+        eq(7) -> 7.0f32
+        eq(8) -> 8.0f32
+        eq(9) -> 9.0f32
+        eq(10) -> 10.0f32
+        _ -> 11.0f32
+    }
+    -> $value
 }
 
 node score_kernel(left: Seq[f32], right: Seq[f32], score: f32) -> (out_left: Seq[f32], out_right: Seq[f32], out_score: f32) {

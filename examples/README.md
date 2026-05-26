@@ -10,14 +10,14 @@ import std.bytes { split_lines, concat_bytes, join_bytes, trim, split_on, strip_
 import std.cli { Args, argv }
 import std.io { read_stdin, write_stdout }
 import std.http as http
-import std.real { parse_real, format_real, from_int }
+import std.real { parse_real, format_real, format_real_f32 }
 import std.int { parse_int, format_int }
 import std.math { add_i64, add_f64, sub_i64, sub_f64, mul_i64, mul_f64, div_i64, div_f64 }
 import std.predicates { not_empty, is_empty, and, or, xor, not, all, any }
 import std.fault { Fault, has_faults, format_faults, collect, expect }
-import std.seq { head, tail, length }
+import std.seq { head, tail, length, length_f32, length_f64 }
 import std.fs { walk_files, read_files }
-import std.cv { load, save_jpeg, grayscale }
+import std.cv { decode, encode_jpeg, grayscale }
 import std.sqlite as sqlite
 import std.stream as stream
 ```
@@ -29,7 +29,7 @@ parse_int         : Bytes -> Faultable[i64]
 parse_real        : Bytes -> Faultable[f64]
 format_int        : i64   -> Bytes                 # propagates Faultable[i64] -> Faultable[Bytes]
 format_real       : f64  -> Bytes                 # propagates Faultable[f64] -> Faultable[Bytes]
-from_int          : i64   -> f64
+format_real_f32   : f32  -> Bytes                 # propagates Faultable[f32] -> Faultable[Bytes]
 concat_bytes      : Seq[Bytes] -> Bytes              # associative; identity: ""
 join_bytes        : (Seq[Bytes], Bytes) -> Bytes     # joins with separator
 trim              : Bytes -> Bytes                   # strips leading/trailing ASCII whitespace
@@ -52,6 +52,9 @@ sqlite.query      : (sqlite.Connection, Bytes, Seq[sqlite.Value]) -> Faultable[(
 stream.to_seq     : Stream[V] -> Faultable[Seq[V]]
 walk_files        : Bytes -> Faultable[Seq[Bytes]]
 read_files        : Seq[Bytes] -> Faultable[Seq[(Bytes,Bytes)]]
+length            : Seq[V] -> i64
+length_f32        : Seq[V] -> f32
+length_f64        : Seq[V] -> f64
 
 # Arithmetic
 add_i32/add_i64   : integer add -> Faultable[i32/i64] # associative

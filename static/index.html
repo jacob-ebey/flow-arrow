@@ -751,36 +751,38 @@
     <script src="https://unpkg.com/prismjs@1.29.0/components/prism-typescript.min.js"></script>
     <script type="module">
       const fibExample = `# Exports a pure Fibonacci node for the browser TypeScript demo.
-import std.math { add }
+import std.fault { expect }
+import std.math { add_i64 as add }
 
-extern node fib(depth: Int) -> result: Int {
+extern node fib(depth: i64) -> result: i64 {
     (0, 1) -> repeat<$depth> fib_step -> ($result, $)
 }
 
-node fib_step(a: Int, b: Int) -> (next_a: Int, next_b: Int) {
+node fib_step(a: i64, b: i64) -> (next_a: i64, next_b: i64) {
     $b       -> $next_a
-    ($a, $b) -> add -> $next_b
+    ($a, $b) -> add -> expect -> $next_b
 }
 `;
 
       const concurrencyExample = `# Exposes explicit data-parallel work for the browser demo.
-import std.math { add, max, mul }
+import std.fault { expect }
+import std.math { add_i64 as add, max_i64 as max, mul_i64 as mul }
 
 struct JobSummary {
-    total_score: Int,
-    peak_score: Int,
-    total_weight: Int,
-    peak_weight: Int,
+    total_score: i64,
+    peak_score: i64,
+    total_weight: i64,
+    peak_weight: i64,
 }
 
-extern node score_batch(width: Int) -> summary: JobSummary {
-    (1, $width, 1) -> range_step              -> $jobs
-    $jobs          -> map score_job           -> $scores
-    $jobs          -> map weight_job          -> $weights
-    $scores        -> reduce add(identity: 0) -> $total_score
-    $scores        -> reduce max(identity: 0) -> $peak_score
-    $weights       -> reduce add(identity: 0) -> $total_weight
-    $weights       -> reduce max(identity: 0) -> $peak_weight
+extern node score_batch(width: i64) -> summary: JobSummary {
+    (1, $width, 1) -> range_step                      -> $jobs
+    $jobs          -> map score_job                   -> $scores
+    $jobs          -> map weight_job                  -> $weights
+    $scores        -> reduce add(identity: 0) -> expect -> $total_score
+    $scores        -> reduce max(identity: 0)         -> $peak_score
+    $weights       -> reduce add(identity: 0) -> expect -> $total_weight
+    $weights       -> reduce max(identity: 0)         -> $peak_weight
     JobSummary {
         total_score: $total_score,
         peak_score: $peak_score,
@@ -789,14 +791,14 @@ extern node score_batch(width: Int) -> summary: JobSummary {
     } -> $summary
 }
 
-node score_job(n: Int) -> score: Int {
-    ($n, $n)      -> mul -> $square
-    ($square, $n) -> add -> $score
+node score_job(n: i64) -> score: i64 {
+    ($n, $n)      -> mul -> expect -> $square
+    ($square, $n) -> add -> expect -> $score
 }
 
-node weight_job(n: Int) -> weight: Int {
-    ($n, 2)       -> mul -> $doubled
-    ($doubled, 1) -> add -> $weight
+node weight_job(n: i64) -> weight: i64 {
+    ($n, 2)       -> mul -> expect -> $doubled
+    ($doubled, 1) -> add -> expect -> $weight
 }
 `;
 
@@ -805,7 +807,7 @@ import std.bytes { concat_bytes }
 import std.real { format_real }
 
 foreign js global "performance" {
-    io node now() -> value: Real = now
+    io node now() -> value: f64 = now
 }
 
 foreign js global "crypto" {
@@ -903,9 +905,9 @@ extern node browser_sample() -> message: Bytes {
           keyword:
             /\b(?:as|c|extern|field|filter|fault|foreign|global|header|import|io|js|map|match|module|node|program|pure|reduce|repeat|scan|source|struct|type)\b/,
           builtin:
-            /\b(?:Args|Bool|Bytes|Faultable|HttpListener|HttpRequest|HttpResponse|HttpServerConfig|Int|Real|Seq|SqliteConnection|SqliteRow|SqliteValue|Stream|Unit)\b/,
+            /\b(?:Args|Bool|Bytes|Faultable|HttpListener|HttpRequest|HttpResponse|HttpServerConfig|Seq|SqliteConnection|SqliteRow|SqliteValue|Stream|Unit|f32|f64|i32|i64)\b/,
           function: /\b[A-Za-z_]\w*(?=\s*(?:\(|\{|->))/,
-          number: /-?\b\d+(?:\.\d+)?\b/,
+          number: /-?\b\d+(?:\.\d+)?(?:f32|f64)?\b/,
           operator: /->|\$|[+*/%-]/,
           punctuation: /[{}()[\],.:<>]/,
         };
