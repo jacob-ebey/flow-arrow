@@ -17,11 +17,11 @@ cargo run -- run examples/gpu-accumulator-benchmark/main.flow
 ```
 
 The workload is intentionally shaped like a GPU-resident repeated accumulator.
-It uses `f64` vectors, and FlowArrow does not lower `f64` source data into
-`f32` GPU buffers. The GPU path uses WGSL `f64` storage and arithmetic, so it
-requires a native/WebGPU device with shader-f64 support and fails explicitly
-when that feature is unavailable. Current browser WebGPU and macOS/Metal wgpu
-adapters may not expose shader-f64 even on recent Apple Silicon hardware.
+It uses `f32` vectors and a generated WGSL `f32` repeat accumulator, so the GPU
+path stays in the source numeric domain without lowering from or to another
+float width. The optimized GPU path computes the repeated accumulator as one
+GPU reduction plus one `f32` multiply by the iteration count, instead of
+dispatching the scoring kernel once per iteration.
 
 ## Browser validation
 

@@ -2295,7 +2295,10 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             "parse_int" => format!("faParseInt({})", input.code),
             "parse_real" => format!("faParseReal({})", input.code),
             "from_int" => format!("Number({})", input.code),
-            "format_int" | "format_real" => format!("{}.toString()", input.code),
+            "from_int_f32" => format!("Math.fround(Number({}))", input.code),
+            "format_int" | "format_real" | "format_real_f32" => {
+                format!("{}.toString()", input.code)
+            }
             "add" | "sub" | "mul" | "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
                 ts_faultable_numeric_binary_expr(name, input, output_ty)
             }
@@ -3017,9 +3020,16 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
                 if state.len() != 3 {
                     return Err("GPU vector accumulator expected three tuple fields".to_string());
                 }
+                let helper = match plan.scalar {
+                    gpu::GpuScalarKind::F32 => "faGpuRepeatVectorAccumF32",
+                    gpu::GpuScalarKind::F64 => "faGpuRepeatVectorAccumF64",
+                    gpu::GpuScalarKind::I32 => {
+                        return Err("GPU vector accumulator expected f32 or f64 state".to_string());
+                    }
+                };
                 let batch = self.next_temp();
                 out.push_str(&format!(
-                    "{indent}  const {batch}: [number] = await Promise.all([faGpuRepeatVectorAccumF64({}, {}, {}, {}, {iter})]);\n",
+                    "{indent}  const {batch}: [number] = await Promise.all([{helper}({}, {}, {}, {}, {iter})]);\n",
                     ts_string(&plan.wgsl),
                     state[0].code,
                     state[1].code,
@@ -4996,6 +5006,25 @@ function faGpuReduceF64(input: number[], op: string, identity: number): Promise<
 
 function faGpuFloat32Input(input: number[] | Float32Array): Float32Array {
   return input instanceof Float32Array ? input : new Float32Array(input.map(Math.fround));
+}
+
+function faGpuRepeatVectorAccumF32(
+  wgsl: string,
+  left: number[] | Float32Array,
+  right: number[] | Float32Array,
+  score: number,
+  iterations: bigint,
+): Promise<number> {
+  const leftPacked = faGpuFloat32Input(left);
+  const rightPacked = faGpuFloat32Input(right);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_repeat_vector_accum_f32(
+      wgsl,
+      leftPacked,
+      rightPacked,
+      Math.fround(score),
+      iterations,
+    ));
 }
 
 function faGpuRepeatVectorAccumF64(

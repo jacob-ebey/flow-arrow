@@ -6,6 +6,12 @@ static FaBytes fa_format_real(double value) {
   return fa_bytes_literal(buf, (size_t)len);
 }
 
+static FaBytes fa_format_real_f32(float value) {
+  char buf[64];
+  int len = snprintf(buf, sizeof(buf), "%.7g", (double)value);
+  return fa_bytes_literal(buf, (size_t)len);
+}
+
 static FaFaultable_f64 fa_parse_real(FaBytes bytes) {
   char *copy = fa_copy_bytes(bytes.bytes, bytes.len);
   char *start = copy;

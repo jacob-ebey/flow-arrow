@@ -2563,7 +2563,13 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             GpuRepeatAccumulatorKind::VectorScore => {
                 let left = self.extract_tuple_seq(tuple, 0, "gpu.repeat.left")?;
                 let right = self.extract_tuple_seq(tuple, 1, "gpu.repeat.right")?;
-                let function = self.gpu_repeat_vector_accum_f64_function();
+                let function = match plan.scalar {
+                    gpu::GpuScalarKind::F32 => self.gpu_repeat_vector_accum_f32_function(),
+                    gpu::GpuScalarKind::F64 => self.gpu_repeat_vector_accum_f64_function(),
+                    gpu::GpuScalarKind::I32 => {
+                        return Err("GPU vector accumulator expected f32 or f64 state".to_string());
+                    }
+                };
                 self.builder
                     .build_call(
                         function,
@@ -3480,17 +3486,26 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
         }
     }
 
-    fn emit_from_int(&mut self, input: LlvmValue<'ctx>) -> Result<BasicValueEnum<'ctx>, String> {
+    fn emit_from_int(
+        &mut self,
+        input: LlvmValue<'ctx>,
+        output_ty: &Ty,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         if input.ty != Ty::I64 {
             return Err(format!("from_int expected i64, found `{}`", input.ty));
         }
+        let float_ty = match output_ty {
+            Ty::F32 => self.context.f32_type(),
+            Ty::F64 => self.context.f64_type(),
+            other => {
+                return Err(format!(
+                    "from_int expected f32 or f64 output, found `{other}`"
+                ));
+            }
+        };
         Ok(self
             .builder
-            .build_signed_int_to_float(
-                input.value.into_int_value(),
-                self.context.f64_type(),
-                "from_int",
-            )
+            .build_signed_int_to_float(input.value.into_int_value(), float_ty, "from_int")
             .map_err(|error| format!("LLVM backend failed to build from_int: {error}"))?
             .into())
     }
@@ -5355,6 +5370,31 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
                     ptr_ty.into(),
                     i64_ty.into(),
                     f64_ty.into(),
+                    i64_ty.into(),
+                ],
+                false,
+            ),
+            None,
+        )
+    }
+
+    fn gpu_repeat_vector_accum_f32_function(&mut self) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function("fa_gpu_repeat_vector_accum_f32") {
+            return function;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let f32_ty = self.context.f32_type();
+        self.module.add_function(
+            "fa_gpu_repeat_vector_accum_f32",
+            f32_ty.fn_type(
+                &[
+                    ptr_ty.into(),
+                    ptr_ty.into(),
+                    i64_ty.into(),
+                    ptr_ty.into(),
+                    i64_ty.into(),
+                    f32_ty.into(),
                     i64_ty.into(),
                 ],
                 false,

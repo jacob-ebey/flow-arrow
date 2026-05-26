@@ -123,7 +123,8 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             "add" | "sub" | "mul" | "div" | "rem" | "min" | "max" => {
                 self.emit_numeric_binary(name, input)?
             }
-            "from_int" => self.emit_from_int(input)?,
+            "from_int" => self.emit_from_int(input, &Ty::F64)?,
+            "from_int_f32" => self.emit_from_int(input, &Ty::F32)?,
             "sqrt" if matches!(output_ty, Ty::Faultable(_)) => {
                 let Ty::Faultable(inner) = &output_ty else {
                     unreachable!()
@@ -201,6 +202,12 @@ impl<'ctx, 'a> DirectLlvm<'ctx, 'a> {
             "parse_int" => self.emit_runtime_unary("fa_parse_int", input, &output_ty)?,
             "format_real" => self.emit_maybe_faultable_runtime_unary(
                 "fa_format_real",
+                input,
+                &output_ty,
+                &Ty::Bytes,
+            )?,
+            "format_real_f32" => self.emit_maybe_faultable_runtime_unary(
+                "fa_format_real_f32",
                 input,
                 &output_ty,
                 &Ty::Bytes,

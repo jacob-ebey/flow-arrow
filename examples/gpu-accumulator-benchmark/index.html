@@ -119,7 +119,7 @@ cargo run -- build --target javascript --crate-type cdylib --gpu examples/gpu-ac
         try {
           const score = await run_gpu_accumulator(BigInt(count));
           const elapsed = performance.now() - started;
-          const expected = perIterationScore * count;
+          const expected = Math.fround(Math.fround(perIterationScore) * Math.fround(count));
           const ok = Object.is(score, expected);
           output.textContent = [
             "status: " + (ok ? "ok" : "mismatch"),

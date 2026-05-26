@@ -16,14 +16,14 @@ import std.bytes { concat_bytes }
 import std.cli { Args }
 import std.int { format_int }
 import std.io { write_stdout }
-import std.real { format_real }
+import std.real { format_real_f32 }
 
 program main(args: Args) -> exit_code: i64 {
     50000 -> run_gpu_accumulator -> $score
 
-    $score -> format_real -> $score_bytes
-    1024   -> format_int  -> $len_bytes
-    50000  -> format_int  -> $iterations_bytes
+    $score -> format_real_f32 -> $score_bytes
+    1024   -> format_int      -> $len_bytes
+    50000  -> format_int      -> $iterations_bytes
 
     ["gpu accumulator example\n", "len: ", $len_bytes, "\n", "iterations: ", $iterations_bytes, "\n", "score: ", $score_bytes, "\n"] -> concat_bytes -> $output
 

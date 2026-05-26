@@ -7,7 +7,9 @@ Pure parsing and formatting utilities for `f64` values.
 ```text
 parse_real  : Bytes -> Faultable[f64]
 format_real : f64  -> Bytes
+format_real_f32: f32 -> Bytes
 from_int    : i64   -> f64
+from_int_f32: i64   -> f32
 ```
 
 ## Semantics
@@ -37,6 +39,15 @@ Formats a `f64` as deterministic ASCII bytes.
 Converts an `i64` to the corresponding `f64`. This is intended for
 explicit numeric normalization, for example turning byte channel samples
 into `0.0..1.0` values.
+
+### `format_real_f32`
+
+Formats an `f32` as decimal bytes.
+
+### `from_int_f32`
+
+Converts an `i64` to the corresponding `f32`. Use this when the program is
+intentionally staying in the `f32` numeric domain.
 
 ## Examples
 

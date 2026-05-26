@@ -505,6 +505,7 @@ enum GpuRepeatAccumulatorKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GpuRepeatAccumulator {
     kind: GpuRepeatAccumulatorKind,
+    scalar: gpu::GpuScalarKind,
     wgsl: String,
 }
 
@@ -954,7 +955,8 @@ fn builtin_output_type_plain(name: &str, input: &Ty) -> Result<Ty, String> {
         "parse_int" => Ok(Ty::Faultable(Box::new(Ty::I64))),
         "parse_real" => Ok(Ty::Faultable(Box::new(Ty::F64))),
         "from_int" => Ok(Ty::F64),
-        "format_int" | "format_real" => match input {
+        "from_int_f32" => Ok(Ty::F32),
+        "format_int" | "format_real" | "format_real_f32" => match input {
             Ty::Faultable(_) => Ok(Ty::Faultable(Box::new(Ty::Bytes))),
             _ => Ok(Ty::Bytes),
         },

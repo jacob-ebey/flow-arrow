@@ -3,18 +3,24 @@ use super::*;
 impl<'a> TypedCodegen<'a> {
     pub(super) fn fusion_for_name(&self, name: &str) -> Option<Fusion> {
         let callable = self.callables.get(name)?;
-        self.fusion_for_callable(callable, &mut HashSet::new())
+        self.fusion_for_callable(callable, &mut HashSet::new(), false)
+    }
+
+    pub(super) fn gpu_fusion_for_name(&self, name: &str) -> Option<Fusion> {
+        let callable = self.callables.get(name)?;
+        self.fusion_for_callable(callable, &mut HashSet::new(), true)
     }
 
     fn fusion_for_callable(
         &self,
         callable: &TypedCallable,
         visiting: &mut HashSet<String>,
+        allow_zero_initializers: bool,
     ) -> Option<Fusion> {
         if !visiting.insert(callable.name.clone()) {
             return None;
         }
-        let fusion = self.fusion_for_callable_inner(callable, visiting);
+        let fusion = self.fusion_for_callable_inner(callable, visiting, allow_zero_initializers);
         visiting.remove(&callable.name);
         fusion
     }
@@ -23,6 +29,7 @@ impl<'a> TypedCodegen<'a> {
         &self,
         callable: &TypedCallable,
         visiting: &mut HashSet<String>,
+        allow_zero_initializers: bool,
     ) -> Option<Fusion> {
         if let Some(fusion) = self.mean_fusion(callable, visiting) {
             return Some(fusion);
@@ -30,14 +37,32 @@ impl<'a> TypedCodegen<'a> {
         let [output] = callable.outputs.as_slice() else {
             return None;
         };
-        let [chain] = callable.chains.as_slice() else {
+        let zero_bindings = if allow_zero_initializers {
+            self.zero_initializer_bindings(callable)
+        } else {
+            HashSet::new()
+        };
+        let effective_chains = if allow_zero_initializers {
+            callable
+                .chains
+                .iter()
+                .filter(|chain| {
+                    final_variable(chain)
+                        .map(|name| !zero_bindings.contains(name))
+                        .unwrap_or(true)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            callable.chains.iter().collect::<Vec<_>>()
+        };
+        let [chain] = effective_chains.as_slice() else {
             return None;
         };
         let stages = stages_binding_output(chain, &output.name)?;
         match stages {
             [stage] => match &stage.kind {
                 TypedStageKind::Reduce { op, identity, .. }
-                    if self.is_add(op) && is_zero(identity) =>
+                    if self.is_add(op) && is_zero_or_binding(identity, &zero_bindings) =>
                 {
                     Some(Fusion::Sum)
                 }
@@ -54,11 +79,15 @@ impl<'a> TypedCodegen<'a> {
                     TypedStageKind::Map { name: node, .. },
                     TypedStageKind::Call { name: next, .. },
                 ) => {
-                    if self.called_fusion(node, visiting) == Some(Fusion::Sum)
-                        && self.called_fusion(next, visiting) == Some(Fusion::Sum)
+                    if self.called_fusion(node, visiting, allow_zero_initializers)
+                        == Some(Fusion::Sum)
+                        && self.called_fusion(next, visiting, allow_zero_initializers)
+                            == Some(Fusion::Sum)
                     {
                         Some(Fusion::NestedSum)
-                    } else if self.called_fusion(next, visiting) == Some(Fusion::Sum) {
+                    } else if self.called_fusion(next, visiting, allow_zero_initializers)
+                        == Some(Fusion::Sum)
+                    {
                         self.map_reduce_op_for_node(node).map(Fusion::MapReduceAdd)
                     } else {
                         None
@@ -67,7 +96,7 @@ impl<'a> TypedCodegen<'a> {
                 (
                     TypedStageKind::Map { name: node, .. },
                     TypedStageKind::Reduce { op, identity, .. },
-                ) if self.is_add(op) && is_zero(identity) => {
+                ) if self.is_add(op) && is_zero_or_binding(identity, &zero_bindings) => {
                     self.map_reduce_op_for_node(node).map(Fusion::MapReduceAdd)
                 }
                 (
@@ -84,8 +113,9 @@ impl<'a> TypedCodegen<'a> {
                     TypedStageKind::Call { name: first, .. },
                     TypedStageKind::Call { name: second, .. },
                 ) => {
-                    let first_fusion = self.called_fusion(first, visiting);
-                    let second_fusion = self.called_fusion(second, visiting);
+                    let first_fusion = self.called_fusion(first, visiting, allow_zero_initializers);
+                    let second_fusion =
+                        self.called_fusion(second, visiting, allow_zero_initializers);
                     if first_fusion == Some(Fusion::ZipMap(BinaryOp::Sub))
                         && second_fusion == Some(Fusion::MapReduceAdd(MapOp::Square))
                     {
@@ -103,7 +133,10 @@ impl<'a> TypedCodegen<'a> {
                     TypedStageKind::Call { name: zip, .. },
                     TypedStageKind::Map { name: node, .. },
                     TypedStageKind::Reduce { op, identity, .. },
-                ) if self.is_zip(zip) && self.is_add(op) && is_zero(identity) => {
+                ) if self.is_zip(zip)
+                    && self.is_add(op)
+                    && is_zero_or_binding(identity, &zero_bindings) =>
+                {
                     self.binary_op_for_node(node).map(Fusion::ZipMapReduceAdd)
                 }
                 (
@@ -145,7 +178,7 @@ impl<'a> TypedCodegen<'a> {
         }
         let sum_stages = stages_binding_output(sum_chain, sum_binding)?;
         let length_stages = stages_binding_output(length_chain, length_binding)?;
-        if !matches!(sum_stages, [stage] if matches!(&stage.kind, TypedStageKind::Call { name, .. } if self.called_fusion(name, visiting) == Some(Fusion::Sum)))
+        if !matches!(sum_stages, [stage] if matches!(&stage.kind, TypedStageKind::Call { name, .. } if self.called_fusion(name, visiting, false) == Some(Fusion::Sum)))
         {
             return None;
         }
@@ -515,10 +548,38 @@ impl<'a> TypedCodegen<'a> {
         Ok(())
     }
 
-    fn called_fusion(&self, name: &str, visiting: &mut HashSet<String>) -> Option<Fusion> {
-        self.callables
-            .get(name)
-            .and_then(|callable| self.fusion_for_callable(callable, visiting))
+    fn zero_initializer_bindings(&self, callable: &TypedCallable) -> HashSet<String> {
+        callable
+            .chains
+            .iter()
+            .filter_map(|chain| self.zero_initializer_binding(chain))
+            .collect()
+    }
+
+    fn zero_initializer_binding(&self, chain: &TypedChain) -> Option<String> {
+        if !is_zero(&chain.source) {
+            return None;
+        }
+        let binding = final_variable(chain)?;
+        let stages = stages_binding_output(chain, binding)?;
+        match stages {
+            [] => Some(binding.to_string()),
+            [stage] if matches!(&stage.kind, TypedStageKind::Call { name, .. } if self.is_from_int(name)) => {
+                Some(binding.to_string())
+            }
+            _ => None,
+        }
+    }
+
+    fn called_fusion(
+        &self,
+        name: &str,
+        visiting: &mut HashSet<String>,
+        allow_zero_initializers: bool,
+    ) -> Option<Fusion> {
+        self.callables.get(name).and_then(|callable| {
+            self.fusion_for_callable(callable, visiting, allow_zero_initializers)
+        })
     }
 
     fn unary_op_for_node(&self, name: &str) -> Option<UnaryOp> {
@@ -657,6 +718,13 @@ impl<'a> TypedCodegen<'a> {
         self.canonical_name(name) == "sqrt"
     }
 
+    fn is_from_int(&self, name: &str) -> bool {
+        matches!(
+            self.canonical_name(name).as_str(),
+            "from_int" | "from_int_f32"
+        )
+    }
+
     fn is_zip(&self, name: &str) -> bool {
         self.canonical_name(name) == "zip"
     }
@@ -668,4 +736,9 @@ impl<'a> TypedCodegen<'a> {
     fn is_length(&self, name: &str) -> bool {
         self.canonical_name(name) == "length"
     }
+}
+
+fn is_zero_or_binding(endpoint: &TypedEndpoint, zero_bindings: &HashSet<String>) -> bool {
+    is_zero(endpoint)
+        || matches!(&endpoint.kind, TypedEndpointKind::Variable(name) if zero_bindings.contains(name))
 }

@@ -124,6 +124,7 @@ impl<'a> TypedCodegen<'a> {
         if self.gpu_enabled {
             out.push_str("extern void fa_gpu_require_device(void);\n");
             out.push_str("typedef struct { size_t count; const double *items; } FaGpuSliceF64;\n");
+            out.push_str("extern float fa_gpu_repeat_vector_accum_f32(const char *wgsl, const float *left, size_t left_count, const float *right, size_t right_count, float score, int64_t iterations);\n");
             out.push_str("extern double fa_gpu_repeat_vector_accum_f64(const char *wgsl, const double *left, size_t left_count, const double *right, size_t right_count, double score, int64_t iterations);\n");
             out.push_str("extern double fa_gpu_repeat_matrix_accum_f64(const char *wgsl, const FaGpuSliceF64 *left_rows, size_t left_count, const FaGpuSliceF64 *right_rows, size_t right_count, const double *vector, size_t vector_count, double score, int64_t iterations);\n");
         }
@@ -252,6 +253,7 @@ impl<'a> TypedCodegen<'a> {
         if self.gpu_enabled {
             out.push_str("extern void fa_gpu_require_device(void);\n");
             out.push_str("typedef struct { size_t count; const double *items; } FaGpuSliceF64;\n");
+            out.push_str("extern float fa_gpu_repeat_vector_accum_f32(const char *wgsl, const float *left, size_t left_count, const float *right, size_t right_count, float score, int64_t iterations);\n");
             out.push_str("extern double fa_gpu_repeat_vector_accum_f64(const char *wgsl, const double *left, size_t left_count, const double *right, size_t right_count, double score, int64_t iterations);\n");
             out.push_str("extern double fa_gpu_repeat_matrix_accum_f64(const char *wgsl, const FaGpuSliceF64 *left_rows, size_t left_count, const FaGpuSliceF64 *right_rows, size_t right_count, const double *vector, size_t vector_count, double score, int64_t iterations);\n");
         }
@@ -1182,7 +1184,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 && let TypedStageKind::Call { name, .. } = &stage.kind
             {
                 if matches_pair_source(&chain.source, &left_port.name, &right_port.name) {
-                    match self.fusion_for_name(name) {
+                    match self.gpu_fusion_for_name(name) {
                         Some(Fusion::ZipMapReduceAdd(BinaryOp::Mul)) => {
                             reductions.insert(binding.to_string(), ReductionTerm::PairMul);
                             continue;
@@ -1195,7 +1197,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     }
                 }
                 if matches!(&chain.source.kind, TypedEndpointKind::Variable(name) if name == &left_port.name)
-                    && self.fusion_for_name(name) == Some(Fusion::MapReduceAdd(MapOp::Square))
+                    && self.gpu_fusion_for_name(name) == Some(Fusion::MapReduceAdd(MapOp::Square))
                 {
                     reductions.insert(binding.to_string(), ReductionTerm::LeftSquare);
                     continue;
@@ -3270,8 +3272,15 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 if items.len() != 3 {
                     return Err("GPU vector accumulator expected three tuple fields".to_string());
                 }
+                let helper = match plan.scalar {
+                    gpu::GpuScalarKind::F32 => "fa_gpu_repeat_vector_accum_f32",
+                    gpu::GpuScalarKind::F64 => "fa_gpu_repeat_vector_accum_f64",
+                    gpu::GpuScalarKind::I32 => {
+                        return Err("GPU vector accumulator expected f32 or f64 state".to_string());
+                    }
+                };
                 out.push_str(&format!(
-                    "    {tmp}.f2 = fa_gpu_repeat_vector_accum_f64({}, {}.f0.items, {}.f0.count, {}.f1.items, {}.f1.count, {}.f2, {iter});\n",
+                    "    {tmp}.f2 = {helper}({}, {}.f0.items, {}.f0.count, {}.f1.items, {}.f1.count, {}.f2, {iter});\n",
                     c_string_literal(&plan.wgsl),
                     input.code,
                     input.code,
@@ -3511,12 +3520,20 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
             "parse_int" => out.push_str(&format!("  {target} = fa_parse_int({input});\n")),
             "parse_real" => out.push_str(&format!("  {target} = fa_parse_real({input});\n")),
             "from_int" => out.push_str(&format!("  {target} = (double){input};\n")),
+            "from_int_f32" => out.push_str(&format!("  {target} = (float){input};\n")),
             "format_int" => {
                 self.emit_format_faultable_or_plain(out, target, input, input_ty, "fa_format_int")?
             }
             "format_real" => {
                 self.emit_format_faultable_or_plain(out, target, input, input_ty, "fa_format_real")?
             }
+            "format_real_f32" => self.emit_format_faultable_or_plain(
+                out,
+                target,
+                input,
+                input_ty,
+                "fa_format_real_f32",
+            )?,
             "add" | "sub" | "mul" | "div" | "rem" if matches!(output_ty, Ty::Faultable(_)) => {
                 out.push_str(&format!(
                     "  {target} = {};\n",
@@ -4605,29 +4622,38 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         if callable.effect != Effect::Pure {
             return None;
         }
-        if self.recognize_vector_score_accumulator(callable, input_ty) {
+        if self.recognize_vector_score_accumulator(callable, input_ty, &Ty::F32) {
             return Some(GpuRepeatAccumulator {
                 kind: GpuRepeatAccumulatorKind::VectorScore,
-                wgsl: vector_score_accumulator_wgsl(),
+                scalar: gpu::GpuScalarKind::F32,
+                wgsl: vector_score_accumulator_wgsl(gpu::GpuScalarKind::F32),
+            });
+        }
+        if self.recognize_vector_score_accumulator(callable, input_ty, &Ty::F64) {
+            return Some(GpuRepeatAccumulator {
+                kind: GpuRepeatAccumulatorKind::VectorScore,
+                scalar: gpu::GpuScalarKind::F64,
+                wgsl: vector_score_accumulator_wgsl(gpu::GpuScalarKind::F64),
             });
         }
         if self.recognize_matrix_score_accumulator(callable, input_ty) {
             return Some(GpuRepeatAccumulator {
                 kind: GpuRepeatAccumulatorKind::MatrixScore,
+                scalar: gpu::GpuScalarKind::F64,
                 wgsl: matrix_score_accumulator_wgsl(),
             });
         }
         None
     }
 
-    fn recognize_vector_score_accumulator(&self, callable: &TypedCallable, input_ty: &Ty) -> bool {
-        if input_ty
-            != &Ty::Tuple(vec![
-                Ty::Seq(Box::new(Ty::F64)),
-                Ty::Seq(Box::new(Ty::F64)),
-                Ty::F64,
-            ])
-        {
+    fn recognize_vector_score_accumulator(
+        &self,
+        callable: &TypedCallable,
+        input_ty: &Ty,
+        scalar_ty: &Ty,
+    ) -> bool {
+        let seq_ty = Ty::Seq(Box::new(scalar_ty.clone()));
+        if input_ty != &Ty::Tuple(vec![seq_ty.clone(), seq_ty.clone(), scalar_ty.clone()]) {
             return false;
         }
         let [left_port, right_port, score_port] = callable.inputs.as_slice() else {
@@ -4636,12 +4662,12 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
         let [out_left, out_right, out_score] = callable.outputs.as_slice() else {
             return false;
         };
-        if left_port.ty != Ty::Seq(Box::new(Ty::F64))
-            || right_port.ty != Ty::Seq(Box::new(Ty::F64))
-            || score_port.ty != Ty::F64
+        if left_port.ty != seq_ty
+            || right_port.ty != seq_ty
+            || score_port.ty != *scalar_ty
             || out_left.ty != left_port.ty
             || out_right.ty != right_port.ty
-            || out_score.ty != Ty::F64
+            || out_score.ty != *scalar_ty
         {
             return false;
         }
@@ -4680,7 +4706,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                 && let TypedStageKind::Call { name, .. } = &stage.kind
             {
                 if matches_pair_source(&chain.source, &left_port.name, &right_port.name) {
-                    match self.fusion_for_name(name) {
+                    match self.gpu_fusion_for_name(name) {
                         Some(Fusion::ZipMapReduceAdd(BinaryOp::Mul)) => {
                             reductions.insert(binding.to_string(), ReductionTerm::PairMul);
                             continue;
@@ -4693,7 +4719,7 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
                     }
                 }
                 if matches!(&chain.source.kind, TypedEndpointKind::Variable(name) if name == &left_port.name)
-                    && self.fusion_for_name(name) == Some(Fusion::MapReduceAdd(MapOp::Square))
+                    && self.gpu_fusion_for_name(name) == Some(Fusion::MapReduceAdd(MapOp::Square))
                 {
                     reductions.insert(binding.to_string(), ReductionTerm::LeftSquare);
                     continue;
@@ -4870,7 +4896,12 @@ static int64_t fa_write_stderr(FaBytes bytes) { return fa_write_bytes(stderr, by
     }
 }
 
-fn vector_score_accumulator_wgsl() -> String {
+fn vector_score_accumulator_wgsl(scalar: gpu::GpuScalarKind) -> String {
+    let element = match scalar {
+        gpu::GpuScalarKind::F32 => "f32",
+        gpu::GpuScalarKind::F64 => "f64",
+        gpu::GpuScalarKind::I32 => "i32",
+    };
     r#"struct FaGpuProgramParams {
   work_items: u32,
   iterations: u32,
@@ -4887,10 +4918,10 @@ fn vector_score_accumulator_wgsl() -> String {
   matrix3_rows: u32,
   matrix3_cols: u32,
 };
-@group(0) @binding(0) var<storage, read_write> fa_output: array<f64>;
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
 @group(0) @binding(1) var<uniform> fa_params: FaGpuProgramParams;
-@group(0) @binding(2) var<storage, read> fa_left: array<f64>;
-@group(0) @binding(3) var<storage, read> fa_right: array<f64>;
+@group(0) @binding(2) var<storage, read> fa_left: array<__SCALAR__>;
+@group(0) @binding(3) var<storage, read> fa_right: array<__SCALAR__>;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
@@ -4902,7 +4933,7 @@ fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
   fa_output[i] = left * right + delta * delta + left * left;
 }
 "#
-    .to_string()
+    .replace("__SCALAR__", element)
 }
 
 fn matrix_score_accumulator_wgsl() -> String {
