@@ -258,14 +258,14 @@ fn std_cv_exposes_channel_matrices_for_matrix_pipelines() {
     let source = r#"
         import std.cli { Args }
         import std.cv { luma_matrix, red_matrix }
-        import std.matrix { add_scalar, equals as matrix_equals }
+        import std.matrix { add_scalar_f64, equals_f64 as matrix_equals }
         import std.predicates { and }
 
         program main(args: Args) -> exit_code: i64 {
             ((2, 1), [[(1.0, (0.0, 0.0)), (0.0, (1.0, 0.0))]]) -> $image
             $image -> red_matrix -> $red
             ($red, [[1.0, 0.0]]) -> matrix_equals -> $red_ok
-            ($red, 1.0) -> add_scalar -> $red_plus_one
+            ($red, 1.0) -> add_scalar_f64 -> $red_plus_one
             ($red_plus_one, [[2.0, 1.0]]) -> matrix_equals -> $matrix_pipeline_ok
             $image -> luma_matrix -> $luma
             ($luma, [[0.299, 0.587]]) -> matrix_equals -> $luma_ok

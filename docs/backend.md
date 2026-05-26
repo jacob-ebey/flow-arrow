@@ -298,6 +298,15 @@ wasm-bindgen WebGPU module (`flowarrow_gpu_runtime.mjs` plus
 runtime. Both packaging paths compile and dispatch WGSL through `wgpu`, and
 neither path falls back to CPU execution when GPU execution is requested.
 
+For source-backed `std.vector` and `std.matrix` calls, the TypeScript and
+JavaScript GPU backends recognize compiler-internal stdlib names before
+expanding them into host loops. Vector unary, pairwise, scalar-broadcast,
+reduction, dot, squared-norm, and softmax calls lower to WebGPU runtime
+helpers. Matrix elementwise, scalar, row-broadcast, `matvec`, `vecmat`,
+`matmul`, `outer`, and row-softmax calls lower to matrix kernels. These
+lowerings are implemented for both `f32` and `f64` names and do not widen or
+narrow numeric storage.
+
 The generated `wgpu` runtime is cached outside individual project build
 directories. `flowarrow build --gpu` computes a content key from the runtime
 source, runtime manifest, FlowArrow version, target, and runtime kind, then

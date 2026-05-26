@@ -644,11 +644,11 @@ impl<'a> TypedCodegen<'a> {
     }
 
     pub(super) fn is_matmul_name(&self, name: &str) -> bool {
-        name == "__flow_std_matrix_matmul"
+        name == "__flow_std_matrix_matmul_f64"
     }
 
     pub(super) fn is_matvec_name(&self, name: &str) -> bool {
-        name == "__flow_std_matrix_matvec"
+        name == "__flow_std_matrix_matvec_f64"
     }
 
     fn direct_single_builtin(&self, name: &str) -> Option<String> {

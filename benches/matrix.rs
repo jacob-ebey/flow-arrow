@@ -340,16 +340,16 @@ fn flowarrow_source(
     format!(
         r#"
 import std.cli {{ Args }}
-import std.math {{ add as scalar_add, eq }}
-import std.vector {{ sum as vector_sum }}
-import std.matrix {{ matmul, matvec, row_sums, sum as matrix_sum }}
+import std.math {{ add_f64 as scalar_add, eq_f64 as eq }}
+import std.vector {{ sum_f64 as vector_sum }}
+import std.matrix {{ matmul_f64, matvec_f64, row_sums_f64, sum_f64 as matrix_sum }}
 
 node kernel(left: Seq[Seq[f64]], right: Seq[Seq[f64]], vector: Seq[f64], score: f64) -> (out_left: Seq[Seq[f64]], out_right: Seq[Seq[f64]], out_vector: Seq[f64], out_score: f64) {{
-    ($left, $right) -> matmul -> $product
+    ($left, $right) -> matmul_f64 -> $product
     $product -> matrix_sum -> $product_sum
-    ($left, $vector) -> matvec -> $mv
+    ($left, $vector) -> matvec_f64 -> $mv
     $mv -> vector_sum -> $matvec_sum
-    $left -> row_sums -> vector_sum -> $row_sum_total
+    $left -> row_sums_f64 -> vector_sum -> $row_sum_total
     ($product_sum, $matvec_sum) -> scalar_add -> $partial
     ($partial, $row_sum_total) -> scalar_add -> $delta
     ($score, $delta) -> scalar_add -> $out_score

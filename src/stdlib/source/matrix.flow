@@ -10,27 +10,28 @@ import std.seq {
 }
 import std.tuple { first, second }
 import std.vector {
-    sum as vector_sum,
-    mean as vector_mean,
-    neg as vector_neg,
-    abs as vector_abs,
-    add as vector_add,
-    sub as vector_sub,
-    mul as vector_mul,
-    div as vector_div,
-    add_scalar as vector_add_scalar,
-    sub_scalar as vector_sub_scalar,
-    scalar_sub as vector_scalar_sub,
-    mul_scalar as vector_mul_scalar,
-    scalar_mul as vector_scalar_mul,
-    div_scalar as vector_div_scalar,
-    scalar_div as vector_scalar_div,
-    equals as vector_equals,
-    dot as vector_dot,
-    squared_norm as vector_squared_norm,
-    l1_norm as vector_l1_norm,
-    norm as vector_norm,
-    normalize as vector_normalize,
+    sum_f64 as vector_sum,
+    mean_f64 as vector_mean,
+    neg_f64 as vector_neg,
+    abs_f64 as vector_abs,
+    add_f64 as vector_add,
+    sub_f64 as vector_sub,
+    mul_f64 as vector_mul,
+    div_f64 as vector_div,
+    add_scalar_f64 as vector_add_scalar,
+    sub_scalar_f64 as vector_sub_scalar,
+    scalar_sub_f64 as vector_scalar_sub,
+    mul_scalar_f64 as vector_mul_scalar,
+    scalar_mul_f64 as vector_scalar_mul,
+    div_scalar_f64 as vector_div_scalar,
+    scalar_div_f64 as vector_scalar_div,
+    equals_f64 as vector_equals,
+    dot_f64 as vector_dot,
+    squared_norm_f64 as vector_squared_norm,
+    l1_norm_f64 as vector_l1_norm,
+    norm_f64 as vector_norm,
+    normalize_f64 as vector_normalize,
+    softmax_f64 as vector_softmax,
     sum_f32 as vector_sum_f32,
     mean_f32 as vector_mean_f32,
     neg_f32 as vector_neg_f32,
@@ -55,27 +56,27 @@ import std.vector {
     softmax_f32 as vector_softmax_f32,
 }
 
-extern node rows(matrix: Seq[Seq[f64]]) -> count: i64 {
+extern node rows_f64(matrix: Seq[Seq[f64]]) -> count: i64 {
     $matrix -> length -> $count
 }
 
-extern node cols(matrix: Seq[Seq[f64]]) -> count: i64 {
+extern node cols_f64(matrix: Seq[Seq[f64]]) -> count: i64 {
     $matrix -> inner_length -> $count
 }
 
-extern node flatten(matrix: Seq[Seq[f64]]) -> values: Seq[f64] {
+extern node flatten_f64(matrix: Seq[Seq[f64]]) -> values: Seq[f64] {
     $matrix -> seq_flatten -> $values
 }
 
-extern node transpose(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
+extern node transpose_f64(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
     $matrix -> seq_transpose -> $out
 }
 
-extern node neg(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
+extern node neg_f64(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
     $matrix -> map vector_neg -> $out
 }
 
-extern node abs(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
+extern node abs_f64(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
     $matrix -> map vector_abs -> $out
 }
 
@@ -99,23 +100,23 @@ node equal_rows(pair: (Seq[f64], Seq[f64])) -> out: Bool {
     $pair -> vector_equals -> $out
 }
 
-extern node add(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
+extern node add_f64(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
     $inputs -> zip -> map add_rows -> $out
 }
 
-extern node sub(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
+extern node sub_f64(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
     $inputs -> zip -> map sub_rows -> $out
 }
 
-extern node mul(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
+extern node mul_f64(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
     $inputs -> zip -> map mul_rows -> $out
 }
 
-extern node div(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
+extern node div_f64(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
     $inputs -> zip -> map div_rows -> $out
 }
 
-extern node equals(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Bool {
+extern node equals_f64(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Bool {
     $inputs -> zip -> map equal_rows -> all -> $out
 }
 
@@ -147,80 +148,80 @@ node scalar_div_row(pair: (f64, Seq[f64])) -> out: Seq[f64] {
     $pair -> vector_scalar_div -> $out
 }
 
-extern node add_scalar(inputs: (Seq[Seq[f64]], f64)) -> out: Seq[Seq[f64]] {
+extern node add_scalar_f64(inputs: (Seq[Seq[f64]], f64)) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_right -> map add_scalar_row -> $out
 }
 
-extern node sub_scalar(inputs: (Seq[Seq[f64]], f64)) -> out: Seq[Seq[f64]] {
+extern node sub_scalar_f64(inputs: (Seq[Seq[f64]], f64)) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_right -> map sub_scalar_row -> $out
 }
 
-extern node scalar_sub(inputs: (f64, Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
+extern node scalar_sub_f64(inputs: (f64, Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_left -> map scalar_sub_row -> $out
 }
 
-extern node mul_scalar(inputs: (Seq[Seq[f64]], f64)) -> out: Seq[Seq[f64]] {
+extern node mul_scalar_f64(inputs: (Seq[Seq[f64]], f64)) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_right -> map mul_scalar_row -> $out
 }
 
-extern node scalar_mul(inputs: (f64, Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
+extern node scalar_mul_f64(inputs: (f64, Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_left -> map scalar_mul_row -> $out
 }
 
-extern node div_scalar(inputs: (Seq[Seq[f64]], f64)) -> out: Seq[Seq[f64]] {
+extern node div_scalar_f64(inputs: (Seq[Seq[f64]], f64)) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_right -> map div_scalar_row -> $out
 }
 
-extern node scalar_div(inputs: (f64, Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
+extern node scalar_div_f64(inputs: (f64, Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_left -> map scalar_div_row -> $out
 }
 
-extern node add_row(inputs: (Seq[Seq[f64]], Seq[f64])) -> out: Seq[Seq[f64]] {
+extern node add_row_f64(inputs: (Seq[Seq[f64]], Seq[f64])) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_right -> map add_rows -> $out
 }
 
-extern node sub_row(inputs: (Seq[Seq[f64]], Seq[f64])) -> out: Seq[Seq[f64]] {
+extern node sub_row_f64(inputs: (Seq[Seq[f64]], Seq[f64])) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_right -> map sub_rows -> $out
 }
 
-extern node mul_row(inputs: (Seq[Seq[f64]], Seq[f64])) -> out: Seq[Seq[f64]] {
+extern node mul_row_f64(inputs: (Seq[Seq[f64]], Seq[f64])) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_right -> map mul_rows -> $out
 }
 
-extern node div_row(inputs: (Seq[Seq[f64]], Seq[f64])) -> out: Seq[Seq[f64]] {
+extern node div_row_f64(inputs: (Seq[Seq[f64]], Seq[f64])) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_right -> map div_rows -> $out
 }
 
-extern node sum(matrix: Seq[Seq[f64]]) -> total: f64 {
+extern node sum_f64(matrix: Seq[Seq[f64]]) -> total: f64 {
     $matrix -> map vector_sum -> vector_sum -> $total
 }
 
-extern node mean(matrix: Seq[Seq[f64]]) -> average: f64 {
-    $matrix -> flatten -> vector_mean -> $average
+extern node mean_f64(matrix: Seq[Seq[f64]]) -> average: f64 {
+    $matrix -> flatten_f64 -> vector_mean -> $average
 }
 
-extern node row_sums(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
+extern node row_sums_f64(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
     $matrix -> map vector_sum -> $out
 }
 
-extern node column_sums(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
-    $matrix -> transpose -> map vector_sum -> $out
+extern node column_sums_f64(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
+    $matrix -> transpose_f64 -> map vector_sum -> $out
 }
 
-extern node row_means(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
+extern node row_means_f64(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
     $matrix -> map vector_mean -> $out
 }
 
-extern node column_means(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
-    $matrix -> transpose -> map vector_mean -> $out
+extern node column_means_f64(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
+    $matrix -> transpose_f64 -> map vector_mean -> $out
 }
 
-extern node row_norms(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
+extern node row_norms_f64(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
     $matrix -> map vector_norm -> $out
 }
 
-extern node column_norms(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
-    $matrix -> transpose -> map vector_norm -> $out
+extern node column_norms_f64(matrix: Seq[Seq[f64]]) -> out: Seq[f64] {
+    $matrix -> transpose_f64 -> map vector_norm -> $out
 }
 
 node row_squared_norm(row: Seq[f64]) -> total: f64 {
@@ -231,46 +232,50 @@ node row_l1_norm(row: Seq[f64]) -> total: f64 {
     $row -> vector_l1_norm -> $total
 }
 
-extern node squared_norm(matrix: Seq[Seq[f64]]) -> total: f64 {
+extern node squared_norm_f64(matrix: Seq[Seq[f64]]) -> total: f64 {
     $matrix -> map row_squared_norm -> vector_sum -> $total
 }
 
-extern node l1_norm(matrix: Seq[Seq[f64]]) -> total: f64 {
+extern node l1_norm_f64(matrix: Seq[Seq[f64]]) -> total: f64 {
     $matrix -> map row_l1_norm -> vector_sum -> $total
 }
 
-extern node norm(matrix: Seq[Seq[f64]]) -> total: f64 {
-    $matrix -> flatten -> vector_norm -> $total
+extern node norm_f64(matrix: Seq[Seq[f64]]) -> total: f64 {
+    $matrix -> flatten_f64 -> vector_norm -> $total
 }
 
-extern node frobenius_norm(matrix: Seq[Seq[f64]]) -> total: f64 {
-    $matrix -> norm -> $total
+extern node frobenius_norm_f64(matrix: Seq[Seq[f64]]) -> total: f64 {
+    $matrix -> norm_f64 -> $total
 }
 
-extern node normalize_rows(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
+extern node normalize_rows_f64(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
     $matrix -> map vector_normalize -> $out
 }
 
-extern node squared_distance(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> total: f64 {
-    $inputs -> sub -> squared_norm -> $total
+extern node row_softmax_f64(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
+    $matrix -> map vector_softmax -> $out
 }
 
-extern node distance(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> total: f64 {
-    $inputs -> sub -> norm -> $total
+extern node squared_distance_f64(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> total: f64 {
+    $inputs -> sub_f64 -> squared_norm_f64 -> $total
+}
+
+extern node distance_f64(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> total: f64 {
+    $inputs -> sub_f64 -> norm_f64 -> $total
 }
 
 node dot_row(pair: (Seq[f64], Seq[f64])) -> out: f64 {
     $pair -> vector_dot -> $out
 }
 
-extern node matvec(inputs: (Seq[Seq[f64]], Seq[f64])) -> out: Seq[f64] {
+extern node matvec_f64(inputs: (Seq[Seq[f64]], Seq[f64])) -> out: Seq[f64] {
     $inputs -> broadcast_right -> map dot_row -> $out
 }
 
-extern node vecmat(inputs: (Seq[f64], Seq[Seq[f64]])) -> out: Seq[f64] {
+extern node vecmat_f64(inputs: (Seq[f64], Seq[Seq[f64]])) -> out: Seq[f64] {
     $inputs             -> first           -> $vector
-    $inputs             -> second          -> transpose   -> $columns
-    ($columns, $vector) -> broadcast_right -> map dot_row -> $out
+    $inputs             -> second          -> transpose_f64 -> $columns
+    ($columns, $vector) -> broadcast_right -> map dot_row   -> $out
 }
 
 node row_matmul(pair: (Seq[f64], Seq[Seq[f64]])) -> out: Seq[f64] {
@@ -279,9 +284,9 @@ node row_matmul(pair: (Seq[f64], Seq[Seq[f64]])) -> out: Seq[f64] {
     ($columns, $row) -> broadcast_right -> map dot_row -> $out
 }
 
-extern node matmul(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
+extern node matmul_f64(inputs: (Seq[Seq[f64]], Seq[Seq[f64]])) -> out: Seq[Seq[f64]] {
     $inputs           -> first           -> $left
-    $inputs           -> second          -> transpose      -> $columns
+    $inputs           -> second          -> transpose_f64  -> $columns
     ($left, $columns) -> broadcast_right -> map row_matmul -> $out
 }
 
@@ -289,13 +294,21 @@ node outer_row(pair: (f64, Seq[f64])) -> out: Seq[f64] {
     $pair -> vector_scalar_mul -> $out
 }
 
-extern node outer(inputs: (Seq[f64], Seq[f64])) -> out: Seq[Seq[f64]] {
+extern node outer_f64(inputs: (Seq[f64], Seq[f64])) -> out: Seq[Seq[f64]] {
     $inputs -> broadcast_right -> map outer_row -> $out
 }
 
-extern node gram(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
-    $matrix                -> transpose -> $transposed
-    ($matrix, $transposed) -> matmul    -> $out
+extern node gram_f64(matrix: Seq[Seq[f64]]) -> out: Seq[Seq[f64]] {
+    $matrix                -> transpose_f64 -> $transposed
+    ($matrix, $transposed) -> matmul_f64    -> $out
+}
+
+extern node rows_f32(matrix: Seq[Seq[f32]]) -> count: i64 {
+    $matrix -> length -> $count
+}
+
+extern node cols_f32(matrix: Seq[Seq[f32]]) -> count: i64 {
+    $matrix -> inner_length -> $count
 }
 
 extern node flatten_f32(matrix: Seq[Seq[f32]]) -> values: Seq[f32] {

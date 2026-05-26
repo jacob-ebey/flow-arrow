@@ -1794,6 +1794,394 @@ pub async fn fa_gpu_reduce_f64(
     runtime.reduce_f64(op, &input, identity).await
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_vector_unary_f32(op: u32, input: Vec<f32>) -> Result<Vec<f32>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.vector_unary_f32(op, &input).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_vector_unary_f64(op: u32, input: Vec<f64>) -> Result<Vec<f64>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.vector_unary_f64(op, &input).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_vector_binary_f32(
+    op: u32,
+    left: Vec<f32>,
+    right: Vec<f32>,
+) -> Result<Vec<f32>, JsValue> {
+    if left.len() != right.len() {
+        return Err(JsValue::from_str("FlowArrow GPU vector binary operation requires equal lengths"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.vector_binary_f32(op, &left, &right).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_vector_binary_f64(
+    op: u32,
+    left: Vec<f64>,
+    right: Vec<f64>,
+) -> Result<Vec<f64>, JsValue> {
+    if left.len() != right.len() {
+        return Err(JsValue::from_str("FlowArrow GPU vector binary operation requires equal lengths"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.vector_binary_f64(op, &left, &right).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_vector_scalar_f32(
+    op: u32,
+    input: Vec<f32>,
+    scalar: f32,
+    scalar_left: bool,
+) -> Result<Vec<f32>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.vector_scalar_f32(op, &input, scalar, scalar_left).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_vector_scalar_f64(
+    op: u32,
+    input: Vec<f64>,
+    scalar: f64,
+    scalar_left: bool,
+) -> Result<Vec<f64>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.vector_scalar_f64(op, &input, scalar, scalar_left).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_vector_dot_f32(left: Vec<f32>, right: Vec<f32>) -> Result<f32, JsValue> {
+    if left.len() != right.len() {
+        return Err(JsValue::from_str("FlowArrow GPU dot product requires equal vector lengths"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.vector_dot_f32(left, right).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_vector_dot_f64(left: Vec<f64>, right: Vec<f64>) -> Result<f64, JsValue> {
+    if left.len() != right.len() {
+        return Err(JsValue::from_str("FlowArrow GPU dot product requires equal vector lengths"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.vector_dot_f64(left, right).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_vector_softmax_f32(input: Vec<f32>) -> Result<Vec<f32>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.vector_softmax_f32(&input).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_vector_softmax_f64(input: Vec<f64>) -> Result<Vec<f64>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.vector_softmax_f64(&input).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_binary_f32(
+    op: u32,
+    left: Vec<f32>,
+    left_rows: u32,
+    left_cols: u32,
+    right: Vec<f32>,
+    right_rows: u32,
+    right_cols: u32,
+) -> Result<Vec<f32>, JsValue> {
+    validate_matrix_pair(left.len(), left_rows, left_cols, right.len(), right_rows, right_cols)?;
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.matrix_binary_f32(op, &left, left_rows, left_cols, &right).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_binary_f64(
+    op: u32,
+    left: Vec<f64>,
+    left_rows: u32,
+    left_cols: u32,
+    right: Vec<f64>,
+    right_rows: u32,
+    right_cols: u32,
+) -> Result<Vec<f64>, JsValue> {
+    validate_matrix_pair(left.len(), left_rows, left_cols, right.len(), right_rows, right_cols)?;
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.matrix_binary_f64(op, &left, left_rows, left_cols, &right).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_scalar_f32(
+    op: u32,
+    input: Vec<f32>,
+    rows: u32,
+    cols: u32,
+    scalar: f32,
+    scalar_left: bool,
+) -> Result<Vec<f32>, JsValue> {
+    validate_matrix(input.len(), rows, cols, "input")?;
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.matrix_scalar_f32(op, &input, rows, cols, scalar, scalar_left).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_scalar_f64(
+    op: u32,
+    input: Vec<f64>,
+    rows: u32,
+    cols: u32,
+    scalar: f64,
+    scalar_left: bool,
+) -> Result<Vec<f64>, JsValue> {
+    validate_matrix(input.len(), rows, cols, "input")?;
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.matrix_scalar_f64(op, &input, rows, cols, scalar, scalar_left).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_row_binary_f32(
+    op: u32,
+    matrix: Vec<f32>,
+    rows: u32,
+    cols: u32,
+    row: Vec<f32>,
+) -> Result<Vec<f32>, JsValue> {
+    validate_matrix(matrix.len(), rows, cols, "matrix")?;
+    if row.len() != cols as usize {
+        return Err(JsValue::from_str("FlowArrow GPU matrix row operation requires row length to match matrix columns"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.matrix_row_binary_f32(op, &matrix, rows, cols, &row).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_row_binary_f64(
+    op: u32,
+    matrix: Vec<f64>,
+    rows: u32,
+    cols: u32,
+    row: Vec<f64>,
+) -> Result<Vec<f64>, JsValue> {
+    validate_matrix(matrix.len(), rows, cols, "matrix")?;
+    if row.len() != cols as usize {
+        return Err(JsValue::from_str("FlowArrow GPU matrix row operation requires row length to match matrix columns"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.matrix_row_binary_f64(op, &matrix, rows, cols, &row).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_matvec_f32(
+    matrix: Vec<f32>,
+    rows: u32,
+    cols: u32,
+    vector: Vec<f32>,
+) -> Result<Vec<f32>, JsValue> {
+    validate_matrix(matrix.len(), rows, cols, "matrix")?;
+    if vector.len() != cols as usize {
+        return Err(JsValue::from_str("FlowArrow GPU matvec requires vector length to match matrix columns"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.matrix_matvec_f32(&matrix, rows, cols, &vector).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_matvec_f64(
+    matrix: Vec<f64>,
+    rows: u32,
+    cols: u32,
+    vector: Vec<f64>,
+) -> Result<Vec<f64>, JsValue> {
+    validate_matrix(matrix.len(), rows, cols, "matrix")?;
+    if vector.len() != cols as usize {
+        return Err(JsValue::from_str("FlowArrow GPU matvec requires vector length to match matrix columns"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.matrix_matvec_f64(&matrix, rows, cols, &vector).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_vecmat_f32(
+    vector: Vec<f32>,
+    matrix: Vec<f32>,
+    rows: u32,
+    cols: u32,
+) -> Result<Vec<f32>, JsValue> {
+    validate_matrix(matrix.len(), rows, cols, "matrix")?;
+    if vector.len() != rows as usize {
+        return Err(JsValue::from_str("FlowArrow GPU vecmat requires vector length to match matrix rows"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.matrix_vecmat_f32(&vector, &matrix, rows, cols).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_vecmat_f64(
+    vector: Vec<f64>,
+    matrix: Vec<f64>,
+    rows: u32,
+    cols: u32,
+) -> Result<Vec<f64>, JsValue> {
+    validate_matrix(matrix.len(), rows, cols, "matrix")?;
+    if vector.len() != rows as usize {
+        return Err(JsValue::from_str("FlowArrow GPU vecmat requires vector length to match matrix rows"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.matrix_vecmat_f64(&vector, &matrix, rows, cols).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_matmul_f32(
+    left: Vec<f32>,
+    left_rows: u32,
+    left_cols: u32,
+    right: Vec<f32>,
+    right_rows: u32,
+    right_cols: u32,
+) -> Result<Vec<f32>, JsValue> {
+    validate_matrix(left.len(), left_rows, left_cols, "left")?;
+    validate_matrix(right.len(), right_rows, right_cols, "right")?;
+    if left_cols != right_rows {
+        return Err(JsValue::from_str("FlowArrow GPU matmul requires left columns to equal right rows"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.matrix_matmul_f32(&left, left_rows, left_cols, &right, right_cols).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_matmul_f64(
+    left: Vec<f64>,
+    left_rows: u32,
+    left_cols: u32,
+    right: Vec<f64>,
+    right_rows: u32,
+    right_cols: u32,
+) -> Result<Vec<f64>, JsValue> {
+    validate_matrix(left.len(), left_rows, left_cols, "left")?;
+    validate_matrix(right.len(), right_rows, right_cols, "right")?;
+    if left_cols != right_rows {
+        return Err(JsValue::from_str("FlowArrow GPU matmul requires left columns to equal right rows"));
+    }
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.matrix_matmul_f64(&left, left_rows, left_cols, &right, right_cols).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_outer_f32(left: Vec<f32>, right: Vec<f32>) -> Result<Vec<f32>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.matrix_outer_f32(&left, &right).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_outer_f64(left: Vec<f64>, right: Vec<f64>) -> Result<Vec<f64>, JsValue> {
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.matrix_outer_f64(&left, &right).await
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_row_softmax_f32(
+    input: Vec<f32>,
+    rows: u32,
+    cols: u32,
+) -> Result<Vec<f32>, JsValue> {
+    validate_matrix(input.len(), rows, cols, "input")?;
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    Ok(runtime.matrix_row_softmax_f32(&input, rows, cols).await)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fa_gpu_matrix_row_softmax_f64(
+    input: Vec<f64>,
+    rows: u32,
+    cols: u32,
+) -> Result<Vec<f64>, JsValue> {
+    validate_matrix(input.len(), rows, cols, "input")?;
+    let mut runtime = GpuRuntime::new()
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
+    runtime.matrix_row_softmax_f64(&input, rows, cols).await
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fa_gpu_repeat_vector_accum_f32(
@@ -2076,6 +2464,38 @@ fn read_wgsl(wgsl: *const c_char) -> String {
         .to_str()
         .unwrap_or_else(|_| fail("FlowArrow GPU target received non-UTF-8 WGSL"))
         .to_string()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn validate_matrix(len: usize, rows: u32, cols: u32, label: &str) -> Result<(), JsValue> {
+    let expected = (rows as usize)
+        .checked_mul(cols as usize)
+        .ok_or_else(|| JsValue::from_str("FlowArrow GPU matrix shape overflowed"))?;
+    if len != expected {
+        return Err(JsValue::from_str(&format!(
+            "FlowArrow GPU {label} matrix storage does not match its shape",
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn validate_matrix_pair(
+    left_len: usize,
+    left_rows: u32,
+    left_cols: u32,
+    right_len: usize,
+    right_rows: u32,
+    right_cols: u32,
+) -> Result<(), JsValue> {
+    validate_matrix(left_len, left_rows, left_cols, "left")?;
+    validate_matrix(right_len, right_rows, right_cols, "right")?;
+    if left_rows != right_rows || left_cols != right_cols {
+        return Err(JsValue::from_str(
+            "FlowArrow GPU matrix binary operation requires equal shapes",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2934,6 +3354,559 @@ impl GpuRuntime {
         Ok(bytes_as_f64(&bytes)[0])
     }
 
+    async fn vector_unary_f32(&mut self, op: u32, input: &[f32]) -> Vec<f32> {
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_unary_wgsl("f32"),
+                4,
+                input.len(),
+                gpu_words_params(&[checked_usize_u32(input.len(), "GPU vector length"), op, 0, 0]),
+                vec![f32_as_bytes(input).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn vector_unary_f64(&mut self, op: u32, input: &[f64]) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_unary_wgsl("f64"),
+                8,
+                input.len(),
+                gpu_words_params(&[checked_usize_u32(input.len(), "GPU vector length"), op, 0, 0]),
+                vec![f64_as_bytes(input).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn vector_binary_f32(&mut self, op: u32, left: &[f32], right: &[f32]) -> Vec<f32> {
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_binary_wgsl("f32"),
+                4,
+                left.len(),
+                gpu_words_params(&[checked_usize_u32(left.len(), "GPU vector length"), op, 0, 0]),
+                vec![f32_as_bytes(left).to_vec(), f32_as_bytes(right).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn vector_binary_f64(
+        &mut self,
+        op: u32,
+        left: &[f64],
+        right: &[f64],
+    ) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_binary_wgsl("f64"),
+                8,
+                left.len(),
+                gpu_words_params(&[checked_usize_u32(left.len(), "GPU vector length"), op, 0, 0]),
+                vec![f64_as_bytes(left).to_vec(), f64_as_bytes(right).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn vector_scalar_f32(
+        &mut self,
+        op: u32,
+        input: &[f32],
+        scalar: f32,
+        scalar_left: bool,
+    ) -> Vec<f32> {
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_scalar_wgsl("f32"),
+                4,
+                input.len(),
+                gpu_scalar_params(
+                    checked_usize_u32(input.len(), "GPU vector length"),
+                    op,
+                    u32::from(scalar_left),
+                    scalar,
+                ),
+                vec![f32_as_bytes(input).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn vector_scalar_f64(
+        &mut self,
+        op: u32,
+        input: &[f64],
+        scalar: f64,
+        scalar_left: bool,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_scalar_wgsl("f64"),
+                8,
+                input.len(),
+                gpu_scalar_params(
+                    checked_usize_u32(input.len(), "GPU vector length"),
+                    op,
+                    u32::from(scalar_left),
+                    scalar,
+                ),
+                vec![f64_as_bytes(input).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn vector_dot_f32(&mut self, left: Vec<f32>, right: Vec<f32>) -> f32 {
+        let work_items = left.len();
+        self.reduce_program_f32(&vector_dot_wgsl("f32"), &[left, right], work_items)
+            .await
+    }
+
+    async fn vector_dot_f64(&mut self, left: Vec<f64>, right: Vec<f64>) -> Result<f64, JsValue> {
+        let work_items = left.len();
+        self.reduce_program_f64(&vector_dot_wgsl("f64"), &[left, right], &[], work_items)
+            .await
+    }
+
+    async fn vector_softmax_f32(&mut self, input: &[f32]) -> Vec<f32> {
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_softmax_wgsl("f32"),
+                4,
+                input.len(),
+                gpu_words_params(&[checked_usize_u32(input.len(), "GPU vector length"), 0, 0, 0]),
+                vec![f32_as_bytes(input).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn vector_softmax_f64(&mut self, input: &[f64]) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_softmax_wgsl("f64"),
+                8,
+                input.len(),
+                gpu_words_params(&[checked_usize_u32(input.len(), "GPU vector length"), 0, 0, 0]),
+                vec![f64_as_bytes(input).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn matrix_binary_f32(
+        &mut self,
+        op: u32,
+        left: &[f32],
+        rows: u32,
+        cols: u32,
+        right: &[f32],
+    ) -> Vec<f32> {
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_binary_wgsl("f32"),
+                4,
+                left.len(),
+                gpu_words_params(&[checked_usize_u32(left.len(), "GPU matrix length"), op, rows, cols]),
+                vec![f32_as_bytes(left).to_vec(), f32_as_bytes(right).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn matrix_binary_f64(
+        &mut self,
+        op: u32,
+        left: &[f64],
+        rows: u32,
+        cols: u32,
+        right: &[f64],
+    ) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_binary_wgsl("f64"),
+                8,
+                left.len(),
+                gpu_words_params(&[checked_usize_u32(left.len(), "GPU matrix length"), op, rows, cols]),
+                vec![f64_as_bytes(left).to_vec(), f64_as_bytes(right).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn matrix_scalar_f32(
+        &mut self,
+        op: u32,
+        input: &[f32],
+        rows: u32,
+        cols: u32,
+        scalar: f32,
+        scalar_left: bool,
+    ) -> Vec<f32> {
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_scalar_wgsl("f32"),
+                4,
+                input.len(),
+                gpu_scalar_params(checked_usize_u32(input.len(), "GPU matrix length"), op, u32::from(scalar_left), scalar),
+                vec![f32_as_bytes(input).to_vec()],
+            )
+            .await;
+        let _ = (rows, cols);
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn matrix_scalar_f64(
+        &mut self,
+        op: u32,
+        input: &[f64],
+        rows: u32,
+        cols: u32,
+        scalar: f64,
+        scalar_left: bool,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let bytes = self
+            .dispatch_generated_kernel(
+                &vector_scalar_wgsl("f64"),
+                8,
+                input.len(),
+                gpu_scalar_params(checked_usize_u32(input.len(), "GPU matrix length"), op, u32::from(scalar_left), scalar),
+                vec![f64_as_bytes(input).to_vec()],
+            )
+            .await;
+        let _ = (rows, cols);
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn matrix_row_binary_f32(
+        &mut self,
+        op: u32,
+        matrix: &[f32],
+        rows: u32,
+        cols: u32,
+        row: &[f32],
+    ) -> Vec<f32> {
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_row_binary_wgsl("f32"),
+                4,
+                matrix.len(),
+                gpu_words_params(&[checked_usize_u32(matrix.len(), "GPU matrix length"), op, rows, cols]),
+                vec![f32_as_bytes(matrix).to_vec(), f32_as_bytes(row).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn matrix_row_binary_f64(
+        &mut self,
+        op: u32,
+        matrix: &[f64],
+        rows: u32,
+        cols: u32,
+        row: &[f64],
+    ) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_row_binary_wgsl("f64"),
+                8,
+                matrix.len(),
+                gpu_words_params(&[checked_usize_u32(matrix.len(), "GPU matrix length"), op, rows, cols]),
+                vec![f64_as_bytes(matrix).to_vec(), f64_as_bytes(row).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn matrix_matvec_f32(
+        &mut self,
+        matrix: &[f32],
+        rows: u32,
+        cols: u32,
+        vector: &[f32],
+    ) -> Vec<f32> {
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_matvec_wgsl("f32"),
+                4,
+                rows as usize,
+                gpu_words_params(&[rows, cols, 0, 0]),
+                vec![f32_as_bytes(matrix).to_vec(), f32_as_bytes(vector).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn matrix_matvec_f64(
+        &mut self,
+        matrix: &[f64],
+        rows: u32,
+        cols: u32,
+        vector: &[f64],
+    ) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_matvec_wgsl("f64"),
+                8,
+                rows as usize,
+                gpu_words_params(&[rows, cols, 0, 0]),
+                vec![f64_as_bytes(matrix).to_vec(), f64_as_bytes(vector).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn matrix_vecmat_f32(
+        &mut self,
+        vector: &[f32],
+        matrix: &[f32],
+        rows: u32,
+        cols: u32,
+    ) -> Vec<f32> {
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_vecmat_wgsl("f32"),
+                4,
+                cols as usize,
+                gpu_words_params(&[rows, cols, 0, 0]),
+                vec![f32_as_bytes(vector).to_vec(), f32_as_bytes(matrix).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn matrix_vecmat_f64(
+        &mut self,
+        vector: &[f64],
+        matrix: &[f64],
+        rows: u32,
+        cols: u32,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_vecmat_wgsl("f64"),
+                8,
+                cols as usize,
+                gpu_words_params(&[rows, cols, 0, 0]),
+                vec![f64_as_bytes(vector).to_vec(), f64_as_bytes(matrix).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn matrix_matmul_f32(
+        &mut self,
+        left: &[f32],
+        left_rows: u32,
+        left_cols: u32,
+        right: &[f32],
+        right_cols: u32,
+    ) -> Vec<f32> {
+        let work_items = (left_rows as usize) * (right_cols as usize);
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_matmul_wgsl("f32"),
+                4,
+                work_items,
+                gpu_words_params(&[left_rows, left_cols, right_cols, 0]),
+                vec![f32_as_bytes(left).to_vec(), f32_as_bytes(right).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn matrix_matmul_f64(
+        &mut self,
+        left: &[f64],
+        left_rows: u32,
+        left_cols: u32,
+        right: &[f64],
+        right_cols: u32,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let work_items = (left_rows as usize) * (right_cols as usize);
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_matmul_wgsl("f64"),
+                8,
+                work_items,
+                gpu_words_params(&[left_rows, left_cols, right_cols, 0]),
+                vec![f64_as_bytes(left).to_vec(), f64_as_bytes(right).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn matrix_outer_f32(&mut self, left: &[f32], right: &[f32]) -> Vec<f32> {
+        let work_items = left.len().saturating_mul(right.len());
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_outer_wgsl("f32"),
+                4,
+                work_items,
+                gpu_words_params(&[
+                    checked_usize_u32(left.len(), "GPU outer left length"),
+                    checked_usize_u32(right.len(), "GPU outer right length"),
+                    0,
+                    0,
+                ]),
+                vec![f32_as_bytes(left).to_vec(), f32_as_bytes(right).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn matrix_outer_f64(&mut self, left: &[f64], right: &[f64]) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let work_items = left.len().saturating_mul(right.len());
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_outer_wgsl("f64"),
+                8,
+                work_items,
+                gpu_words_params(&[
+                    checked_usize_u32(left.len(), "GPU outer left length"),
+                    checked_usize_u32(right.len(), "GPU outer right length"),
+                    0,
+                    0,
+                ]),
+                vec![f64_as_bytes(left).to_vec(), f64_as_bytes(right).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn matrix_row_softmax_f32(&mut self, input: &[f32], rows: u32, cols: u32) -> Vec<f32> {
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_row_softmax_wgsl("f32"),
+                4,
+                input.len(),
+                gpu_words_params(&[rows, cols, 0, 0]),
+                vec![f32_as_bytes(input).to_vec()],
+            )
+            .await;
+        bytes_as_f32(&bytes).to_vec()
+    }
+
+    async fn matrix_row_softmax_f64(
+        &mut self,
+        input: &[f64],
+        rows: u32,
+        cols: u32,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.require_f64_support()?;
+        let bytes = self
+            .dispatch_generated_kernel(
+                &matrix_row_softmax_wgsl("f64"),
+                8,
+                input.len(),
+                gpu_words_params(&[rows, cols, 0, 0]),
+                vec![f64_as_bytes(input).to_vec()],
+            )
+            .await;
+        Ok(bytes_as_f64(&bytes).to_vec())
+    }
+
+    async fn dispatch_generated_kernel(
+        &mut self,
+        wgsl: &str,
+        element_size: usize,
+        work_items: usize,
+        params: Vec<u8>,
+        inputs: Vec<Vec<u8>>,
+    ) -> Vec<u8> {
+        if work_items == 0 {
+            return Vec::new();
+        }
+        let byte_len = (work_items * element_size) as wgpu::BufferAddress;
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("flowarrow.gpu.generated.output"),
+            size: byte_len.max(element_size as wgpu::BufferAddress),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flowarrow.gpu.generated.params"),
+            contents: &params,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let storage_buffers = inputs
+            .iter()
+            .map(|bytes| {
+                let contents = if bytes.is_empty() { &[0u8; 4][..] } else { bytes.as_slice() };
+                self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("flowarrow.gpu.generated.input"),
+                    contents,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                })
+            })
+            .collect::<Vec<_>>();
+        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("flowarrow.gpu.generated.kernel"),
+            source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+        });
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("flowarrow.gpu.generated.pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let mut entries = Vec::with_capacity(2 + storage_buffers.len());
+        entries.push(wgpu::BindGroupEntry {
+            binding: 0,
+            resource: output_buffer.as_entire_binding(),
+        });
+        entries.push(wgpu::BindGroupEntry {
+            binding: 1,
+            resource: params_buffer.as_entire_binding(),
+        });
+        for (index, buffer) in storage_buffers.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: (2 + index) as u32,
+                resource: buffer.as_entire_binding(),
+            });
+        }
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flowarrow.gpu.generated.bind_group"),
+            layout: &bind_group_layout,
+            entries: &entries,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("flowarrow.gpu.generated.encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("flowarrow.gpu.generated.pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(checked_workgroups(work_items, "GPU generated kernel work item count"), 1, 1);
+        }
+        let readback = self.readback_buffer(byte_len);
+        encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback, 0, byte_len);
+        self.queue.submit(Some(encoder.finish()));
+        self.read_buffer(&readback).await
+    }
+
     async fn dispatch_reduce<T: GpuParam>(
         &mut self,
         scalar: &str,
@@ -3359,6 +4332,290 @@ fn flatten_matrix(rows: &[FaGpuSliceF64], label: &str) -> (Vec<f64>, (usize, usi
         values.extend_from_slice(row_values);
     }
     (values, (rows.len(), cols))
+}
+
+fn gpu_words_params(words: &[u32]) -> Vec<u8> {
+    let mut out = vec![0u8; words.len().max(4) * 4];
+    for (index, word) in words.iter().enumerate() {
+        out[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    out
+}
+
+fn gpu_scalar_params<T: GpuParam>(len: u32, op: u32, scalar_left: u32, scalar: T) -> Vec<u8> {
+    let mut out = vec![0u8; 32];
+    out[0..4].copy_from_slice(&len.to_le_bytes());
+    out[4..8].copy_from_slice(&op.to_le_bytes());
+    out[8..12].copy_from_slice(&scalar_left.to_le_bytes());
+    scalar.write_bytes(&mut out[16..16 + T::BYTE_LEN]);
+    out
+}
+
+fn vector_unary_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuParams { len: u32, op: u32, _pad0: u32, _pad1: u32 };
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuParams;
+@group(0) @binding(2) var<storage, read> fa_input: array<__SCALAR__>;
+
+fn fa_apply(value: __SCALAR__) -> __SCALAR__ {
+  if (fa_params.op == 0u) { return -value; }
+  if (fa_params.op == 1u) { return abs(value); }
+  if (fa_params.op == 2u) { return exp(value); }
+  if (fa_params.op == 3u) { return max(value, __SCALAR__(0.0)); }
+  if (fa_params.op == 4u) { return __SCALAR__(1.0) / (__SCALAR__(1.0) + exp(-value)); }
+  return value / (__SCALAR__(1.0) + exp(-value));
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  if (i >= fa_params.len) { return; }
+  fa_output[i] = fa_apply(fa_input[i]);
+}
+"#
+    .replace("__SCALAR__", scalar)
+}
+
+fn vector_binary_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuParams { len: u32, op: u32, _pad0: u32, _pad1: u32 };
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuParams;
+@group(0) @binding(2) var<storage, read> fa_left: array<__SCALAR__>;
+@group(0) @binding(3) var<storage, read> fa_right: array<__SCALAR__>;
+
+fn fa_apply(left: __SCALAR__, right: __SCALAR__) -> __SCALAR__ {
+  if (fa_params.op == 0u) { return left + right; }
+  if (fa_params.op == 1u) { return left - right; }
+  if (fa_params.op == 2u) { return left * right; }
+  return left / right;
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  if (i >= fa_params.len) { return; }
+  fa_output[i] = fa_apply(fa_left[i], fa_right[i]);
+}
+"#
+    .replace("__SCALAR__", scalar)
+}
+
+fn vector_scalar_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuParams { len: u32, op: u32, scalar_left: u32, _pad0: u32, scalar: __SCALAR__ };
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuParams;
+@group(0) @binding(2) var<storage, read> fa_input: array<__SCALAR__>;
+
+fn fa_apply(left: __SCALAR__, right: __SCALAR__) -> __SCALAR__ {
+  if (fa_params.op == 0u) { return left + right; }
+  if (fa_params.op == 1u) { return left - right; }
+  if (fa_params.op == 2u) { return left * right; }
+  return left / right;
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  if (i >= fa_params.len) { return; }
+  let left = select(fa_input[i], fa_params.scalar, fa_params.scalar_left != 0u);
+  let right = select(fa_params.scalar, fa_input[i], fa_params.scalar_left != 0u);
+  fa_output[i] = fa_apply(left, right);
+}
+"#
+    .replace("__SCALAR__", scalar)
+}
+
+fn matrix_row_binary_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuParams { len: u32, op: u32, rows: u32, cols: u32 };
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuParams;
+@group(0) @binding(2) var<storage, read> fa_matrix: array<__SCALAR__>;
+@group(0) @binding(3) var<storage, read> fa_row: array<__SCALAR__>;
+
+fn fa_apply(left: __SCALAR__, right: __SCALAR__) -> __SCALAR__ {
+  if (fa_params.op == 0u) { return left + right; }
+  if (fa_params.op == 1u) { return left - right; }
+  if (fa_params.op == 2u) { return left * right; }
+  return left / right;
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  if (i >= fa_params.len) { return; }
+  fa_output[i] = fa_apply(fa_matrix[i], fa_row[i % fa_params.cols]);
+}
+"#
+    .replace("__SCALAR__", scalar)
+}
+
+fn vector_dot_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuProgramParams {
+  work_items: u32,
+  iterations: u32,
+  slice0_len: u32,
+  slice1_len: u32,
+  slice2_len: u32,
+  slice3_len: u32,
+  matrix0_rows: u32,
+  matrix0_cols: u32,
+  matrix1_rows: u32,
+  matrix1_cols: u32,
+  matrix2_rows: u32,
+  matrix2_cols: u32,
+  matrix3_rows: u32,
+  matrix3_cols: u32,
+};
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuProgramParams;
+@group(0) @binding(2) var<storage, read> fa_left: array<__SCALAR__>;
+@group(0) @binding(3) var<storage, read> fa_right: array<__SCALAR__>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  if (i >= fa_params.work_items) { return; }
+  fa_output[i] = fa_left[i] * fa_right[i];
+}
+"#
+    .replace("__SCALAR__", scalar)
+}
+
+fn vector_softmax_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuParams { len: u32, _pad0: u32, _pad1: u32, _pad2: u32 };
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuParams;
+@group(0) @binding(2) var<storage, read> fa_input: array<__SCALAR__>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  if (i >= fa_params.len) { return; }
+  var row_max = fa_input[0];
+  for (var col = 1u; col < fa_params.len; col = col + 1u) {
+    row_max = max(row_max, fa_input[col]);
+  }
+  var denom = __SCALAR__(0.0);
+  for (var col = 0u; col < fa_params.len; col = col + 1u) {
+    denom = denom + exp(fa_input[col] - row_max);
+  }
+  fa_output[i] = exp(fa_input[i] - row_max) / denom;
+}
+"#
+    .replace("__SCALAR__", scalar)
+}
+
+fn matrix_matvec_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuParams { rows: u32, cols: u32, _pad0: u32, _pad1: u32 };
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuParams;
+@group(0) @binding(2) var<storage, read> fa_matrix: array<__SCALAR__>;
+@group(0) @binding(3) var<storage, read> fa_vector: array<__SCALAR__>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let row = fa_gid.x;
+  if (row >= fa_params.rows) { return; }
+  var acc = __SCALAR__(0.0);
+  for (var col = 0u; col < fa_params.cols; col = col + 1u) {
+    acc = acc + fa_matrix[row * fa_params.cols + col] * fa_vector[col];
+  }
+  fa_output[row] = acc;
+}
+"#
+    .replace("__SCALAR__", scalar)
+}
+
+fn matrix_vecmat_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuParams { rows: u32, cols: u32, _pad0: u32, _pad1: u32 };
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuParams;
+@group(0) @binding(2) var<storage, read> fa_vector: array<__SCALAR__>;
+@group(0) @binding(3) var<storage, read> fa_matrix: array<__SCALAR__>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let col = fa_gid.x;
+  if (col >= fa_params.cols) { return; }
+  var acc = __SCALAR__(0.0);
+  for (var row = 0u; row < fa_params.rows; row = row + 1u) {
+    acc = acc + fa_vector[row] * fa_matrix[row * fa_params.cols + col];
+  }
+  fa_output[col] = acc;
+}
+"#
+    .replace("__SCALAR__", scalar)
+}
+
+fn matrix_matmul_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuParams { left_rows: u32, left_cols: u32, right_cols: u32, _pad0: u32 };
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuParams;
+@group(0) @binding(2) var<storage, read> fa_left: array<__SCALAR__>;
+@group(0) @binding(3) var<storage, read> fa_right: array<__SCALAR__>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  let total = fa_params.left_rows * fa_params.right_cols;
+  if (i >= total) { return; }
+  let row = i / fa_params.right_cols;
+  let col = i % fa_params.right_cols;
+  var acc = __SCALAR__(0.0);
+  for (var k = 0u; k < fa_params.left_cols; k = k + 1u) {
+    acc = acc + fa_left[row * fa_params.left_cols + k] * fa_right[k * fa_params.right_cols + col];
+  }
+  fa_output[i] = acc;
+}
+"#
+    .replace("__SCALAR__", scalar)
+}
+
+fn matrix_outer_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuParams { left_len: u32, right_len: u32, _pad0: u32, _pad1: u32 };
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuParams;
+@group(0) @binding(2) var<storage, read> fa_left: array<__SCALAR__>;
+@group(0) @binding(3) var<storage, read> fa_right: array<__SCALAR__>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  let total = fa_params.left_len * fa_params.right_len;
+  if (i >= total) { return; }
+  let row = i / fa_params.right_len;
+  let col = i % fa_params.right_len;
+  fa_output[i] = fa_left[row] * fa_right[col];
+}
+"#
+    .replace("__SCALAR__", scalar)
+}
+
+fn matrix_row_softmax_wgsl(scalar: &str) -> String {
+    r#"struct FaGpuParams { rows: u32, cols: u32, _pad0: u32, _pad1: u32 };
+@group(0) @binding(0) var<storage, read_write> fa_output: array<__SCALAR__>;
+@group(0) @binding(1) var<uniform> fa_params: FaGpuParams;
+@group(0) @binding(2) var<storage, read> fa_input: array<__SCALAR__>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) fa_gid: vec3<u32>) {
+  let i = fa_gid.x;
+  let total = fa_params.rows * fa_params.cols;
+  if (i >= total) { return; }
+  let row = i / fa_params.cols;
+  let base = row * fa_params.cols;
+  var row_max = fa_input[base];
+  for (var col = 1u; col < fa_params.cols; col = col + 1u) {
+    row_max = max(row_max, fa_input[base + col]);
+  }
+  var denom = __SCALAR__(0.0);
+  for (var col = 0u; col < fa_params.cols; col = col + 1u) {
+    denom = denom + exp(fa_input[base + col] - row_max);
+  }
+  fa_output[i] = exp(fa_input[i] - row_max) / denom;
+}
+"#
+    .replace("__SCALAR__", scalar)
 }
 
 fn reduce_wgsl(scalar: &str) -> String {

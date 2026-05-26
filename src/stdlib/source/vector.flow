@@ -35,22 +35,22 @@ import std.seq {
 }
 import std.tuple { first, second }
 
-extern node sum(values: Seq[f64]) -> total: f64 {
+extern node sum_f64(values: Seq[f64]) -> total: f64 {
     $values -> reduce math_add(identity: 0.0) -> $total
 }
 
-extern node mean(values: Seq[f64]) -> average: f64 {
-    $values          -> sum      -> $total
+extern node mean_f64(values: Seq[f64]) -> average: f64 {
+    $values          -> sum_f64  -> $total
     $values          -> length   -> from_int -> $count
     ($total, $count) -> math_div -> expect   -> $average
 }
 
-extern node min(values: Seq[f64]) -> out: f64 {
+extern node min_f64(values: Seq[f64]) -> out: f64 {
     $values -> head -> expect                              -> $initial
     $values -> tail -> reduce math_min(identity: $initial) -> $out
 }
 
-extern node max(values: Seq[f64]) -> out: f64 {
+extern node max_f64(values: Seq[f64]) -> out: f64 {
     $values -> head -> expect                              -> $initial
     $values -> tail -> reduce math_max(identity: $initial) -> $out
 }
@@ -83,11 +83,11 @@ node abs_value(value: f64) -> out: f64 {
     $value -> math_abs -> $out
 }
 
-extern node neg(values: Seq[f64]) -> out: Seq[f64] {
+extern node neg_f64(values: Seq[f64]) -> out: Seq[f64] {
     $values -> map neg_value -> $out
 }
 
-extern node abs(values: Seq[f64]) -> out: Seq[f64] {
+extern node abs_f64(values: Seq[f64]) -> out: Seq[f64] {
     $values -> map abs_value -> $out
 }
 
@@ -95,55 +95,55 @@ node exp_value(value: f64) -> out: f64 {
     $value -> math_exp -> $out
 }
 
-extern node exp(values: Seq[f64]) -> out: Seq[f64] {
+extern node exp_f64(values: Seq[f64]) -> out: Seq[f64] {
     $values -> map exp_value -> $out
 }
 
-extern node add(inputs: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
+extern node add_f64(inputs: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
     $inputs -> zip -> map add_pair -> $out
 }
 
-extern node sub(inputs: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
+extern node sub_f64(inputs: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
     $inputs -> zip -> map sub_pair -> $out
 }
 
-extern node mul(inputs: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
+extern node mul_f64(inputs: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
     $inputs -> zip -> map mul_pair -> $out
 }
 
-extern node div(inputs: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
+extern node div_f64(inputs: (Seq[f64], Seq[f64])) -> out: Seq[f64] {
     $inputs -> zip -> map div_pair -> $out
 }
 
-extern node add_scalar(inputs: (Seq[f64], f64)) -> out: Seq[f64] {
+extern node add_scalar_f64(inputs: (Seq[f64], f64)) -> out: Seq[f64] {
     $inputs -> broadcast_right -> map add_pair -> $out
 }
 
-extern node sub_scalar(inputs: (Seq[f64], f64)) -> out: Seq[f64] {
+extern node sub_scalar_f64(inputs: (Seq[f64], f64)) -> out: Seq[f64] {
     $inputs -> broadcast_right -> map sub_pair -> $out
 }
 
-extern node scalar_sub(inputs: (f64, Seq[f64])) -> out: Seq[f64] {
+extern node scalar_sub_f64(inputs: (f64, Seq[f64])) -> out: Seq[f64] {
     $inputs -> broadcast_left -> map sub_pair -> $out
 }
 
-extern node mul_scalar(inputs: (Seq[f64], f64)) -> out: Seq[f64] {
+extern node mul_scalar_f64(inputs: (Seq[f64], f64)) -> out: Seq[f64] {
     $inputs -> broadcast_right -> map mul_pair -> $out
 }
 
-extern node scalar_mul(inputs: (f64, Seq[f64])) -> out: Seq[f64] {
+extern node scalar_mul_f64(inputs: (f64, Seq[f64])) -> out: Seq[f64] {
     $inputs -> broadcast_left -> map mul_pair -> $out
 }
 
-extern node div_scalar(inputs: (Seq[f64], f64)) -> out: Seq[f64] {
+extern node div_scalar_f64(inputs: (Seq[f64], f64)) -> out: Seq[f64] {
     $inputs -> broadcast_right -> map div_pair -> $out
 }
 
-extern node scalar_div(inputs: (f64, Seq[f64])) -> out: Seq[f64] {
+extern node scalar_div_f64(inputs: (f64, Seq[f64])) -> out: Seq[f64] {
     $inputs -> broadcast_left -> map div_pair -> $out
 }
 
-extern node equals(inputs: (Seq[f64], Seq[f64])) -> out: Bool {
+extern node equals_f64(inputs: (Seq[f64], Seq[f64])) -> out: Bool {
     $inputs -> zip -> map eq_pair -> all -> $out
 }
 
@@ -151,7 +151,7 @@ node dot_pair(pair: (f64, f64)) -> product: f64 {
     $pair -> math_mul -> $product
 }
 
-extern node dot(inputs: (Seq[f64], Seq[f64])) -> total: f64 {
+extern node dot_f64(inputs: (Seq[f64], Seq[f64])) -> total: f64 {
     $inputs -> zip -> map dot_pair -> reduce math_add(identity: 0.0) -> $total
 }
 
@@ -159,63 +159,63 @@ node square(value: f64) -> out: f64 {
     ($value, $value) -> math_mul -> $out
 }
 
-extern node squared_norm(values: Seq[f64]) -> total: f64 {
-    $values -> map square -> sum -> $total
+extern node squared_norm_f64(values: Seq[f64]) -> total: f64 {
+    $values -> map square -> sum_f64 -> $total
 }
 
-extern node l1_norm(values: Seq[f64]) -> total: f64 {
-    $values -> abs -> sum -> $total
+extern node l1_norm_f64(values: Seq[f64]) -> total: f64 {
+    $values -> abs_f64 -> sum_f64 -> $total
 }
 
-extern node norm(values: Seq[f64]) -> total: f64 {
-    $values -> squared_norm -> math_sqrt -> expect -> $total
+extern node norm_f64(values: Seq[f64]) -> total: f64 {
+    $values -> squared_norm_f64 -> math_sqrt -> expect -> $total
 }
 
-extern node normalize(values: Seq[f64]) -> out: Seq[f64] {
-    $values               -> norm       -> $magnitude
-    ($values, $magnitude) -> div_scalar -> $out
+extern node normalize_f64(values: Seq[f64]) -> out: Seq[f64] {
+    $values               -> norm_f64       -> $magnitude
+    ($values, $magnitude) -> div_scalar_f64 -> $out
 }
 
 node relu_value(value: f64) -> out: f64 {
     ($value, 0.0) -> math_max -> $out
 }
 
-extern node relu(values: Seq[f64]) -> out: Seq[f64] {
+extern node relu_f64(values: Seq[f64]) -> out: Seq[f64] {
     $values -> map relu_value -> $out
 }
 
-extern node sigmoid(values: Seq[f64]) -> out: Seq[f64] {
-    $values             -> neg        -> exp -> $neg_exp
-    ($neg_exp, 1.0)     -> add_scalar -> $denominator
-    (1.0, $denominator) -> scalar_div -> $out
+extern node sigmoid_f64(values: Seq[f64]) -> out: Seq[f64] {
+    $values             -> neg_f64        -> exp_f64 -> $neg_exp
+    ($neg_exp, 1.0)     -> add_scalar_f64 -> $denominator
+    (1.0, $denominator) -> scalar_div_f64 -> $out
 }
 
-extern node silu(values: Seq[f64]) -> out: Seq[f64] {
-    $values               -> sigmoid -> $activated
-    ($values, $activated) -> mul     -> $out
+extern node silu_f64(values: Seq[f64]) -> out: Seq[f64] {
+    $values               -> sigmoid_f64 -> $activated
+    ($values, $activated) -> mul_f64     -> $out
 }
 
-extern node softmax(values: Seq[f64]) -> out: Seq[f64] {
-    $values                     -> max        -> $offset
-    ($values, $offset)          -> sub_scalar -> exp -> $exp_values
-    $exp_values                 -> sum        -> $denominator
-    ($exp_values, $denominator) -> div_scalar -> $out
+extern node softmax_f64(values: Seq[f64]) -> out: Seq[f64] {
+    $values                     -> max_f64        -> $offset
+    ($values, $offset)          -> sub_scalar_f64 -> exp_f64 -> $exp_values
+    $exp_values                 -> sum_f64        -> $denominator
+    ($exp_values, $denominator) -> div_scalar_f64 -> $out
 }
 
-extern node cosine_similarity(inputs: (Seq[f64], Seq[f64])) -> out: f64 {
-    $inputs                    -> dot      -> $numerator
-    $inputs                    -> first    -> norm   -> $left_norm
-    $inputs                    -> second   -> norm   -> $right_norm
+extern node cosine_similarity_f64(inputs: (Seq[f64], Seq[f64])) -> out: f64 {
+    $inputs                    -> dot_f64  -> $numerator
+    $inputs                    -> first    -> norm_f64 -> $left_norm
+    $inputs                    -> second   -> norm_f64 -> $right_norm
     ($left_norm, $right_norm)  -> math_mul -> $denominator
-    ($numerator, $denominator) -> math_div -> expect -> $out
+    ($numerator, $denominator) -> math_div -> expect   -> $out
 }
 
-extern node squared_distance(inputs: (Seq[f64], Seq[f64])) -> total: f64 {
-    $inputs -> sub -> squared_norm -> $total
+extern node squared_distance_f64(inputs: (Seq[f64], Seq[f64])) -> total: f64 {
+    $inputs -> sub_f64 -> squared_norm_f64 -> $total
 }
 
-extern node distance(inputs: (Seq[f64], Seq[f64])) -> total: f64 {
-    $inputs -> squared_distance -> math_sqrt -> expect -> $total
+extern node distance_f64(inputs: (Seq[f64], Seq[f64])) -> total: f64 {
+    $inputs -> squared_distance_f64 -> math_sqrt -> expect -> $total
 }
 
 extern node sum_f32(values: Seq[f32]) -> total: f32 {

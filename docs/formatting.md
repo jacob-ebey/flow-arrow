@@ -82,10 +82,10 @@ inline form hard to scan:
 
 ```flow
 import std.vector {
-    sum,
-    mean,
-    add as vector_add,
-    equals as vector_equals,
+    sum_f64,
+    mean_f64,
+    add_f64 as vector_add,
+    equals_f64 as vector_equals,
 }
 ```
 
@@ -155,9 +155,9 @@ Tuple joins and sequence literals use tight delimiters with `, ` between
 items. Tuple binding targets use the same spacing:
 
 ```flow
-($left, $right) -> add_i64 -> $sum
+($left, $right) -> add_i64 -> $sum_f64
 $pair -> ($left, $right)
-[$sum, "\n"] -> concat_bytes -> $output
+[$sum_f64, "\n"] -> concat_bytes -> $output
 ```
 
 ### Combinators

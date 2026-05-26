@@ -707,10 +707,8 @@ mod tests {
         )
         .expect("typescript source-backed stdlib gpu");
 
-        assert!(emitted.contains("faGpuMapF32"));
-        assert!(emitted.contains("faGpuReduceF32"));
-        assert!(emitted.contains("array<f32>"));
-        assert!(emitted.contains("exp("));
+        assert!(emitted.contains("await faGpuVectorUnaryF32(values, \"relu\")"));
+        assert!(emitted.contains("await faGpuVectorSoftmaxF32("));
         assert!(!emitted.contains("array<f64>"));
         assert!(!emitted.contains("faGpuMapF64"));
         assert!(!emitted.contains("faGpuReduceF64"));
@@ -736,9 +734,8 @@ mod tests {
         )
         .expect("typescript source-backed matrix gpu");
 
-        assert!(emitted.contains("faGpuMapF32"));
-        assert!(emitted.contains("faGpuReduceF32"));
-        assert!(emitted.contains("array<f32>"));
+        assert!(emitted.contains("await faGpuMatrixMatmulF32(input, weights)"));
+        assert!(emitted.contains("await faGpuMatrixRowSoftmaxF32("));
         assert!(!emitted.contains("array<f64>"));
         assert!(!emitted.contains("faGpuMapF64"));
         assert!(!emitted.contains("faGpuReduceF64"));
@@ -882,12 +879,12 @@ mod tests {
         let source = r#"
             import std.cli { Args }
             import std.math { add_f64 as scalar_add, eq_f64 as eq }
-            import std.vector { dot, squared_distance, squared_norm }
+            import std.vector { dot_f64, squared_distance_f64, squared_norm_f64 }
 
             node kernel(left: Seq[f64], right: Seq[f64], score: f64) -> (out_left: Seq[f64], out_right: Seq[f64], out_score: f64) {
-                ($left, $right) -> dot -> $dot
-                ($left, $right) -> squared_distance -> $distance_squared
-                $left -> squared_norm -> $norm_squared
+                ($left, $right) -> dot_f64 -> $dot
+                ($left, $right) -> squared_distance_f64 -> $distance_squared
+                $left -> squared_norm_f64 -> $norm_squared
                 ($dot, $distance_squared) -> scalar_add -> $partial
                 ($partial, $norm_squared) -> scalar_add -> $delta
                 ($score, $delta) -> scalar_add -> $out_score
@@ -919,16 +916,16 @@ mod tests {
     fn javascript_gpu_repeat_vector_accumulator_does_not_lower_f64_to_f32() {
         let source = r#"
             import std.math { add_f64 as scalar_add }
-            import std.vector { dot, squared_distance, squared_norm }
+            import std.vector { dot_f64, squared_distance_f64, squared_norm_f64 }
 
             extern node run() -> score: f64 {
                 ([1.0, 2.0], [3.0, 4.0], 0.0) -> repeat<2> kernel -> final_score -> $score
             }
 
             node kernel(left: Seq[f64], right: Seq[f64], score: f64) -> (out_left: Seq[f64], out_right: Seq[f64], out_score: f64) {
-                ($left, $right) -> dot -> $dot
-                ($left, $right) -> squared_distance -> $distance_squared
-                $left -> squared_norm -> $norm_squared
+                ($left, $right) -> dot_f64 -> $dot
+                ($left, $right) -> squared_distance_f64 -> $distance_squared
+                $left -> squared_norm_f64 -> $norm_squared
                 ($dot, $distance_squared) -> scalar_add -> $partial
                 ($partial, $norm_squared) -> scalar_add -> $delta
                 ($score, $delta) -> scalar_add -> $out_score
@@ -1015,7 +1012,7 @@ mod tests {
             import std.fault { expect }
             import std.math { add_i64, add_f64, rem_i64 as rem }
             import std.real { from_int }
-            import std.vector { dot, squared_distance, squared_norm }
+            import std.vector { dot_f64, squared_distance_f64, squared_norm_f64 }
 
             extern node run_gpu_accumulator(iterations: i64) -> score: f64 {
                 (1, 1025, 1)         -> range_step                       -> $indices
@@ -1038,9 +1035,9 @@ mod tests {
             }
 
             node score_kernel(left: Seq[f64], right: Seq[f64], score: f64) -> (out_left: Seq[f64], out_right: Seq[f64], out_score: f64) {
-                ($left, $right)           -> dot              -> $dot
-                ($left, $right)           -> squared_distance -> $distance_squared
-                $left                     -> squared_norm     -> $norm_squared
+                ($left, $right)           -> dot_f64              -> $dot
+                ($left, $right)           -> squared_distance_f64 -> $distance_squared
+                $left                     -> squared_norm_f64     -> $norm_squared
                 ($dot, $distance_squared) -> add_f64          -> $partial
                 ($partial, $norm_squared) -> add_f64          -> $delta
                 ($score, $delta)          -> add_f64          -> $out_score
@@ -1127,15 +1124,15 @@ mod tests {
         let source = r#"
             import std.cli { Args }
             import std.math { add_f64 as scalar_add, eq_f64 as eq }
-            import std.vector { sum as vector_sum }
-            import std.matrix { matmul, matvec, row_sums, sum as matrix_sum }
+            import std.vector { sum_f64 as vector_sum }
+            import std.matrix { matmul_f64, matvec_f64, row_sums_f64, sum_f64 as matrix_sum }
 
             node kernel(left: Seq[Seq[f64]], right: Seq[Seq[f64]], vector: Seq[f64], score: f64) -> (out_left: Seq[Seq[f64]], out_right: Seq[Seq[f64]], out_vector: Seq[f64], out_score: f64) {
-                ($left, $right) -> matmul -> $product
+                ($left, $right) -> matmul_f64 -> $product
                 $product -> matrix_sum -> $product_sum
-                ($left, $vector) -> matvec -> $mv
+                ($left, $vector) -> matvec_f64 -> $mv
                 $mv -> vector_sum -> $matvec_sum
-                $left -> row_sums -> vector_sum -> $row_sum_total
+                $left -> row_sums_f64 -> vector_sum -> $row_sum_total
                 ($product_sum, $matvec_sum) -> scalar_add -> $partial
                 ($partial, $row_sum_total) -> scalar_add -> $delta
                 ($score, $delta) -> scalar_add -> $out_score

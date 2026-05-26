@@ -107,10 +107,10 @@ These views bridge `std.cv` into `std.matrix`:
 ```flow
 import std.cli { Args }
 import std.cv { Image, luma_matrix, load }
-import std.matrix { mean }
+import std.matrix { mean_f64 }
 
 node average_luma(image: Image) -> value: f64 {
-    $image -> luma_matrix -> mean -> $value
+    $image -> luma_matrix -> mean_f64 -> $value
 }
 
 program main(args: Args) -> exit_code: Faultable[i64] {

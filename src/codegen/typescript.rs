@@ -492,7 +492,10 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
     ) -> Result<bool, String> {
         match &stage.kind {
             TypedStageKind::Bind { .. } | TypedStageKind::Field { .. } => Ok(false),
-            TypedStageKind::Call { name, .. } => Ok(async_callables.contains(name)),
+            TypedStageKind::Call { name, .. } => Ok(async_callables.contains(name)
+                || self
+                    .gpu_stdlib_call_expr(name, &ts_value("", stage.input.clone()), &stage.output)?
+                    .is_some()),
             TypedStageKind::Map { name, .. } => {
                 self.map_stage_needs_async(name, &stage.input, &stage.output, async_callables)
             }
@@ -2169,7 +2172,9 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
         indent: &str,
         preferred: Option<&str>,
     ) -> Result<TsValue, String> {
-        let expr = if self.codegen.foreign_js.contains(name) {
+        let expr = if let Some(expr) = self.gpu_stdlib_call_expr(name, &input, output_ty)? {
+            expr
+        } else if self.codegen.foreign_js.contains(name) {
             let arity = match &input.ty {
                 Ty::Unit => 0,
                 Ty::Tuple(items) => items.len(),
@@ -2439,6 +2444,261 @@ export async function __flowarrow_teardown_workers(): Promise<void> {{\n\
             }
         };
         Ok(expr)
+    }
+
+    fn gpu_stdlib_call_expr(
+        &self,
+        name: &str,
+        input: &TsValue,
+        output_ty: &Ty,
+    ) -> Result<Option<String>, String> {
+        if !self.options.gpu {
+            return Ok(None);
+        }
+        if let Some(name) = name.strip_prefix("__flow_std_vector_") {
+            return self.gpu_vector_call_expr(name, input, output_ty);
+        }
+        if let Some(name) = name.strip_prefix("__flow_std_matrix_") {
+            return self.gpu_matrix_call_expr(name, input, output_ty);
+        }
+        Ok(None)
+    }
+
+    fn gpu_vector_call_expr(
+        &self,
+        name: &str,
+        input: &TsValue,
+        output_ty: &Ty,
+    ) -> Result<Option<String>, String> {
+        let Some((base, scalar)) = split_f32_suffix(name) else {
+            return Ok(None);
+        };
+        let suffix = gpu_ts_suffix(scalar);
+        let seq_ty = gpu_scalar_seq_ty(scalar);
+        let scalar_ty = gpu_scalar_ty(scalar);
+        let op = match base {
+            "add" | "sub" | "mul" | "div" => Some(base),
+            _ => None,
+        };
+        if let Some(op) = op
+            && matches!(&input.ty, Ty::Tuple(items) if items == &[seq_ty.clone(), seq_ty.clone()])
+            && output_ty == &seq_ty
+        {
+            return Ok(Some(format!(
+                "await faGpuVectorBinary{suffix}({}, {}, {})",
+                tuple_field(input, 0),
+                tuple_field(input, 1),
+                ts_string(op)
+            )));
+        }
+        let scalar_op = match base {
+            "add_scalar" => Some(("add", false)),
+            "sub_scalar" => Some(("sub", false)),
+            "scalar_sub" => Some(("sub", true)),
+            "mul_scalar" => Some(("mul", false)),
+            "scalar_mul" => Some(("mul", true)),
+            "div_scalar" => Some(("div", false)),
+            "scalar_div" => Some(("div", true)),
+            _ => None,
+        };
+        if let Some((op, scalar_left)) = scalar_op
+            && output_ty == &seq_ty
+        {
+            let expected = if scalar_left {
+                vec![scalar_ty.clone(), seq_ty.clone()]
+            } else {
+                vec![seq_ty.clone(), scalar_ty.clone()]
+            };
+            if matches!(&input.ty, Ty::Tuple(items) if items == &expected) {
+                let vector = tuple_field(input, usize::from(scalar_left));
+                let scalar_value = tuple_field(input, usize::from(!scalar_left));
+                return Ok(Some(format!(
+                    "await faGpuVectorScalar{suffix}({}, {}, {}, {})",
+                    vector,
+                    scalar_value,
+                    ts_string(op),
+                    scalar_left
+                )));
+            }
+        }
+        let unary_op = match base {
+            "neg" | "abs" | "exp" | "relu" | "sigmoid" | "silu" => Some(base),
+            _ => None,
+        };
+        if let Some(op) = unary_op
+            && input.ty == seq_ty
+            && output_ty == &seq_ty
+        {
+            return Ok(Some(format!(
+                "await faGpuVectorUnary{suffix}({}, {})",
+                input.code,
+                ts_string(op)
+            )));
+        }
+        let reduce_op = match base {
+            "sum" => Some("add"),
+            "min" => Some("min"),
+            "max" => Some("max"),
+            _ => None,
+        };
+        if let Some(op) = reduce_op
+            && input.ty == seq_ty
+            && output_ty == &scalar_ty
+        {
+            return Ok(Some(format!(
+                "await faGpuVectorReduce{suffix}({}, {})",
+                input.code,
+                ts_string(op)
+            )));
+        }
+        if base == "dot"
+            && matches!(&input.ty, Ty::Tuple(items) if items == &[seq_ty.clone(), seq_ty.clone()])
+            && output_ty == &scalar_ty
+        {
+            return Ok(Some(format!(
+                "await faGpuVectorDot{suffix}({}, {})",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            )));
+        }
+        if base == "squared_norm" && input.ty == seq_ty && output_ty == &scalar_ty {
+            return Ok(Some(format!(
+                "await faGpuVectorSquaredNorm{suffix}({})",
+                input.code
+            )));
+        }
+        if base == "softmax" && input.ty == seq_ty && output_ty == &seq_ty {
+            return Ok(Some(format!(
+                "await faGpuVectorSoftmax{suffix}({})",
+                input.code
+            )));
+        }
+        Ok(None)
+    }
+
+    fn gpu_matrix_call_expr(
+        &self,
+        name: &str,
+        input: &TsValue,
+        output_ty: &Ty,
+    ) -> Result<Option<String>, String> {
+        let Some((base, scalar)) = split_f32_suffix(name) else {
+            return Ok(None);
+        };
+        let suffix = gpu_ts_suffix(scalar);
+        let seq_ty = gpu_scalar_seq_ty(scalar);
+        let matrix_ty = Ty::Seq(Box::new(seq_ty.clone()));
+        let scalar_ty = gpu_scalar_ty(scalar);
+        let op = match base {
+            "add" | "sub" | "mul" | "div" => Some(base),
+            _ => None,
+        };
+        if let Some(op) = op
+            && matches!(&input.ty, Ty::Tuple(items) if items == &[matrix_ty.clone(), matrix_ty.clone()])
+            && output_ty == &matrix_ty
+        {
+            return Ok(Some(format!(
+                "await faGpuMatrixBinary{suffix}({}, {}, {})",
+                tuple_field(input, 0),
+                tuple_field(input, 1),
+                ts_string(op)
+            )));
+        }
+        let scalar_op = match base {
+            "add_scalar" => Some(("add", false)),
+            "sub_scalar" => Some(("sub", false)),
+            "scalar_sub" => Some(("sub", true)),
+            "mul_scalar" => Some(("mul", false)),
+            "scalar_mul" => Some(("mul", true)),
+            "div_scalar" => Some(("div", false)),
+            "scalar_div" => Some(("div", true)),
+            _ => None,
+        };
+        if let Some((op, scalar_left)) = scalar_op
+            && output_ty == &matrix_ty
+        {
+            let expected = if scalar_left {
+                vec![scalar_ty.clone(), matrix_ty.clone()]
+            } else {
+                vec![matrix_ty.clone(), scalar_ty.clone()]
+            };
+            if matches!(&input.ty, Ty::Tuple(items) if items == &expected) {
+                let matrix = tuple_field(input, usize::from(scalar_left));
+                let scalar_value = tuple_field(input, usize::from(!scalar_left));
+                return Ok(Some(format!(
+                    "await faGpuMatrixScalar{suffix}({}, {}, {}, {})",
+                    matrix,
+                    scalar_value,
+                    ts_string(op),
+                    scalar_left
+                )));
+            }
+        }
+        let row_op = match base {
+            "add_row" => Some("add"),
+            "sub_row" => Some("sub"),
+            "mul_row" => Some("mul"),
+            "div_row" => Some("div"),
+            _ => None,
+        };
+        if let Some(op) = row_op
+            && matches!(&input.ty, Ty::Tuple(items) if items == &[matrix_ty.clone(), seq_ty.clone()])
+            && output_ty == &matrix_ty
+        {
+            return Ok(Some(format!(
+                "await faGpuMatrixRowBinary{suffix}({}, {}, {})",
+                tuple_field(input, 0),
+                tuple_field(input, 1),
+                ts_string(op)
+            )));
+        }
+        if base == "matvec"
+            && matches!(&input.ty, Ty::Tuple(items) if items == &[matrix_ty.clone(), seq_ty.clone()])
+            && output_ty == &seq_ty
+        {
+            return Ok(Some(format!(
+                "await faGpuMatrixMatvec{suffix}({}, {})",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            )));
+        }
+        if base == "vecmat"
+            && matches!(&input.ty, Ty::Tuple(items) if items == &[seq_ty.clone(), matrix_ty.clone()])
+            && output_ty == &seq_ty
+        {
+            return Ok(Some(format!(
+                "await faGpuMatrixVecmat{suffix}({}, {})",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            )));
+        }
+        if base == "matmul"
+            && matches!(&input.ty, Ty::Tuple(items) if items == &[matrix_ty.clone(), matrix_ty.clone()])
+            && output_ty == &matrix_ty
+        {
+            return Ok(Some(format!(
+                "await faGpuMatrixMatmul{suffix}({}, {})",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            )));
+        }
+        if base == "outer"
+            && matches!(&input.ty, Ty::Tuple(items) if items == &[seq_ty.clone(), seq_ty.clone()])
+            && output_ty == &matrix_ty
+        {
+            return Ok(Some(format!(
+                "await faGpuMatrixOuter{suffix}({}, {})",
+                tuple_field(input, 0),
+                tuple_field(input, 1)
+            )));
+        }
+        if base == "row_softmax" && input.ty == matrix_ty && output_ty == &matrix_ty {
+            return Ok(Some(format!(
+                "await faGpuMatrixRowSoftmax{suffix}({})",
+                input.code
+            )));
+        }
+        Ok(None)
     }
 
     fn emit_map(
@@ -3732,6 +3992,36 @@ fn sync_map_output_storage(ty: &Ty) -> SyncMapOutputStorage {
     }
 }
 
+fn split_f32_suffix(name: &str) -> Option<(&str, gpu::GpuScalarKind)> {
+    if let Some(base) = name.strip_suffix("_f32") {
+        Some((base, gpu::GpuScalarKind::F32))
+    } else if let Some(base) = name.strip_suffix("_f64") {
+        Some((base, gpu::GpuScalarKind::F64))
+    } else {
+        None
+    }
+}
+
+fn gpu_ts_suffix(scalar: gpu::GpuScalarKind) -> &'static str {
+    match scalar {
+        gpu::GpuScalarKind::F32 => "F32",
+        gpu::GpuScalarKind::F64 => "F64",
+        gpu::GpuScalarKind::I32 => "I32",
+    }
+}
+
+fn gpu_scalar_ty(scalar: gpu::GpuScalarKind) -> Ty {
+    match scalar {
+        gpu::GpuScalarKind::F32 => Ty::F32,
+        gpu::GpuScalarKind::F64 => Ty::F64,
+        gpu::GpuScalarKind::I32 => Ty::I32,
+    }
+}
+
+fn gpu_scalar_seq_ty(scalar: gpu::GpuScalarKind) -> Ty {
+    Ty::Seq(Box::new(gpu_scalar_ty(scalar)))
+}
+
 fn ts_value(code: impl Into<String>, ty: Ty) -> TsValue {
     TsValue {
         code: code.into(),
@@ -5004,8 +5294,268 @@ function faGpuReduceF64(input: number[], op: string, identity: number): Promise<
     .then((runtime) => runtime.fa_gpu_reduce_f64(reduceOp, packed, identity));
 }
 
+function faGpuElementwiseOp(op: string): number {
+  if (op === "add") return 0;
+  if (op === "sub") return 1;
+  if (op === "mul") return 2;
+  if (op === "div") return 3;
+  throw new Error(`unsupported GPU elementwise op: ${op}`);
+}
+
+function faGpuUnaryOp(op: string): number {
+  if (op === "neg") return 0;
+  if (op === "abs") return 1;
+  if (op === "exp") return 2;
+  if (op === "relu") return 3;
+  if (op === "sigmoid") return 4;
+  if (op === "silu") return 5;
+  throw new Error(`unsupported GPU unary op: ${op}`);
+}
+
+function faGpuVectorReduceF32(input: number[], op: string): Promise<number> {
+  if (op === "add") return faGpuReduceF32(input, op, 0);
+  if (input.length === 0) throw new Error(`std.vector.${op}_f32 requires a non-empty vector`);
+  return faGpuReduceF32(input, op, input[0]);
+}
+
+function faGpuVectorReduceF64(input: number[], op: string): Promise<number> {
+  if (op === "add") return faGpuReduceF64(input, op, 0);
+  if (input.length === 0) throw new Error(`std.vector.${op}_f64 requires a non-empty vector`);
+  return faGpuReduceF64(input, op, input[0]);
+}
+
+function faGpuVectorUnaryF32(input: number[], op: string): Promise<number[]> {
+  const packed = faGpuFloat32Input(input);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_vector_unary_f32(faGpuUnaryOp(op), packed))
+    .then((mapped) => mapped as unknown as number[]);
+}
+
+function faGpuVectorUnaryF64(input: number[], op: string): Promise<number[]> {
+  const packed = faGpuFloat64Input(input);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_vector_unary_f64(faGpuUnaryOp(op), packed))
+    .then((mapped) => mapped as unknown as number[]);
+}
+
+function faGpuVectorBinaryF32(left: number[], right: number[], op: string): Promise<number[]> {
+  if (op === "div") faGpuAssertNoZeroDivisor(right, "std.vector.div_f32");
+  const leftPacked = faGpuFloat32Input(left);
+  const rightPacked = faGpuFloat32Input(right);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_vector_binary_f32(faGpuElementwiseOp(op), leftPacked, rightPacked))
+    .then((mapped) => mapped as unknown as number[]);
+}
+
+function faGpuVectorBinaryF64(left: number[], right: number[], op: string): Promise<number[]> {
+  if (op === "div") faGpuAssertNoZeroDivisor(right, "std.vector.div_f64");
+  const leftPacked = faGpuFloat64Input(left);
+  const rightPacked = faGpuFloat64Input(right);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_vector_binary_f64(faGpuElementwiseOp(op), leftPacked, rightPacked))
+    .then((mapped) => mapped as unknown as number[]);
+}
+
+function faGpuVectorScalarF32(input: number[], scalar: number, op: string, scalarLeft: boolean): Promise<number[]> {
+  if (op === "div") {
+    if (scalarLeft) faGpuAssertNoZeroDivisor(input, "std.vector.scalar_div_f32");
+    else faGpuAssertNonZeroDivisor(scalar, "std.vector.div_scalar_f32");
+  }
+  const packed = faGpuFloat32Input(input);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_vector_scalar_f32(faGpuElementwiseOp(op), packed, Math.fround(scalar), scalarLeft))
+    .then((mapped) => mapped as unknown as number[]);
+}
+
+function faGpuVectorScalarF64(input: number[], scalar: number, op: string, scalarLeft: boolean): Promise<number[]> {
+  if (op === "div") {
+    if (scalarLeft) faGpuAssertNoZeroDivisor(input, "std.vector.scalar_div_f64");
+    else faGpuAssertNonZeroDivisor(scalar, "std.vector.div_scalar_f64");
+  }
+  const packed = faGpuFloat64Input(input);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_vector_scalar_f64(faGpuElementwiseOp(op), packed, scalar, scalarLeft))
+    .then((mapped) => mapped as unknown as number[]);
+}
+
+function faGpuVectorDotF32(left: number[], right: number[]): Promise<number> {
+  const leftPacked = faGpuFloat32Input(left);
+  const rightPacked = faGpuFloat32Input(right);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_vector_dot_f32(leftPacked, rightPacked));
+}
+
+function faGpuVectorDotF64(left: number[], right: number[]): Promise<number> {
+  const leftPacked = faGpuFloat64Input(left);
+  const rightPacked = faGpuFloat64Input(right);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_vector_dot_f64(leftPacked, rightPacked));
+}
+
+function faGpuVectorSquaredNormF32(input: number[]): Promise<number> {
+  return faGpuVectorDotF32(input, input);
+}
+
+function faGpuVectorSquaredNormF64(input: number[]): Promise<number> {
+  return faGpuVectorDotF64(input, input);
+}
+
+function faGpuVectorSoftmaxF32(input: number[]): Promise<number[]> {
+  const packed = faGpuFloat32Input(input);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_vector_softmax_f32(packed))
+    .then((mapped) => mapped as unknown as number[]);
+}
+
+function faGpuVectorSoftmaxF64(input: number[]): Promise<number[]> {
+  const packed = faGpuFloat64Input(input);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_vector_softmax_f64(packed))
+    .then((mapped) => mapped as unknown as number[]);
+}
+
 function faGpuFloat32Input(input: number[] | Float32Array): Float32Array {
   return input instanceof Float32Array ? input : new Float32Array(input.map(Math.fround));
+}
+
+function faGpuMatrixBinaryF32(left: number[][], right: number[][], op: string): Promise<number[][]> {
+  const leftFlat = faGpuFlattenMatrixF32(left, "left");
+  const rightFlat = faGpuFlattenMatrixF32(right, "right");
+  if (op === "div") faGpuAssertNoZeroDivisor(rightFlat.values, "std.matrix.div_f32");
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_binary_f32(
+      faGpuElementwiseOp(op), leftFlat.values, leftFlat.rows, leftFlat.cols, rightFlat.values, rightFlat.rows, rightFlat.cols,
+    ))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], leftFlat.rows, leftFlat.cols));
+}
+
+function faGpuMatrixBinaryF64(left: number[][], right: number[][], op: string): Promise<number[][]> {
+  const leftFlat = faGpuFlattenMatrixF64(left, "left");
+  const rightFlat = faGpuFlattenMatrixF64(right, "right");
+  if (op === "div") faGpuAssertNoZeroDivisor(rightFlat.values, "std.matrix.div_f64");
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_binary_f64(
+      faGpuElementwiseOp(op), leftFlat.values, leftFlat.rows, leftFlat.cols, rightFlat.values, rightFlat.rows, rightFlat.cols,
+    ))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], leftFlat.rows, leftFlat.cols));
+}
+
+function faGpuMatrixScalarF32(input: number[][], scalar: number, op: string, scalarLeft: boolean): Promise<number[][]> {
+  const flat = faGpuFlattenMatrixF32(input, "input");
+  if (op === "div") {
+    if (scalarLeft) faGpuAssertNoZeroDivisor(flat.values, "std.matrix.scalar_div_f32");
+    else faGpuAssertNonZeroDivisor(scalar, "std.matrix.div_scalar_f32");
+  }
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_scalar_f32(faGpuElementwiseOp(op), flat.values, flat.rows, flat.cols, Math.fround(scalar), scalarLeft))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], flat.rows, flat.cols));
+}
+
+function faGpuMatrixScalarF64(input: number[][], scalar: number, op: string, scalarLeft: boolean): Promise<number[][]> {
+  const flat = faGpuFlattenMatrixF64(input, "input");
+  if (op === "div") {
+    if (scalarLeft) faGpuAssertNoZeroDivisor(flat.values, "std.matrix.scalar_div_f64");
+    else faGpuAssertNonZeroDivisor(scalar, "std.matrix.div_scalar_f64");
+  }
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_scalar_f64(faGpuElementwiseOp(op), flat.values, flat.rows, flat.cols, scalar, scalarLeft))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], flat.rows, flat.cols));
+}
+
+function faGpuMatrixRowBinaryF32(matrix: number[][], row: number[], op: string): Promise<number[][]> {
+  const flat = faGpuFlattenMatrixF32(matrix, "matrix");
+  const rowPacked = faGpuFloat32Input(row);
+  if (op === "div") faGpuAssertNoZeroDivisor(rowPacked, "std.matrix.div_row_f32");
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_row_binary_f32(faGpuElementwiseOp(op), flat.values, flat.rows, flat.cols, rowPacked))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], flat.rows, flat.cols));
+}
+
+function faGpuMatrixRowBinaryF64(matrix: number[][], row: number[], op: string): Promise<number[][]> {
+  const flat = faGpuFlattenMatrixF64(matrix, "matrix");
+  const rowPacked = faGpuFloat64Input(row);
+  if (op === "div") faGpuAssertNoZeroDivisor(rowPacked, "std.matrix.div_row_f64");
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_row_binary_f64(faGpuElementwiseOp(op), flat.values, flat.rows, flat.cols, rowPacked))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], flat.rows, flat.cols));
+}
+
+function faGpuMatrixMatvecF32(matrix: number[][], vector: number[]): Promise<number[]> {
+  const flat = faGpuFlattenMatrixF32(matrix, "matrix");
+  const packed = faGpuFloat32Input(vector);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_matvec_f32(flat.values, flat.rows, flat.cols, packed))
+    .then((values) => values as unknown as number[]);
+}
+
+function faGpuMatrixMatvecF64(matrix: number[][], vector: number[]): Promise<number[]> {
+  const flat = faGpuFlattenMatrixF64(matrix, "matrix");
+  const packed = faGpuFloat64Input(vector);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_matvec_f64(flat.values, flat.rows, flat.cols, packed))
+    .then((values) => values as unknown as number[]);
+}
+
+function faGpuMatrixVecmatF32(vector: number[], matrix: number[][]): Promise<number[]> {
+  const packed = faGpuFloat32Input(vector);
+  const flat = faGpuFlattenMatrixF32(matrix, "matrix");
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_vecmat_f32(packed, flat.values, flat.rows, flat.cols))
+    .then((values) => values as unknown as number[]);
+}
+
+function faGpuMatrixVecmatF64(vector: number[], matrix: number[][]): Promise<number[]> {
+  const packed = faGpuFloat64Input(vector);
+  const flat = faGpuFlattenMatrixF64(matrix, "matrix");
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_vecmat_f64(packed, flat.values, flat.rows, flat.cols))
+    .then((values) => values as unknown as number[]);
+}
+
+function faGpuMatrixMatmulF32(left: number[][], right: number[][]): Promise<number[][]> {
+  const leftFlat = faGpuFlattenMatrixF32(left, "left");
+  const rightFlat = faGpuFlattenMatrixF32(right, "right");
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_matmul_f32(leftFlat.values, leftFlat.rows, leftFlat.cols, rightFlat.values, rightFlat.rows, rightFlat.cols))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], leftFlat.rows, rightFlat.cols));
+}
+
+function faGpuMatrixMatmulF64(left: number[][], right: number[][]): Promise<number[][]> {
+  const leftFlat = faGpuFlattenMatrixF64(left, "left");
+  const rightFlat = faGpuFlattenMatrixF64(right, "right");
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_matmul_f64(leftFlat.values, leftFlat.rows, leftFlat.cols, rightFlat.values, rightFlat.rows, rightFlat.cols))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], leftFlat.rows, rightFlat.cols));
+}
+
+function faGpuMatrixOuterF32(left: number[], right: number[]): Promise<number[][]> {
+  const leftPacked = faGpuFloat32Input(left);
+  const rightPacked = faGpuFloat32Input(right);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_outer_f32(leftPacked, rightPacked))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], left.length, right.length));
+}
+
+function faGpuMatrixOuterF64(left: number[], right: number[]): Promise<number[][]> {
+  const leftPacked = faGpuFloat64Input(left);
+  const rightPacked = faGpuFloat64Input(right);
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_outer_f64(leftPacked, rightPacked))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], left.length, right.length));
+}
+
+function faGpuMatrixRowSoftmaxF32(input: number[][]): Promise<number[][]> {
+  const flat = faGpuFlattenMatrixF32(input, "input");
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_row_softmax_f32(flat.values, flat.rows, flat.cols))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], flat.rows, flat.cols));
+}
+
+function faGpuMatrixRowSoftmaxF64(input: number[][]): Promise<number[][]> {
+  const flat = faGpuFlattenMatrixF64(input, "input");
+  return faGpuRuntime()
+    .then((runtime) => runtime.fa_gpu_matrix_row_softmax_f64(flat.values, flat.rows, flat.cols))
+    .then((values) => faGpuUnflattenMatrix(values as unknown as number[], flat.rows, flat.cols));
 }
 
 function faGpuRepeatVectorAccumF32(
@@ -5072,7 +5622,20 @@ function faGpuRepeatMatrixAccumF64(
     ));
 }
 
-function faGpuFlattenMatrix(input: number[][], label: string): { values: Float64Array; rows: number; cols: number } {
+function faGpuFlattenMatrixF32(input: number[][], label: string): { values: Float32Array; rows: number; cols: number } {
+  const rows = input.length;
+  const cols = rows === 0 ? 0 : input[0].length;
+  const values = new Float32Array(rows * cols);
+  for (let row = 0; row < rows; row++) {
+    if (input[row].length !== cols) {
+      throw new Error(`FlowArrow GPU ${label} matrix must be rectangular`);
+    }
+    values.set(input[row].map(Math.fround), row * cols);
+  }
+  return { values, rows, cols };
+}
+
+function faGpuFlattenMatrixF64(input: number[][], label: string): { values: Float64Array; rows: number; cols: number } {
   const rows = input.length;
   const cols = rows === 0 ? 0 : input[0].length;
   const values = new Float64Array(rows * cols);
@@ -5085,8 +5648,31 @@ function faGpuFlattenMatrix(input: number[][], label: string): { values: Float64
   return { values, rows, cols };
 }
 
+function faGpuFlattenMatrix(input: number[][], label: string): { values: Float64Array; rows: number; cols: number } {
+  return faGpuFlattenMatrixF64(input, label);
+}
+
+function faGpuUnflattenMatrix(values: ArrayLike<number>, rows: number, cols: number): number[][] {
+  const out: number[][] = [];
+  for (let row = 0; row < rows; row++) {
+    const offset = row * cols;
+    out.push(Array.from(values).slice(offset, offset + cols));
+  }
+  return out;
+}
+
 function faGpuFloat64Input(input: number[] | Float64Array): Float64Array {
   return input instanceof Float64Array ? input : new Float64Array(input);
+}
+
+function faGpuAssertNonZeroDivisor(value: number, label: string): void {
+  if (Object.is(value, 0) || Object.is(value, -0)) throw new Error(`${label}: division by zero`);
+}
+
+function faGpuAssertNoZeroDivisor(values: ArrayLike<number>, label: string): void {
+  for (let index = 0; index < values.length; index++) {
+    faGpuAssertNonZeroDivisor(values[index], label);
+  }
 }
 
 "#;

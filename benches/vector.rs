@@ -270,13 +270,13 @@ fn flowarrow_source(left: &[f64], right: &[f64], iterations: usize, expected: f6
     format!(
         r#"
 import std.cli {{ Args }}
-import std.math {{ add as scalar_add, eq }}
-import std.vector {{ dot, squared_distance, squared_norm }}
+import std.math {{ add_f64 as scalar_add, eq_f64 as eq }}
+import std.vector {{ dot_f64, squared_distance_f64, squared_norm_f64 }}
 
 node kernel(left: Seq[f64], right: Seq[f64], score: f64) -> (out_left: Seq[f64], out_right: Seq[f64], out_score: f64) {{
-    ($left, $right) -> dot -> $dot
-    ($left, $right) -> squared_distance -> $distance_squared
-    $left -> squared_norm -> $norm_squared
+    ($left, $right) -> dot_f64 -> $dot
+    ($left, $right) -> squared_distance_f64 -> $distance_squared
+    $left -> squared_norm_f64 -> $norm_squared
     ($dot, $distance_squared) -> scalar_add -> $partial
     ($partial, $norm_squared) -> scalar_add -> $delta
     ($score, $delta) -> scalar_add -> $out_score

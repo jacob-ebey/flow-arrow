@@ -2505,18 +2505,18 @@ mod tests {
             r#"
                 import std.cli { Args }
                 import std.math { add_f64 as add, eq_f64 as eq }
-                import std.matrix { matmul, matvec, row_sums, sum as matrix_sum }
-                import std.vector { sum as vector_sum }
+                import std.matrix { matmul_f64, matvec_f64, row_sums_f64, sum_f64 as matrix_sum }
+                import std.vector { sum_f64 as vector_sum }
 
                 program main(args: Args) -> exit_code: i64 {
                     [[1.0, 2.0], [3.0, 4.0]] -> $left
                     [[5.0, 6.0], [7.0, 8.0]] -> $right
                     [9.0, 10.0] -> $vector
-                    ($left, $right) -> matmul -> $product
+                    ($left, $right) -> matmul_f64 -> $product
                     $product -> matrix_sum -> $product_sum
-                    ($left, $vector) -> matvec -> $mv
+                    ($left, $vector) -> matvec_f64 -> $mv
                     $mv -> vector_sum -> $mv_sum
-                    $left -> row_sums -> vector_sum -> $row_sum
+                    $left -> row_sums_f64 -> vector_sum -> $row_sum
                     ($product_sum, $mv_sum) -> add -> $partial
                     ($partial, $row_sum) -> add -> $score
                     ($score, 240.0) -> eq -> $ok
@@ -2528,9 +2528,9 @@ mod tests {
         let runtime_c = emit_runtime_c(&module).expect("runtime c");
         let main = function_body(&runtime_c, "flow_program_main");
 
-        assert!(!main.contains("flow_node___flow_std_matrix_matmul"));
-        assert!(!main.contains("flow_node___flow_std_matrix_matvec"));
-        assert!(!main.contains("flow_node___flow_std_matrix_row_sums"));
+        assert!(!main.contains("flow_node___flow_std_matrix_matmul_f64"));
+        assert!(!main.contains("flow_node___flow_std_matrix_matvec_f64"));
+        assert!(!main.contains("flow_node___flow_std_matrix_row_sums_f64"));
         assert!(main.contains("for (size_t"));
     }
 

@@ -256,7 +256,7 @@ $pairs -> map multiply_pair -> $products
 Reductions require an associative operation and identity.
 
 ```flow
-node dot(xs: Vec[N, f64], ys: Vec[N, f64]) -> s: f64 {
+node dot_f64(xs: Vec[N, f64], ys: Vec[N, f64]) -> s: f64 {
     ($xs, $ys) -> zip
              -> map multiply_pair
              -> reduce add_f64(identity: 0.0)
@@ -635,7 +635,7 @@ node matmul(
         cell(i, j) {
             a.row<i> -> $ar
             b.col<j> -> $bc
-            ($ar, $bc) -> dot -> $out
+            ($ar, $bc) -> dot_f64 -> $out
         }
     } -> $c
 }
@@ -643,7 +643,7 @@ node matmul(
 
 `grid<M, N>` creates `M × N` independent cell computations.
 
-Each cell computation may itself contain parallelism through `dot`.
+Each cell computation may itself contain parallelism through `dot_f64`.
 
 ---
 
