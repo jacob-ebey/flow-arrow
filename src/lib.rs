@@ -848,7 +848,8 @@ mod tests {
         let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
         assert!(llvm.contains("fa_gpu_repeat_vector_accum_f64"));
         assert!(llvm.contains("gpu.repeat.vector"));
-        assert!(!llvm.contains("call void @fa_gpu_map_f32"));
+        assert!(llvm.contains("array<f64>"));
+        assert!(!llvm.contains("call float @fa_gpu_repeat_vector_accum_f32"));
     }
 
     #[test]
@@ -1101,7 +1102,8 @@ mod tests {
         let llvm = lowered.emit_direct_llvm_with_gpu(true).expect("llvm gpu");
         assert!(llvm.contains("fa_gpu_repeat_matrix_accum_f64"));
         assert!(llvm.contains("gpu.repeat.matrix"));
-        assert!(!llvm.contains("call void @fa_gpu_map_f32"));
+        assert!(llvm.contains("array<f64>"));
+        assert!(!llvm.contains("call float @fa_gpu_repeat_vector_accum_f32"));
     }
 
     #[test]
